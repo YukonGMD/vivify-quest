@@ -166,6 +166,15 @@ MAKE_HOOK_MATCH(MirrorRendererSO_RenderMirrorTexture, &GlobalNamespace::MirrorRe
   });
 }
 
+// The mirror camera takes the _Main camera properties (PC's AddMirrorComponents).
+MAKE_HOOK_MATCH(MirrorRendererSO_CreateOrUpdateMirrorCamera, &GlobalNamespace::MirrorRendererSO::CreateOrUpdateMirrorCamera, void, GlobalNamespace::MirrorRendererSO* self, UnityEngine::Camera* currentCamera, UnityEngine::RenderTexture* renderTexture) {
+  MirrorRendererSO_CreateOrUpdateMirrorCamera(self, currentCamera, renderTexture);
+  VivifyPart("MirrorRendererSO.CreateOrUpdateMirrorCamera", [&] {
+    if (!IsManagedAlive(self)) return;
+    Runtime::Instance().ApplyMainPropertiesToMirrorCamera(self->_mirrorCamera.unsafePtr());
+  });
+}
+
 MAKE_HOOK_MATCH(MirrorRendererSO_PrepareForNextFrame, &GlobalNamespace::MirrorRendererSO::PrepareForNextFrame, void, GlobalNamespace::MirrorRendererSO* self) {
   MirrorRendererSO_PrepareForNextFrame(self);
   // The game releases last frame's mirror textures here; do the same for each
@@ -299,6 +308,7 @@ void LateLoad() {
   INSTALL_HOOK(PaperLogger, ImageEffectController_OnRenderImage);
   INSTALL_HOOK(PaperLogger, MirrorRendererSO_RenderMirrorTexture);
   INSTALL_HOOK(PaperLogger, MirrorRendererSO_PrepareForNextFrame);
+  INSTALL_HOOK(PaperLogger, MirrorRendererSO_CreateOrUpdateMirrorCamera);
   INSTALL_HOOK(PaperLogger, VRCenterAdjust_Start);
   INSTALL_HOOK(PaperLogger, VRCenterAdjust_OnEnable);
   INSTALL_HOOK(PaperLogger, VRCenterAdjust_OnDisable);

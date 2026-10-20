@@ -511,6 +511,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
   RestoreAllVisualReplacements();
   RestoreOverlayRenderState();
   RestoreMainCameraOriginals();
+  RestoreMirrorCameras();
   std::unordered_set<UnityEngine::GameObject*> destroyed;
   for (auto& [id, prefab] : _livePrefabs) {
     if (prefab.gameObject == nullptr) {

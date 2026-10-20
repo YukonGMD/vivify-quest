@@ -1238,6 +1238,9 @@ void Runtime::HandleSetCameraProperty(rapidjson::Value const& json) {
       ApplyCameraProperties(mainCamPtr, stored);
       ApplyCameraGameObjectProperties(mainCamPtr, stored);
     }
+    for (auto const& mirror : _mirrorCameras) {
+      ApplyMainPropertiesToMirrorCamera(mirror.camera);
+    }
   } else {
     auto it = _secondaryCameras.find(camId);
     if (it != _secondaryCameras.end()) {
@@ -1286,6 +1289,57 @@ void Runtime::RestoreMainCameraOriginals() {
   _mainCamOriginalDepthMode.reset();
   _mainCamOriginalClearFlags.reset();
   _mainCamOriginalBackgroundColor.reset();
+}
+
+// A mirror's camera gets the _Main camera properties, as upstream's
+// AddMirrorComponents gives it a CullingCameraController and a
+// CameraPropertyController with no id (which resolves to _Main). Without it, a
+// map that culls objects from the main view still shows them in mirrors.
+// Depth texture mode is OR-ed onto the camera's own, and unset properties fall
+// back to the camera's own values, as CameraPropertyController does.
+void Runtime::ApplyMainPropertiesToMirrorCamera(UnityEngine::Camera* mirrorCamera) {
+  if (_currentBeatmapData == nullptr || _isResetting || !IsAlive(mirrorCamera)) return;
+  auto* go = mirrorCamera->get_gameObject().unsafePtr();
+  if (!IsAlive(go)) return;
+  auto known = std::find_if(_mirrorCameras.begin(), _mirrorCameras.end(),
+                            [mirrorCamera](MirrorCameraOriginals const& m) { return m.camera == mirrorCamera; });
+  if (known == _mirrorCameras.end()) {
+    _mirrorCameras.push_back(MirrorCameraOriginals{
+        .camera = mirrorCamera,
+        .depthTextureMode = mirrorCamera->get_depthTextureMode().value__,
+        .clearFlags = mirrorCamera->get_clearFlags().value__,
+        .backgroundColor = mirrorCamera->get_backgroundColor(),
+    });
+    known = std::prev(_mirrorCameras.end());
+    EnsureMultipassKeywordController(go);
+  }
+  CameraPropertyData props;
+  if (auto found = _cameraProperties.find(std::string(kMainCameraId)); found != _cameraProperties.end()) {
+    props = found->second;
+  }
+  int const depthMode = props.depthTextureMode.has_value()
+                            ? (props.depthTextureMode->value__ | known->depthTextureMode)
+                            : known->depthTextureMode;
+  mirrorCamera->set_depthTextureMode(UnityEngine::DepthTextureMode(depthMode));
+  mirrorCamera->set_clearFlags(props.clearFlags.value_or(UnityEngine::CameraClearFlags(known->clearFlags)));
+  mirrorCamera->set_backgroundColor(props.backgroundColor.value_or(known->backgroundColor));
+  ApplyCameraGameObjectProperties(mirrorCamera, props);
+}
+
+void Runtime::RestoreMirrorCameras() {
+  for (auto const& mirror : _mirrorCameras) {
+    if (!IsAlive(mirror.camera)) continue;
+    mirror.camera->set_depthTextureMode(UnityEngine::DepthTextureMode(mirror.depthTextureMode));
+    mirror.camera->set_clearFlags(UnityEngine::CameraClearFlags(mirror.clearFlags));
+    mirror.camera->set_backgroundColor(mirror.backgroundColor);
+    auto* go = mirror.camera->get_gameObject().unsafePtr();
+    ApplyCullingProperty(go, std::nullopt);
+    if (IsAlive(go)) {
+      auto* bloomPrePass = go->GetComponent<GlobalNamespace::BloomPrePass*>();
+      if (IsAlive(bloomPrePass)) bloomPrePass->set_enabled(true);
+    }
+  }
+  _mirrorCameras.clear();
 }
 
 void Runtime::RestoreFarCulling(UnityEngine::Camera* mainCam) {

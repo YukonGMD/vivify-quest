@@ -70,6 +70,8 @@ public:
   // The level's note pools, for re-skinning notes already in flight (PC's
   // NotePrefabManager.RefreshObjects). Set from BasicBeatmapObjectManager.Init.
   void SetBasicBeatmapObjectManager(GlobalNamespace::BasicBeatmapObjectManager* manager);
+  // Mirror cameras take the _Main camera properties (PC's AddMirrorComponents).
+  void ApplyMainPropertiesToMirrorCamera(UnityEngine::Camera* mirrorCamera);
   void RefreshMultipassRendering();
   void RefreshIsolationSettings();
 
@@ -285,6 +287,7 @@ private:
   void HandleSetCameraProperty(rapidjson::Value const& json);
   void CaptureMainCameraOriginals(UnityEngine::Camera* mainCam, UnityEngine::GameObject* mainCamGO);
   void RestoreMainCameraOriginals();
+  void RestoreMirrorCameras();
   UnityEngine::Rendering::CommandBuffer* BuildMidRenderCommandBuffer(std::vector<ActiveBlitEffect> const& effects,
                                                                      int bucket);
   bool EnsureMidRenderTextures();
@@ -444,6 +447,15 @@ private:
   // Not a UnityEngine.Object, so it cannot be checked for liveness; the
   // SafePtr keeps it valid, and each level's Init replaces it.
   SafePtr<GlobalNamespace::BasicBeatmapObjectManager> _basicBeatmapObjectManager;
+  // Each mirror camera given the _Main properties this level, with its own
+  // values to put back at the end, as PC's CameraPropertyController.Reset does.
+  struct MirrorCameraOriginals {
+    UnityEngine::Camera* camera = nullptr;
+    int depthTextureMode = 0;
+    int clearFlags = 0;
+    UnityEngine::Color backgroundColor{};
+  };
+  std::vector<MirrorCameraOriginals> _mirrorCameras;
   std::unordered_map<GlobalNamespace::SaberModelController*, VisualReplacement> _saberReplacements;
   std::unordered_map<GlobalNamespace::NoteDebris*, VisualReplacement> _debrisReplacements;
   CameraApplier* _cameraApplier = nullptr;
