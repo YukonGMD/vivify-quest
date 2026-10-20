@@ -297,6 +297,7 @@ private:
   CullingCameraController* EnsureCullingController(UnityEngine::GameObject* gameObject);
   void ApplyCullingProperty(UnityEngine::GameObject* cameraGO, std::optional<CullingMaskData> const& culling);
   void ReleaseDeclaredTextureData(DeclaredTextureData& data);
+  bool CreateDeclaredTexture(DeclaredTextureData& data);
   void ReleaseSecondaryCameraData(SecondaryCameraData& data);
   UnityEngine::RenderTexture* SecondaryCameraColorRT(SecondaryCameraData const& cam);
   bool DestroyDeclaredTextureById(std::string const& id);

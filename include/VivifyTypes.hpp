@@ -262,6 +262,8 @@ struct DeclaredTextureData {
   std::optional<UnityEngine::RenderTextureFormat> format;
   std::optional<UnityEngine::FilterMode> filterMode;
   UnityEngine::RenderTexture* texture = nullptr;
+  // Built from the main camera's eye descriptor rather than the fallback guess.
+  bool fromMainDescriptor = false;
 };
 
 struct CullingMaskData {

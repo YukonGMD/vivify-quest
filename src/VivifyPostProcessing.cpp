@@ -140,9 +140,20 @@ void Runtime::CacheMainRenderDescriptor(UnityEngine::RenderTexture* src) {
   desc.set_depthBufferBits(0);
   desc.set_width(EffectSize(desc.get_width()));
   desc.set_height(EffectSize(desc.get_height()));
+  bool const changed = !_hasMainDescriptor || desc.get_width() != _cachedMainDescriptor.get_width() ||
+                       desc.get_height() != _cachedMainDescriptor.get_height() ||
+                       desc.get_dimension() != _cachedMainDescriptor.get_dimension() ||
+                       desc.get_volumeDepth() != _cachedMainDescriptor.get_volumeDepth() ||
+                       desc.get_graphicsFormat() != _cachedMainDescriptor.get_graphicsFormat() ||
+                       src->get_vrUsage().value__ != _cachedMainVrUsage;
   _cachedMainDescriptor = desc;
   _cachedMainVrUsage = src->get_vrUsage().value__;
   _hasMainDescriptor = true;
+  // Screen textures follow the eye texture, as upstream's CreateDeclaredTextures
+  // does from the camera's OnRenderImage.
+  for (auto& [name, dt] : _declaredTextures) {
+    if (changed || !dt.fromMainDescriptor) CreateDeclaredTexture(dt);
+  }
 }
 
 bool Runtime::EnsureMidRenderTextures() {
@@ -727,44 +738,86 @@ void Runtime::HandleCreateScreenTexture(rapidjson::Value const& json) {
     }();
   if (dt.xRatio <= 0.0f) dt.xRatio = 1.0f;
   if (dt.yRatio <= 0.0f) dt.yRatio = 1.0f;
+  if (!CreateDeclaredTexture(dt) && !_hasMainDescriptor) return;
+  // Kept even if creation from the eye descriptor failed, so the next change
+  // of descriptor can try again.
+  _declaredTextures[name] = std::move(dt);
+}
+
+// Creates (or re-creates) a screen texture.
+//
+// Upstream builds it from the camera's own render descriptor: on a headset
+// that is the eye texture -- a two-slice array with the camera's colour format
+// -- so a map's blits draw into it with the same two-eye programs they draw
+// the screen with, and its shaders sample it the way they sample the screen.
+// A single 2D texture, which is what this port created, is neither: multiview
+// programs draw nothing into it, and a screen-space sampler reads nothing from
+// it. Until the main camera has rendered once there is no descriptor yet; the
+// texture is then made from the camera's pixel size and replaced on the first
+// frame (CacheMainRenderDescriptor).
+bool Runtime::CreateDeclaredTexture(DeclaredTextureData& dt) {
+  if (IsAlive(dt.texture)) {
+    dt.texture->Release();
+    UnityEngine::Object::Destroy(dt.texture);
+  }
+  dt.texture = nullptr;
+  dt.fromMainDescriptor = _hasMainDescriptor;
+
+  UnityEngine::RenderTextureDescriptor desc{};
   int baseW = 1024;
   int baseH = 512;
   auto mainCam = UnityEngine::Camera::get_main();
-  if (IsAlive(mainCam.unsafePtr())) {
-    baseW = std::max(1, mainCam->get_pixelWidth());
-    baseH = std::max(1, mainCam->get_pixelHeight());
+  if (_hasMainDescriptor) {
+    desc = _cachedMainDescriptor;
+    baseW = desc.get_width();
+    baseH = desc.get_height();
+  } else if (IsAlive(mainCam.unsafePtr())) {
+    baseW = EffectSize(std::max(1, mainCam->get_pixelWidth()));
+    baseH = EffectSize(std::max(1, mainCam->get_pixelHeight()));
   }
-  baseW = EffectSize(baseW);
-  baseH = EffectSize(baseH);
   int w = std::clamp(dt.width.value_or(baseW), 1, kMaxRenderTextureSize);
   int h = std::clamp(dt.height.value_or(baseH), 1, kMaxRenderTextureSize);
   w = std::clamp(static_cast<int>(w / dt.xRatio), 1, kMaxRenderTextureSize);
   h = std::clamp(static_cast<int>(h / dt.yRatio), 1, kMaxRenderTextureSize);
-  auto requestedFmt = dt.format.value_or(UnityEngine::RenderTextureFormat::ARGB32);
-  auto fmt = SupportedRenderTextureFormat(requestedFmt, "CreateScreenTexture:" + name);
+  // No colorFormat: the eye texture's own format, as upstream.
+  std::optional<UnityEngine::RenderTextureFormat> fmt;
+  if (dt.format.has_value()) {
+    fmt = SupportedRenderTextureFormat(dt.format.value(), "CreateScreenTexture:" + dt.name);
+  } else if (!_hasMainDescriptor) {
+    fmt = UnityEngine::RenderTextureFormat::ARGB32;
+  }
+  if (_hasMainDescriptor) {
+    desc.set_width(w);
+    desc.set_height(h);
+    if (fmt.has_value()) desc.set_colorFormat(fmt.value());
+  } else {
+    desc._ctor(w, h, fmt.value(), 0);
+    if (IsAlive(mainCam.unsafePtr()) && mainCam->get_stereoEnabled()) {
+      desc.set_vrUsage(UnityEngine::VRTextureUsage::TwoEyes);
+    }
+  }
   if (GetVivifyDebugLogging()) {
-    PaperLogger.info("Vivify CreateScreenTexture: id='{}' size={}x{} requestedFormat={} finalFormat={} filter={} propertyId={}",
-                     name, w, h, requestedFmt.value__, fmt.value__,
-                     dt.filterMode.has_value() ? dt.filterMode->value__ : -1, dt.propertyId);
+    PaperLogger.info("Vivify CreateScreenTexture: id='{}' size={}x{} slices={} requestedFormat={} finalFormat={} "
+                     "graphicsFormat={} fromEyeTexture={} filter={} propertyId={}",
+                     dt.name, w, h, desc.get_volumeDepth(), dt.format.has_value() ? dt.format->value__ : -1,
+                     fmt.has_value() ? fmt->value__ : -1, desc.get_graphicsFormat().value__,
+                     BoolText(_hasMainDescriptor), dt.filterMode.has_value() ? dt.filterMode->value__ : -1,
+                     dt.propertyId);
   }
 
-  UnityEngine::RenderTextureDescriptor desc{};
-  desc._ctor(w, h, fmt, 0);
-  if (IsAlive(mainCam.unsafePtr()) && mainCam->get_stereoEnabled()) {
-    desc.set_vrUsage(UnityEngine::VRTextureUsage::TwoEyes);
-  }
   dt.texture = UnityEngine::RenderTexture::New_ctor(desc);
   if (IsAlive(dt.texture) && dt.filterMode.has_value()) dt.texture->set_filterMode(dt.filterMode.value());
   if (!IsAlive(dt.texture) || !dt.texture->Create()) {
-    if (GetVivifyDebugLogging()) {
-      PaperLogger.warn("Vivify CreateScreenTexture failed: id='{}' size={}x{} format={}", name, w, h, fmt.value__);
-    }
+    PaperLogger.warn("Vivify CreateScreenTexture failed: id='{}' size={}x{} slices={} graphicsFormat={}", dt.name, w,
+                     h, desc.get_volumeDepth(), desc.get_graphicsFormat().value__);
+    bool const fromMain = dt.fromMainDescriptor;
     ReleaseDeclaredTextureData(dt);
-    return;
+    dt.fromMainDescriptor = fromMain;
+    return false;
   }
   ClearRenderTexture(dt.texture);
   UnityEngine::Shader::SetGlobalTexture(dt.propertyId, static_cast<UnityEngine::Texture*>(dt.texture));
-  _declaredTextures[name] = std::move(dt);
+  return true;
 }
 
 void Runtime::ReleaseDeclaredTextureData(DeclaredTextureData& data) {
