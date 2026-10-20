@@ -57,6 +57,11 @@ MAKE_HOOK_MATCH(BurstSliderGameNoteController_Init, &GlobalNamespace::BurstSlide
   VivifyPart("BurstSliderGameNoteController.Init", [&] { Runtime::Instance().ApplyNotePrefabFor(self); });
 }
 
+MAKE_HOOK_MATCH(BasicBeatmapObjectManager_Init, &GlobalNamespace::BasicBeatmapObjectManager::Init, void, GlobalNamespace::BasicBeatmapObjectManager* self, GlobalNamespace::BasicBeatmapObjectManager_InitData* initData, System::Random* random, GlobalNamespace::VariableMovementDataProvider* variableMovementDataProvider, GlobalNamespace::GameNoteController_Pool* basicGameNotePool, GlobalNamespace::GameNoteController_Pool* burstSliderHeadGameNotePool, GlobalNamespace::BurstSliderGameNoteController_Pool* burstSliderGameNotePool, GlobalNamespace::BombNoteController_Pool* bombNotePool, GlobalNamespace::ObstacleController_Pool* obstaclePool, GlobalNamespace::SliderController_Pool* sliderPools) {
+  BasicBeatmapObjectManager_Init(self, initData, random, variableMovementDataProvider, basicGameNotePool, burstSliderHeadGameNotePool, burstSliderGameNotePool, bombNotePool, obstaclePool, sliderPools);
+  VivifyPart("BasicBeatmapObjectManager.Init", [&] { Runtime::Instance().SetBasicBeatmapObjectManager(self); });
+}
+
 MAKE_HOOK_MATCH(NoteCutCoreEffectsSpawner_SpawnNoteCutEffect, &GlobalNamespace::NoteCutCoreEffectsSpawner::SpawnNoteCutEffect, void, GlobalNamespace::NoteCutCoreEffectsSpawner* self, ByRef<GlobalNamespace::NoteCutInfo> noteCutInfo, GlobalNamespace::NoteController* noteController, int32_t sparkleParticlesCount, int32_t explosionParticlesCount) {
 
   bool pushed = false;
@@ -287,6 +292,7 @@ void LateLoad() {
   INSTALL_HOOK(PaperLogger, GameNoteController_Init);
   INSTALL_HOOK(PaperLogger, BombNoteController_Init);
   INSTALL_HOOK(PaperLogger, BurstSliderGameNoteController_Init);
+  INSTALL_HOOK(PaperLogger, BasicBeatmapObjectManager_Init);
   INSTALL_HOOK(PaperLogger, NoteCutCoreEffectsSpawner_SpawnNoteCutEffect);
   INSTALL_HOOK(PaperLogger, NoteDebris_Init);
   INSTALL_HOOK(PaperLogger, AlwaysVisibleQuad_OnEnable);

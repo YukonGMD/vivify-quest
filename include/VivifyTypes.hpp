@@ -84,6 +84,8 @@
 #include "GlobalNamespace/GameNoteController.hpp"
 #include "GlobalNamespace/BombNoteController.hpp"
 #include "GlobalNamespace/BurstSliderGameNoteController.hpp"
+#include "GlobalNamespace/BasicBeatmapObjectManager.hpp"
+#include "GlobalNamespace/MemoryPoolContainer_1.hpp"
 #include "GlobalNamespace/NoteData.hpp"
 #include "GlobalNamespace/NoteCutCoreEffectsSpawner.hpp"
 #include "GlobalNamespace/NoteCutDirection.hpp"

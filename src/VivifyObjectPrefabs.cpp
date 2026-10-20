@@ -536,13 +536,40 @@ void Runtime::ApplyNotePrefabFor(GlobalNamespace::NoteController* noteController
   ReplaceNoteVisuals(noteController, infos);
 }
 
+void Runtime::SetBasicBeatmapObjectManager(GlobalNamespace::BasicBeatmapObjectManager* manager) {
+  if (manager != nullptr) _basicBeatmapObjectManager.emplace(manager);
+}
+
+// Re-applies assignments to every note on screen, after an AssignObjectPrefab.
+//
+// Upstream walks the game's active note pools (NotePrefabManager.RefreshObjects),
+// so notes already in flight change as soon as a prefab is assigned. Walking
+// only _noteReplacements missed every note that had no prefab yet: the first
+// assignment of a song left the notes already in flight on the default look
+// until they despawned.
 void Runtime::RefreshActiveNoteVisuals() {
-  if (_currentBeatmapData == nullptr || _isResetting || _noteReplacements.empty()) return;
+  if (_currentBeatmapData == nullptr || _isResetting) return;
 
   std::vector<GlobalNamespace::NoteController*> active;
-  active.reserve(_noteReplacements.size());
-  for (auto const& entry : _noteReplacements) {
-    if (IsAlive(entry.first)) active.push_back(entry.first);
+  std::unordered_set<GlobalNamespace::NoteController*> seen;
+  auto add = [&](GlobalNamespace::NoteController* noteController) {
+    if (IsAlive(noteController) && seen.insert(noteController).second) active.push_back(noteController);
+  };
+  for (auto const& entry : _noteReplacements) add(entry.first);
+  if (_basicBeatmapObjectManager) {
+    auto* manager = _basicBeatmapObjectManager.ptr();
+    auto addPool = [&](auto* container) {
+      if (container == nullptr) return;
+      auto* items = container->get_activeItems();
+      if (items == nullptr) return;
+      for (int i = 0; i < items->get_Count(); i++) {
+        add(static_cast<GlobalNamespace::NoteController*>(items->get_Item(i).unsafePtr()));
+      }
+    };
+    addPool(manager->____basicGameNotePoolContainer);
+    addPool(manager->____bombNotePoolContainer);
+    addPool(manager->____burstSliderHeadGameNotePoolContainer);
+    addPool(manager->____burstSliderGameNotePoolContainer);
   }
   for (auto* noteController : active) {
     ApplyNotePrefabFor(noteController, /*isFreshInit=*/false);

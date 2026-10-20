@@ -67,6 +67,9 @@ public:
   // selection starts from nothing.
   void ReleaseBundlesForReset();
   void SetPauseMenuActive(bool active);
+  // The level's note pools, for re-skinning notes already in flight (PC's
+  // NotePrefabManager.RefreshObjects). Set from BasicBeatmapObjectManager.Init.
+  void SetBasicBeatmapObjectManager(GlobalNamespace::BasicBeatmapObjectManager* manager);
   void RefreshMultipassRendering();
   void RefreshIsolationSettings();
 
@@ -438,6 +441,9 @@ private:
   std::vector<AssignedPrefabInfo*> _lastCutDebrisPrefabs;
   std::vector<ActiveSaberVisual> _activeSabers;
   std::unordered_map<GlobalNamespace::NoteController*, VisualReplacement> _noteReplacements;
+  // Not a UnityEngine.Object, so it cannot be checked for liveness; the
+  // SafePtr keeps it valid, and each level's Init replaces it.
+  SafePtr<GlobalNamespace::BasicBeatmapObjectManager> _basicBeatmapObjectManager;
   std::unordered_map<GlobalNamespace::SaberModelController*, VisualReplacement> _saberReplacements;
   std::unordered_map<GlobalNamespace::NoteDebris*, VisualReplacement> _debrisReplacements;
   CameraApplier* _cameraApplier = nullptr;
