@@ -226,7 +226,8 @@ private:
   std::vector<TrackW> ReadTracks(rapidjson::Value const& object, bool v2);
 
   std::optional<MaterialPropertyChange> ParseMaterialProperty(rapidjson::Value const& propertyJson);
-  std::vector<MaterialPropertyChange> ParseMaterialProperties(rapidjson::Value const& json);
+  // malformed: set when the event must be skipped as a whole, as PC Vivify does.
+  std::vector<MaterialPropertyChange> ParseMaterialProperties(rapidjson::Value const& json, bool* malformed = nullptr);
   std::optional<AnimatorPropertyChange> ParseAnimatorProperty(rapidjson::Value const& propertyJson);
   std::vector<AnimatorPropertyChange> ParseAnimatorProperties(rapidjson::Value const& json);
   bool IsAnimated(MaterialPropertyChange const& property) const;

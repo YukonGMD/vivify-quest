@@ -67,8 +67,29 @@ std::optional<MaterialPropertyChange> Runtime::ParseMaterialProperty(rapidjson::
   }
 }
 
-std::vector<MaterialPropertyChange> Runtime::ParseMaterialProperties(rapidjson::Value const& json) {
+namespace {
+// A Color or Vector written as one flat list of numbers is Heck's single-point
+// shorthand: Heck appends a time of 0 and needs exactly four numbers before it.
+// Any other count (an [r,g,b] colour) fails Heck's assert, and PC Vivify skips
+// the whole event. tracks-rs instead reads [r,g,b] as (r,g,b,0), a colour with
+// zero alpha, so the check has to happen here.
+bool IsMalformedVectorShorthand(rapidjson::Value const& propertyJson) {
+  auto type = ReadStringView(propertyJson, "type");
+  if (!type.has_value()) return false;
+  auto const kind = ParseMaterialPropertyKind(*type);
+  if (kind != MaterialPropertyKind::Color && kind != MaterialPropertyKind::Vector) return false;
+  auto* value = ReadValuePtr(propertyJson, "value");
+  if (value == nullptr || !value->IsArray() || value->Empty()) return false;
+  for (auto const& entry : value->GetArray()) {
+    if (!entry.IsNumber()) return false;
+  }
+  return value->Size() != 4;
+}
+}
+
+std::vector<MaterialPropertyChange> Runtime::ParseMaterialProperties(rapidjson::Value const& json, bool* malformed) {
   std::vector<MaterialPropertyChange> properties;
+  if (malformed != nullptr) *malformed = false;
   auto* propertiesValue = ReadValuePtr(json, "properties");
   if (propertiesValue == nullptr || !propertiesValue->IsArray()) {
     return properties;
@@ -77,6 +98,15 @@ std::vector<MaterialPropertyChange> Runtime::ParseMaterialProperties(rapidjson::
   for (auto const& propertyJson : propertiesValue->GetArray()) {
     if (!propertyJson.IsObject()) {
       continue;
+    }
+    if (IsMalformedVectorShorthand(propertyJson)) {
+      PaperLogger.warn("Vivify: property '{}' is a {} written as {} numbers; it needs four ([r, g, b, a]). "
+                       "PC Vivify skips this whole event, and so does Vivify Quest",
+                       ReadStringView(propertyJson, "id").value_or("<no id>"),
+                       ReadStringView(propertyJson, "type").value_or("?"),
+                       ReadValuePtr(propertyJson, "value")->Size());
+      if (malformed != nullptr) *malformed = true;
+      return {};
     }
     if (auto property = ParseMaterialProperty(propertyJson); property.has_value()) {
       properties.emplace_back(std::move(*property));

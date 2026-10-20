@@ -31,7 +31,7 @@ PC registers 11 events (`VivifyController.cs`, `Installers/VivifyPlayerInstaller
 | `CreateScreenTexture` | `Events/DeclareRenderTexture.cs` | implemented (fixed in `f5c669a9`) | `Runtime::HandleCreateScreenTexture`, `CreateDeclaredTexture` | Blit `_Main` → texture → `_Main` with a distortion material: a distorted but complete image |
 | `DestroyObject` | `Events/DestroyPrefab.cs` | implemented | `Runtime::DestroyObjects` (`src/VivifyObjectPrefabs.cpp`) | A prefab, a camera and a screen texture each vanish at their destroy beat |
 | `InstantiatePrefab` | `Events/InstantiatePrefab.cs` | partial (left-handed, see §3) | `Runtime::PreloadInstantiatePrefabs`, `Runtime::InstantiatePrefab` | A cube appears at its beat at `position`/`rotation`/`scale` |
-| `SetMaterialProperty` | `Events/SetMaterialProperty.cs` | implemented *(3-component colour unverified, §4)* | `Runtime::HandleSetMaterialProperty` (`src/VivifyProperties.cpp`) | A material's `_Color` fades red→blue over 8 beats |
+| `SetMaterialProperty` | `Events/SetMaterialProperty.cs` | implemented | `Runtime::HandleSetMaterialProperty` (`src/VivifyProperties.cpp`) | A material's `_Color` fades red→blue over 8 beats |
 | `SetAnimatorProperty` | `Events/SetAnimatorProperty.cs` | implemented (Integer differs, §4) | `Runtime::HandleSetAnimatorProperty` | A prefab's animator Bool/Float/Integer/Trigger drive state changes |
 | `SetGlobalProperty` | `Events/SetGlobalProperty.cs` | implemented | `Runtime::HandleSetGlobalProperty` | A global `_Fade` float animating every material that reads it |
 | `SetCameraProperty` | `Events/SetCameraProperty.cs` | partial (mirror cameras, §6) | `Runtime::HandleSetCameraProperty` | `_Main` clear flags SolidColor with a red background; culling whitelist |
@@ -96,7 +96,7 @@ Quest also accepts the aliases `PostProcess`, `PostProcessing` and `ScreenEffect
 
 | Feature | PC file | Quest status | Quest code | Test map would show |
 |---|---|---|---|---|
-| Static Color as `[r,g,b]` or `[r,g,b,a]` | `SetMaterialProperty.cs` (literal list → `new Color(…)`) | partial *(unverified)* | `ParseMaterialProperty`: Color/Vector always go through `MakePointDefinition(…, Vec4)` | A 3-component `[1,0,0]` colour: red on PC; on Quest it depends on how Tracks parses a 3-value Vec4 point |
+| Flat Color/Vector `[r,g,b,a]`, and malformed `[r,g,b]` | `CustomDataProperties.cs` `CreateMaterialProperty` (every list → Heck `GetPointData<Vector4>`; the literal branch in `SetMaterialProperty.cs` is dead code) | implemented (fixed in this branch) | `IsMalformedVectorShorthand`, `ParseMaterialProperties` (`src/VivifyProperties.cpp`); `HandleBlit` | `[1,0,0,1]` is red on both. `[1,0,0]`: Heck makes it `[1,0,0,0]` (four numbers where five are needed), throws, and PC skips the whole event. tracks-rs read it as `(1,0,0,0)`, a zero-alpha colour. Quest now skips the whole `SetMaterialProperty`/`SetGlobalProperty`/`Blit` event too, and logs which property was malformed. |
 | Animated property: apply over `duration` with `easing` | `AnimatePropertyCoroutine` | implemented | `QueueMaterialPropertyAnimation`, `UpdateMaterialAnimations` | PC's coroutine stops without writing the final value; Quest writes progress 1 at the end. Quest's end state is the exact final value. |
 | Event already in the past (`start + duration < songTime`) applies the final value | all property events | implemented | `completed` checks | — |
 | Texture property (asset name) | `SetMaterialProperty.cs` | implemented | `ApplyMaterialProperty` Texture | — |
@@ -190,7 +190,7 @@ Ordered by expected effect on gameplay and visuals across real maps. Items 1–3
 | 2 | Secondary depth texture copied without PC's array-slice DepthBlit | Depth-driven effects (fog, raymarchers, intersections) may be wrong in one eye *(unverified)* | `SecondaryCameraController::OnRenderImage` |
 | 3 | Left-handed mode doesn't mirror prefabs | Environments are mirrored relative to the notes for left-handed players | `Runtime::InstantiatePrefab`: parent under a −X-scaled root when left-handed |
 | 4 | Mirror cameras don't get culling / `_Main` camera properties | Objects culled from the main view still show in mirrors | Port `AddMirrorComponents` (hook `MirrorRendererSO.CreateOrUpdateMirrorCamera`) |
-| 5 | Static 3-component colours go through a Vec4 point definition | Possible wrong colour for `[r,g,b]` values *(unverified)* | `ParseMaterialProperty`: read a literal colour array first, as `IsLiteralColorArray` does for render settings |
+| ✓ | `[r,g,b]` colours in property events: PC rejects the event, Quest applied a zero-alpha colour | Fixed on this branch: Quest skips the event like PC. (In `SetRenderingSettings`, Quest still accepts `[r,g,b]` with alpha 1 where PC drops the event; left as a harmless leniency.) | — |
 | 6 | VideoPlayer sync: no `playbackSpeed`, no `playOnAwake` filter, no prepare-first | Video stutter at speed modifiers; videos meant to start later autoplay | `UpdateSyncedObjects` / `RegisterSyncedObject` |
 | 7 | No `DynamicGI.UpdateEnvironment()` after settings changes | Ambient light doesn't follow skybox swaps | `ApplyRenderSettingObject` / `Apply*` |
 | 8 | Secondary cameras lack a copied `BloomPrePass` | Camera captures lose light glow *(unverified on Quest)* | `HandleCreateCamera` |

@@ -548,7 +548,9 @@ void Runtime::HandleBlit(CustomJSONData::CustomEventData* customEventData, rapid
     }
     RepairMaterialShader(material, *asset);
     LogMaterialShader("Blit", *asset, material);
-    auto properties = ParseMaterialProperties(json);
+    bool malformed = false;
+    auto properties = ParseMaterialProperties(json, &malformed);
+    if (malformed) return;
     if (!properties.empty()) {
       Functions easing = ParseEasing(ReadStringView(json, "easing").value_or("easeLinear"));
       float const startTime = customEventData->time;
