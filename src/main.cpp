@@ -53,7 +53,9 @@ constexpr std::string_view kGeometryEffectsConfigKey = "drawGeometryShaderEffect
 constexpr std::string_view kPcShadersForEmptyConfigKey = "pcShadersForEmptyQuestShaders";
 constexpr std::string_view kStandInShaderNameConfigKey = "standInShaderName";
 constexpr std::string_view kEffectResolutionConfigKey = "effectResolutionPercent";
-constexpr std::string_view kOffscreenCullingConfigKey = "offscreenCulling";
+// A new key: the setting is now off by default, and the old key
+// saved it on for everyone.
+constexpr std::string_view kOffscreenCullingConfigKey = "offscreenCullingOptIn";
 constexpr std::string_view kCrashGuardConfigKey = "crashGuard";
 constexpr std::string_view kPcBundleForMissingShadersConfigKey = "pcBundleForMissingShaders";
 constexpr std::string_view kFarCullingConfigKey = "farCullingDistance";
@@ -117,7 +119,7 @@ std::string gStandInShaderName;
 int gEffectResolution = 100;
 // Animators in a map's prefabs skip updating while none of their renderers is
 // on screen (0.14.23).
-bool gOffscreenCulling = true;
+bool gOffscreenCulling = false;
 // Two loads of a converted bundle that never finish put it into the
 // untranslated (grey) fallback; off, that never happens (0.14.24).
 bool gCrashGuard = true;
@@ -487,7 +489,9 @@ void RegisterModSettings() {
             [](bool value) { SetBoolConfigValue(kCrashGuardConfigKey, value, gCrashGuard); });
 
         // Animators in the map's prefabs stop updating while nothing they
-        // draw is on screen; their animation resumes at the right time.
+        // draw is on screen; their animation resumes at the right time. Off by
+        // default: PC Vivify never culls, and an animator whose own animation
+        // is what brings its objects into view never resumes.
         BSML::Lite::CreateToggle(
             container->get_transform(), u"Offscreen Culling (less lag)", gOffscreenCulling,
             [](bool value) { SetBoolConfigValue(kOffscreenCullingConfigKey, value, gOffscreenCulling); });
@@ -779,7 +783,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureStringConfigValue(kStandInShaderNameConfigKey, std::string(),
                                         gStandInShaderName);
   needsWrite |= EnsureIntConfigValue(kEffectResolutionConfigKey, 100, 25, 100, gEffectResolution);
-  needsWrite |= EnsureBoolConfigValue(kOffscreenCullingConfigKey, true, gOffscreenCulling);
+  needsWrite |= EnsureBoolConfigValue(kOffscreenCullingConfigKey, false, gOffscreenCulling);
   needsWrite |= EnsureBoolConfigValue(kCrashGuardConfigKey, true, gCrashGuard);
   needsWrite |= EnsureBoolConfigValue(kPcBundleForMissingShadersConfigKey, false, gPcBundleForMissingShaders);
   needsWrite |= EnsureIntConfigValue(kFarCullingConfigKey, 0, 0, 1000, gFarCullingDistance);

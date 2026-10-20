@@ -14,6 +14,11 @@ namespace {
 // up at the right time once one is (its speed and time are still driven by
 // the song). An animator with no renderer under it -- one moving a light or a
 // camera -- keeps animating, since nothing would ever make it visible again.
+//
+// The same holds for an animator whose renderers are invisible only because
+// of the animation: a particle emitter with nothing spawned yet, grass grown
+// from scale 0, scenery moved into view. Culled, those never appear, which is
+// why the setting is opt-in; PC Vivify never culls animators.
 int CullOffscreenAnimators(UnityEngine::GameObject* root) {
   if (!GetOffscreenCulling() || !IsManagedAlive(root)) return 0;
   int culled = 0;
