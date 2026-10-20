@@ -24,11 +24,38 @@ if(${CMAKE_BUILD_TYPE} STREQUAL "DEBUG" OR ${CMAKE_BUILD_TYPE} STREQUAL "RelWith
 	add_compile_options(-g)
 endif()
 
+# project() only takes a numeric version; a test suffix such as "-naomi.1"
+# stays in MOD_VERSION, which is what the mod reports.
+string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" MOD_VERSION_NUMERIC "${MOD_VERSION}")
 project(Vivify
-	VERSION ${MOD_VERSION})
+	VERSION ${MOD_VERSION_NUMERIC})
+
+# The commit this build came from, so builds can be told apart in
+# VivifySession.txt. "-dirty" marks uncommitted changes. Re-read on every
+# configure, which scripts/build.ps1 runs on every build.
+execute_process(
+	COMMAND git rev-parse --short=10 HEAD
+	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+	OUTPUT_VARIABLE VIVIFY_GIT_COMMIT
+	OUTPUT_STRIP_TRAILING_WHITESPACE
+	ERROR_QUIET)
+if(NOT VIVIFY_GIT_COMMIT)
+	set(VIVIFY_GIT_COMMIT "unknown")
+else()
+	execute_process(
+		COMMAND git status --porcelain --untracked-files=no
+		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+		OUTPUT_VARIABLE VIVIFY_GIT_DIRTY
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+		ERROR_QUIET)
+	if(VIVIFY_GIT_DIRTY)
+		set(VIVIFY_GIT_COMMIT "${VIVIFY_GIT_COMMIT}-dirty")
+	endif()
+endif()
 
 add_compile_definitions(MOD_ID="${CMAKE_PROJECT_NAME}")
-add_compile_definitions(VERSION="${CMAKE_PROJECT_VERSION}")
+add_compile_definitions(VERSION="${MOD_VERSION}")
+add_compile_definitions(VIVIFY_GIT_COMMIT="${VIVIFY_GIT_COMMIT}")
 # Linked into the library by src/VivifyAudioLinkBundle.cpp (.incbin).
 add_compile_definitions(VIVIFY_AUDIOLINK_BUNDLE="${CMAKE_CURRENT_SOURCE_DIR}/assets/audiolink/AudioLink.bundle")
 

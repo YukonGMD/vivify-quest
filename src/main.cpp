@@ -173,10 +173,11 @@ void InstallVivifyFileLogSink() {
     PaperLogger.warn("Vivify: could not open log file at {} (logging to logcat only)", kVivifyLogPath);
     return;
   }
-  gVivifyLogFile << "=== Vivify " << VERSION << " session log ===\n";
+  gVivifyLogFile << "=== Vivify " << VERSION << " (commit " << VIVIFY_GIT_COMMIT << ") session log ===\n";
   gVivifyLogFile.flush();
   gVivifyLogLastFlush = std::chrono::steady_clock::now();
-  gVivifyGlobalLog.Open("=== Vivify " + std::string(VERSION) + " session started " + WallClockText() + " ===");
+  gVivifyGlobalLog.Open("=== Vivify " + std::string(VERSION) + " (commit " + VIVIFY_GIT_COMMIT + ") session started " +
+                        WallClockText() + " ===");
 
   Paper::Logger::AddLogSink([](Paper::LogData const& data) {
     if (!data.tag.has_value() || *data.tag != std::string_view(MOD_ID)) return;

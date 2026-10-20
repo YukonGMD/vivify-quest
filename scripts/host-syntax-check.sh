@@ -41,7 +41,7 @@ flags=(
   -std=gnu++20 -fsyntax-only -stdlib=libc++ -funsigned-char
   -DFMT_HEADER_ONLY -DANDROID -DHAS_CODEGEN -DUNITY_2021 -DNEED_UNSAFE_CSHARP
   -fdeclspec -Wno-invalid-offsetof -Wno-extra-qualification -fexceptions -frtti
-  -DMOD_ID='"Vivify"' -DVERSION='"0.0.0"' -ferror-limit=60
+  -DMOD_ID='"Vivify"' -DVERSION='"0.0.0"' -DVIVIFY_GIT_COMMIT='"host"' -ferror-limit=60
   -include "$stub/hostcompat.h"
   -I include -I shared -I extern/includes -I extern/includes/bs-cordl/include
   -isystem "$stub"
