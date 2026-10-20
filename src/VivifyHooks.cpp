@@ -2,6 +2,9 @@
 #include <set>
 #include "VivifyComponents.hpp"
 #include "GlobalNamespace/UserInfo.hpp"
+#include "GlobalNamespace/MirrorRendererSO.hpp"
+#include "System/Collections/Generic/Dictionary_2.hpp"
+#include <map>
 
 using namespace Vivify;
 using namespace std::string_view_literals;
@@ -102,7 +105,81 @@ MAKE_HOOK_MATCH(ImageEffectController_OnRenderImage, &GlobalNamespace::ImageEffe
   ImageEffectController_OnRenderImage(self, src, dest);
 }
 
-MAKE_HOOK_MATCH(PauseController_Pause, &GlobalNamespace::PauseController::Pause, void, GlobalNamespace::PauseController* self) {
+// Mirrors seen by a CreateCamera camera (PC Vivify's IndexMirrorByHash).
+// MirrorRendererSO renders each mirror once per frame per camera and caches
+// the texture in _renderTextures, keyed by the camera's position, rotation,
+// field of view and stereo flag. A CreateCamera camera matches the main camera
+// on all four and renders first, so the main camera was handed the reflection
+// rendered for the Vivify camera instead of its own, and mirrors appeared to
+// follow the headset. PC Vivify keys that cache by camera; here each Vivify
+// camera gets a cache of its own, swapped in while the game renders (and each
+// frame releases) its mirror textures. Every other camera uses the game's.
+using MirrorTextureCache = System::Collections::Generic::Dictionary_2<
+    GlobalNamespace::MirrorRendererSO_CameraTransformData, UnityW<UnityEngine::RenderTexture>>;
+
+std::map<std::pair<GlobalNamespace::MirrorRendererSO*, UnityEngine::Camera*>, SafePtr<MirrorTextureCache>>
+    sVivifyCameraMirrorCaches;
+
+MirrorTextureCache* VivifyCameraMirrorCache(GlobalNamespace::MirrorRendererSO* self) {
+  if (!IsManagedAlive(self)) return nullptr;
+  auto current = UnityEngine::Camera::get_current();
+  auto* camera = current.unsafePtr();
+  if (!IsManagedAlive(camera)) return nullptr;
+  auto go = camera->get_gameObject();
+  if (!IsManagedAlive(go.unsafePtr()) || go->GetComponent<SecondaryCameraController*>() == nullptr) return nullptr;
+  auto& cache = sVivifyCameraMirrorCaches[{self, camera}];
+  if (!cache) cache.emplace(MirrorTextureCache::New_ctor());
+  return cache.ptr();
+}
+
+// Runs the game's method with `cache` in place of the shared one.
+template <typename Call>
+auto WithMirrorCache(GlobalNamespace::MirrorRendererSO* self, MirrorTextureCache* cache, Call&& call) {
+  auto* shared = self->_renderTextures;
+  self->_renderTextures = cache;
+  try {
+    if constexpr (std::is_void_v<decltype(call())>) {
+      call();
+      self->_renderTextures = shared;
+    } else {
+      auto result = call();
+      self->_renderTextures = shared;
+      return result;
+    }
+  } catch (...) {
+    self->_renderTextures = shared;
+    throw;
+  }
+}
+
+MAKE_HOOK_MATCH(MirrorRendererSO_RenderMirrorTexture, &GlobalNamespace::MirrorRendererSO::RenderMirrorTexture, UnityW<UnityEngine::Texture>, GlobalNamespace::MirrorRendererSO* self, UnityEngine::Vector3 reflectionPlanePos, UnityEngine::Vector3 reflectionPlaneNormal) {
+  MirrorTextureCache* cache = nullptr;
+  VivifyPart("MirrorRendererSO.RenderMirrorTexture", [&] { cache = VivifyCameraMirrorCache(self); });
+  if (cache == nullptr) return MirrorRendererSO_RenderMirrorTexture(self, reflectionPlanePos, reflectionPlaneNormal);
+  return WithMirrorCache(self, cache, [&] {
+    return MirrorRendererSO_RenderMirrorTexture(self, reflectionPlanePos, reflectionPlaneNormal);
+  });
+}
+
+MAKE_HOOK_MATCH(MirrorRendererSO_PrepareForNextFrame, &GlobalNamespace::MirrorRendererSO::PrepareForNextFrame, void, GlobalNamespace::MirrorRendererSO* self) {
+  MirrorRendererSO_PrepareForNextFrame(self);
+  // The game releases last frame's mirror textures here; do the same for each
+  // Vivify camera's cache, then forget the caches of cameras that are gone.
+  for (auto it = sVivifyCameraMirrorCaches.begin(); it != sVivifyCameraMirrorCaches.end();) {
+    auto& [key, cache] = *it;
+    bool const ours = key.first == self;
+    if (ours && cache) {
+      WithMirrorCache(self, cache.ptr(), [&] { MirrorRendererSO_PrepareForNextFrame(self); });
+    }
+    if (!IsManagedAlive(key.first) || (ours && !IsManagedAlive(key.second))) {
+      it = sVivifyCameraMirrorCaches.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+MAKE_HOOK_MATCH(PauseController_Pause,&GlobalNamespace::PauseController::Pause, void, GlobalNamespace::PauseController* self) {
   VivifyPart("PauseController_Pause", [] { Runtime::Instance().SetPauseMenuActive(true); });
   PauseController_Pause(self);
 }
@@ -214,6 +291,8 @@ void LateLoad() {
   INSTALL_HOOK(PaperLogger, NoteDebris_Init);
   INSTALL_HOOK(PaperLogger, AlwaysVisibleQuad_OnEnable);
   INSTALL_HOOK(PaperLogger, ImageEffectController_OnRenderImage);
+  INSTALL_HOOK(PaperLogger, MirrorRendererSO_RenderMirrorTexture);
+  INSTALL_HOOK(PaperLogger, MirrorRendererSO_PrepareForNextFrame);
   INSTALL_HOOK(PaperLogger, VRCenterAdjust_Start);
   INSTALL_HOOK(PaperLogger, VRCenterAdjust_OnEnable);
   INSTALL_HOOK(PaperLogger, VRCenterAdjust_OnDisable);
