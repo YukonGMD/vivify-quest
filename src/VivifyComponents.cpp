@@ -394,6 +394,8 @@ void MultipassKeywordController::OnDisable() {
 }
 
 void RuntimeBehaviour::Update() {
+  // First, so a throw anywhere below cannot make a healthy frame look stalled.
+  VivifyHeartbeat();
   // Before the runtime's own update, which returns early in the menu and when
   // its watchdog stands down; AudioLink has to run regardless (song previews).
   try {
@@ -418,6 +420,12 @@ void RuntimeBehaviour::Update() {
     if (reported++ < 3) PaperLogger.error("Vivify Blit companion update threw");
   }
   Runtime::Instance().Update();
+}
+
+// Unity stops calling Update while the app is in the background; that is not
+// a stall.
+void RuntimeBehaviour::OnApplicationPause(bool paused) {
+  VivifySetAppPaused(paused);
 }
 
 void RuntimeBehaviour::OnDestroy() {

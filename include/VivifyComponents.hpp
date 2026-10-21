@@ -48,6 +48,7 @@ DECLARE_CLASS_CODEGEN(Vivify, RuntimeBehaviour, UnityEngine::MonoBehaviour) {
   DECLARE_DEFAULT_CTOR();
   DECLARE_SIMPLE_DTOR();
   DECLARE_INSTANCE_METHOD(void, Update);
+  DECLARE_INSTANCE_METHOD(void, OnApplicationPause, bool paused);
   DECLARE_INSTANCE_METHOD(void, OnDestroy);
 };
 

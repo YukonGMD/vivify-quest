@@ -67,6 +67,13 @@ std::string GetStandInShaderName();
 // Submission gates replay recording, so turning it off leaves no replay behind.
 bool GetSubmitScoresOnVivifyMaps();
 void EnsureConfigDefaults();
+// Level-start diagnostics (0.14.25-naomi.2). A breadcrumb is written to both
+// log files and flushed at once, and becomes the "last breadcrumb" the
+// watchdog names if the main thread then stalls. The heartbeat is called once
+// a frame; while the app is paused, stalls are not reported.
+void VivifyBreadcrumb(std::string const& text);
+void VivifyHeartbeat();
+void VivifySetAppPaused(bool paused);
 constexpr auto PaperLogger = Paper::ConstLoggerContext("Vivify");
 
 #define VIVIFY_DEBUG(...)                                          \

@@ -1,5 +1,6 @@
 #include "main.hpp"
 #include "VivifyGlobalLog.hpp"
+#include "VivifyWatchdog.hpp"
 #include <ctime>
 #include "VivifyRuntime.hpp"
 #include "VivifyReport.hpp"
@@ -161,6 +162,39 @@ std::string WallClockText() {
 bool gVivifyLogSinkInstalled = false;
 bool gVivifyLogCapped = false;
 std::chrono::steady_clock::time_point gVivifyLogLastFlush{};
+std::chrono::steady_clock::time_point gVivifyLogOpened = std::chrono::steady_clock::now();
+
+// Writes one line to both log files and flushes them, on the calling thread.
+// Lines through PaperLogger reach the files later, from Paper's own thread,
+// and ordinary ones are only flushed every 250 ms -- so when the game hangs and
+// is killed, the last of them never reach disk. Breadcrumbs and watchdog lines
+// go through here instead, and so can land ahead of PaperLogger lines that
+// were logged just before them.
+void WriteFlushedLogLine(std::string const& line) {
+  std::lock_guard<std::mutex> lock(gVivifyLogMutex);
+  if (gVivifyGlobalLog.IsOpen()) {
+    gVivifyGlobalLog.Write(WallClockText() + " " + line);
+    gVivifyGlobalLog.Flush();
+  }
+  if (gVivifyLogFile.is_open() && !gVivifyLogCapped) {
+    gVivifyLogFile << line << '\n';
+    gVivifyLogFile.flush();
+  }
+}
+
+// Logcat copies of breadcrumb and watchdog lines, under their own tags so the
+// file sink (which takes only MOD_ID's lines) does not write them twice.
+constexpr auto CrumbLogger = Paper::ConstLoggerContext("VivifyCrumb");
+constexpr auto WatchdogLogger = Paper::ConstLoggerContext("VivifyWatchdog");
+
+Vivify::Watchdog gWatchdog;
+
+std::string ElapsedText() {
+  auto const ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                        gVivifyLogOpened)
+                      .count();
+  return "+" + std::to_string(ms) + "ms";
+}
 
 void InstallVivifyFileLogSink() {
   if (gVivifyLogSinkInstalled) return;
@@ -178,6 +212,12 @@ void InstallVivifyFileLogSink() {
   gVivifyLogLastFlush = std::chrono::steady_clock::now();
   gVivifyGlobalLog.Open("=== Vivify " + std::string(VERSION) + " (commit " + VIVIFY_GIT_COMMIT + ") session started " +
                         WallClockText() + " ===");
+
+  // Started once the files are open, so its lines have somewhere to go.
+  gWatchdog.Start([](std::string const& line) {
+    WriteFlushedLogLine("[" + ElapsedText() + "] " + line);
+    WatchdogLogger.warn("{}", line);
+  });
 
   Paper::Logger::AddLogSink([](Paper::LogData const& data) {
     if (!data.tag.has_value() || *data.tag != std::string_view(MOD_ID)) return;
@@ -213,6 +253,24 @@ void InstallVivifyFileLogSink() {
     }
   });
 }
+
+}  // namespace
+
+void VivifyBreadcrumb(std::string const& text) {
+  gWatchdog.SetBreadcrumb(text);
+  WriteFlushedLogLine("[CRUMB " + ElapsedText() + "] " + text);
+  CrumbLogger.info("{}", text);
+}
+
+void VivifyHeartbeat() {
+  gWatchdog.Beat();
+}
+
+void VivifySetAppPaused(bool paused) {
+  gWatchdog.SetPaused(paused);
+}
+
+namespace {
 
 void EnsureConfigObject() {
   auto& doc = getConfig().config;
