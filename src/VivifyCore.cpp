@@ -154,6 +154,13 @@ void Runtime::Update() {
       }
     }
     _lastGameplayFrame = frameStart;
+    // The frame level start ran in has finished, rendering included: whatever
+    // freezes after "level start end" and before this line is in that frame.
+    if (_firstFrameCrumbPending && UnityEngine::Time::get_frameCount() != _levelStartFrame) {
+      _firstFrameCrumbPending = false;
+      VivifyBreadcrumb(fmt::format("first frame after level start: {:.0f}ms later",
+                                   std::chrono::duration<double, std::milli>(frameStart - _levelStartedAt).count()));
+    }
     // Ten seconds into the song the converted bundle has loaded and drawn;
     // whatever happens after that is not what the crash guard is for.
     if (!_loadGuardPath.empty() && CurrentSongTime() > 10.0f) DisarmLoadGuard();

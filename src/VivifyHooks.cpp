@@ -248,6 +248,10 @@ bool ShouldSkipVRCenterAdjust(GlobalNamespace::VRCenterAdjust* self, std::string
     }
     return true;
   }
+  // Skips per method, so the first call that goes through can say how many
+  // came before it: whether the fields ever got filled in is the question
+  // when a map freezes right after these warnings.
+  static std::map<std::string_view, int> sSkipped;
   if (missingSettingsManager || missingSettingsApplicator) {
     // Update runs every frame, and with debug logging on this line alone was
     // 21,790 of a 25,005-line session log. Once per method is enough to know.
@@ -256,7 +260,15 @@ bool ShouldSkipVRCenterAdjust(GlobalNamespace::VRCenterAdjust* self, std::string
       PaperLogger.warn("VRCenterAdjust.{} skipped: missing _settingsManager={} _settingsApplicator={}",
                        method, BoolText(missingSettingsManager), BoolText(missingSettingsApplicator));
     }
+    if (sSkipped[method]++ == 0) {
+      VivifyBreadcrumb("VRCenterAdjust." + std::string(method) + " skipped (fields not set yet)");
+    }
     return true;
+  }
+  if (auto it = sSkipped.find(method); it != sSkipped.end() && it->second > 0) {
+    VivifyBreadcrumb("VRCenterAdjust." + std::string(method) + " ran after " + std::to_string(it->second) +
+                     " skipped call(s)");
+    it->second = 0;
   }
   return false;
 }

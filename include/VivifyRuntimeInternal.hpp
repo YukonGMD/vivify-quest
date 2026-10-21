@@ -569,6 +569,11 @@ private:
   // Shader preparation queue for the selected converted bundle.
   std::vector<UnityEngine::Material*> _warmupQueue;
   size_t _warmupIndex = 0;
+  int _warmupPassesBound = 0;
+  // The breadcrumb for the first frame after PrepareBeatmap (naomi.2).
+  bool _firstFrameCrumbPending = false;
+  int _levelStartFrame = -1;
+  std::chrono::steady_clock::time_point _levelStartedAt{};
   std::string _warmupLevel;
   std::string _warmupBundle;
   float _warmupStarted = 0.0f;

@@ -633,6 +633,7 @@ void Runtime::PreloadInstantiatePrefabs() {
     bool prefabFound = false;
     if (auto* prefab = GetAssetAs<UnityEngine::GameObject>(data.asset); IsAlive(prefab)) {
       prefabFound = true;
+      VivifyBreadcrumb("prefab preload: asset='" + data.asset + "' id='" + data.id.value_or("") + "'");
       auto* instance = UnityEngine::Object::Instantiate(prefab);
       if (IsAlive(instance)) {
         instance->SetActive(false);

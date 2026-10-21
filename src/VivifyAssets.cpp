@@ -1976,8 +1976,11 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
                      "Guard off, gives it its translated shaders back", bundlePath);
   }
   ArmLoadGuard(bundlePath);
+  auto const preloadStart = std::chrono::steady_clock::now();
+  VivifyBreadcrumb("bundle preload begin: '" + bundlePath + "'");
   _mainBundle = UnityEngine::AssetBundle::LoadFromFile(StringW(bundlePath));
   if (_mainBundle == nullptr) {
+    VivifyBreadcrumb("bundle preload failed");
     if (GetVivifyDebugLogging()) {
       PaperLogger.warn("Vivify bundle preload failed: '{}'", bundlePath);
     }
@@ -1989,6 +1992,9 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
     PaperLogger.info("Vivify bundle preloaded: '{}'", bundlePath);
   }
   CacheBundleAssets();
+  VivifyBreadcrumb(fmt::format("bundle preload end: {} asset(s) in {:.0f}ms", _assets.size(),
+                               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                         preloadStart).count()));
   // Loaded and every asset realised. Play re-arms it, since that is when the
   // driver first compiles the programs.
   DisarmLoadGuard();
@@ -2088,8 +2094,12 @@ std::optional<bool> Runtime::MapShadersNeedSceneDepth() {
 void Runtime::StartShaderWarmup(std::string const& bundlePath) {
   _warmupQueue.clear();
   _warmupIndex = 0;
+  _warmupPassesBound = 0;
   if (!GetPrepareShadersBeforePlaying()) return;
-  if (bundlePath.rfind(ConvertedBundleCacheDir(), 0) != 0) return;  // only bundles this mod translated
+  if (bundlePath.rfind(ConvertedBundleCacheDir(), 0) != 0) {  // only bundles this mod translated
+    VivifyBreadcrumb("shader prepare skipped: not a bundle this mod converted");
+    return;
+  }
   std::set<UnityEngine::Material*> seen;
   auto add = [&](UnityEngine::Material* material) {
     if (IsAlive(material) && seen.insert(material).second) _warmupQueue.push_back(material);
@@ -2108,7 +2118,10 @@ void Runtime::StartShaderWarmup(std::string const& bundlePath) {
       }
     }
   }
-  if (_warmupQueue.empty()) return;
+  if (_warmupQueue.empty()) {
+    VivifyBreadcrumb("shader prepare skipped: no materials");
+    return;
+  }
   _warmupLevel = _selectedLevelPath;
   _warmupBundle = bundlePath;
   _warmupStarted = UnityEngine::Time::get_realtimeSinceStartup();
@@ -2118,12 +2131,15 @@ void Runtime::StartShaderWarmup(std::string const& bundlePath) {
       "Vivify", "Preparing shaders 0/" + std::to_string(_warmupQueue.size()) + "...");
   PaperLogger.info("Vivify: preparing the shaders of {} material(s) before play ('{}')", _warmupQueue.size(),
                    bundlePath);
+  VivifyBreadcrumb(fmt::format("shader prepare begin: {} material(s)", _warmupQueue.size()));
 }
 
 void Runtime::PollShaderWarmup() {
   if (_warmupQueue.empty()) return;
   if (_warmupLevel != _selectedLevelPath) {
     // Another level was picked; its own load starts its own preparation.
+    VivifyBreadcrumb(fmt::format("shader prepare abandoned at {}/{}: another level was selected", _warmupIndex,
+                                 _warmupQueue.size()));
     _warmupQueue.clear();
     _warmupIndex = 0;
     return;
@@ -2144,11 +2160,13 @@ void Runtime::PollShaderWarmup() {
     try {
       int const passes = material->get_passCount();
       for (int p = 0; p < passes; p++) material->SetPass(p);
+      _warmupPassesBound += passes;
       if (multiview.has_value()) {
         auto keyword = multiview.value();
         bool const was = UnityEngine::Shader::IsKeywordEnabled(::ByRef<UnityEngine::Rendering::GlobalKeyword>(keyword));
         if (!was) UnityEngine::Shader::EnableKeyword(::ByRef<UnityEngine::Rendering::GlobalKeyword>(keyword));
         for (int p = 0; p < passes; p++) material->SetPass(p);
+        _warmupPassesBound += passes;
         if (!was) UnityEngine::Shader::DisableKeyword(::ByRef<UnityEngine::Rendering::GlobalKeyword>(keyword));
       }
     } catch (...) {
@@ -2164,6 +2182,8 @@ void Runtime::PollShaderWarmup() {
   }
   float const seconds = UnityEngine::Time::get_realtimeSinceStartup() - _warmupStarted;
   PaperLogger.info("Vivify: shaders of {} material(s) prepared in {:.1f}s", _warmupQueue.size(), seconds);
+  VivifyBreadcrumb(fmt::format("shader prepare end: {} material(s), {} pass variant(s) bound, {:.0f}ms",
+                               _warmupQueue.size(), _warmupPassesBound, seconds * 1000.0f));
   _warmupQueue.clear();
   _warmupIndex = 0;
   DisarmLoadGuard();
@@ -2219,16 +2239,22 @@ void Runtime::LoadMainBundle() {
     if (GetVivifyDebugLogging()) {
       PaperLogger.info("Vivify bundle preloaded, rebuilding asset caches: '{}'", bundlePath);
     }
+    VivifyBreadcrumb("level bundle begin (already preloaded): '" + bundlePath + "'");
     CacheBundleAssets();
+    VivifyBreadcrumb("texture decode begin");
     DecodeUnsupportedBundleTextures();
+    VivifyBreadcrumb("texture decode end; shader repair begin");
     RepairLoadedMaterialShaders();
+    VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s)", _assets.size()));
     return;
   }
+  VivifyBreadcrumb("level bundle begin (loading now): '" + bundlePath + "'");
   if (GetVivifyDebugLogging()) {
     PaperLogger.info("Vivify loading asset bundle: path='{}'", bundlePath);
   }
   _mainBundle = UnityEngine::AssetBundle::LoadFromFile(StringW(bundlePath));
   if (_mainBundle == nullptr) {
+    VivifyBreadcrumb("level bundle load failed");
     if (GetVivifyDebugLogging()) {
       PaperLogger.warn("Vivify asset bundle load failed: path='{}'", bundlePath);
     }
@@ -2241,6 +2267,7 @@ void Runtime::LoadMainBundle() {
   // say which phase to look at without needing a repro.
   auto phase = [](char const* name, auto&& work) {
     auto const start = std::chrono::steady_clock::now();
+    VivifyBreadcrumb(std::string(name) + " begin");
     work();
     double const ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -2257,6 +2284,7 @@ void Runtime::LoadMainBundle() {
   _loadMsRepairShaders = phase("repair shaders", [this]() { RepairLoadedMaterialShaders(); });
   _loadMsTotal = _loadMsCacheAssets + _loadMsDecodeTextures + _loadMsRepairShaders;
   PaperLogger.info("Vivify level load: {:.0f}ms total", _loadMsTotal);
+  VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s), {:.0f}ms", _assets.size(), _loadMsTotal));
 
   // Written now, not at the end of the level: if this map is about to freeze,
   // this block is the only one that will ever reach disk.

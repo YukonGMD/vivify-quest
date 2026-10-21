@@ -58,6 +58,8 @@ bool Runtime::EnsureBeatmapPrepared(GlobalNamespace::BeatmapCallbacksController*
 }
 
 void Runtime::PrepareBeatmap(CustomJSONData::CustomBeatmapData* beatmapData, float triggerTime) {
+  VivifyBreadcrumb(fmt::format("level start begin: {} custom event(s), trigger time {}",
+                               beatmapData->customEventDatas.size(), triggerTime));
   ResetRuntime();
   SetSongPlaying(true);
   _currentBeatmapData = beatmapData;
@@ -78,6 +80,11 @@ void Runtime::PrepareBeatmap(CustomJSONData::CustomBeatmapData* beatmapData, flo
   PreloadInstantiatePrefabs();
   ApplyMissedVivifyEvents(triggerTime);
   _lastSongTime = CurrentSongTime();
+  _firstFrameCrumbPending = true;
+  _levelStartFrame = UnityEngine::Time::get_frameCount();
+  _levelStartedAt = std::chrono::steady_clock::now();
+  VivifyBreadcrumb(fmt::format("level start end: {} live prefab(s), {} preloaded; waiting for the next frame",
+                               _livePrefabs.size(), _instantiatePrefabs.size()));
   VIVIFY_DEBUG("Vivify PrepareBeatmap done: assets={} livePrefabs={} preloadedPrefabs={}",
                _assets.size(), _livePrefabs.size(), _instantiatePrefabs.size());
 }
@@ -143,6 +150,8 @@ void Runtime::ApplyMissedVivifyEvents(float upToTime) {
   if (_currentBeatmapData == nullptr) return;
   _catchUpAppliedCustomEvents.clear();
   int applied = 0;
+  auto const catchUpStart = std::chrono::steady_clock::now();
+  VivifyBreadcrumb(fmt::format("catch-up begin: events up to time {}", upToTime));
   for (auto* customEventData : _currentBeatmapData->customEventDatas) {
     if (customEventData == nullptr) continue;
     if (customEventData->time > upToTime) continue;
@@ -157,6 +166,9 @@ void Runtime::ApplyMissedVivifyEvents(float upToTime) {
     applied++;
   }
   VIVIFY_DEBUG("Vivify catch-up: replayed {} event(s) up to time={}", applied, upToTime);
+  VivifyBreadcrumb(fmt::format("catch-up end: {} event(s) in {:.0f}ms", applied,
+                               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                         catchUpStart).count()));
 }
 
 }
