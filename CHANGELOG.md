@@ -11,6 +11,25 @@ conversion cache version, and cached conversions are redone automatically.
 
 ## [Unreleased]
 
+Test builds report themselves as 0.14.25-naomi.N.
+
+### Added
+- **Diagnostics for maps that freeze at song start** (naomi.2). Logging
+  only; no setting or behaviour changes.
+  - Breadcrumb lines, marked `[CRUMB +Nms]`, at each phase of level start:
+    bundle preload, shader preparation (or why it was skipped), the level
+    bundle's cache, texture decode and shader repair, each prefab preload,
+    the time-0 catch-up, the first frame after level start, and
+    VRCenterAdjust calls Vivify skips. They are written straight to both log
+    files and flushed, so they survive the game being killed. They can
+    appear just ahead of ordinary lines logged a moment earlier, which reach
+    the files later.
+  - A watchdog: if the game draws no frame for 5 seconds, it writes
+    `WATCHDOG: main thread stalled Ns, last breadcrumb=...` with the state,
+    CPU use and wait channel of the main and render threads, then again
+    every 5 seconds (up to 12 times), and a line when the game recovers. It
+    is silent while the game is healthy or in the background.
+
 ### Changed
 - **Force Reconvert All** now needs two presses within five seconds, like
   Reset. It sits next to Convert All, and it also clears crash-guard strikes.
