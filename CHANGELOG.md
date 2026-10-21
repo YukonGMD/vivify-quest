@@ -11,6 +11,10 @@ conversion cache version, and cached conversions are redone automatically.
 
 ## [Unreleased]
 
+### Changed
+- **Force Reconvert All** now needs two presses within five seconds, like
+  Reset. It sits next to Convert All, and it also clears crash-guard strikes.
+
 ## [0.14.25] - 2026-10-13
 
 Requested as "0.14.24.1"; qpm and QuestPatcher only accept three-part

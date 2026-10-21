@@ -547,9 +547,22 @@ void RegisterModSettings() {
         // A cached conversion is keyed on the source bundle, so it is reused
         // even after the converter itself has been fixed. This is the way to
         // pick those fixes up without deleting the cache directory by hand.
+        // Two presses within five seconds: it sits next to Convert All, and it
+        // also clears every crash-guard strike.
         BSML::Lite::CreateUIButton(
             container->get_transform(), u"Force Reconvert All (ignore cache)",
-            []() { startConversion(true); });
+            []() {
+              static std::chrono::steady_clock::time_point armedUntil{};
+              auto const now = std::chrono::steady_clock::now();
+              if (now > armedUntil) {
+                armedUntil = now + std::chrono::seconds(5);
+                SetConvertStatusText("Press Force Reconvert again within 5 s: reconverts every PC map and "
+                                     "clears crash-guard strikes");
+                return;
+              }
+              armedUntil = {};
+              startConversion(true);
+            });
 
         // Puts Vivify back to a fresh install's state, without touching the
         // maps: every converted bundle and crash-guard note, the PC bundles it
