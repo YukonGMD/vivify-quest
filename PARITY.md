@@ -20,6 +20,19 @@ Paths: PC paths are relative to `~/projects/Vivify/Vivify/`, Quest paths to this
 
 ---
 
+## Headset test results
+
+Only what has been confirmed on a Quest 3S. Build `0.14.25-naomi.1`, commit `0658abd277`.
+
+| Map | Result |
+|---|---|
+| Lost in Data | Loads and plays. Looks flat with no shadows by default; with **Map Realtime Shadows** turned on in the Vivify settings, shadows appear. |
+| Aether | Froze when the song started. Not yet diagnosed. |
+
+Not played on a headset yet: Lifelike, Get Your Wish, Through the Screen. The bug reports for those maps came from other players online, not from testing this build.
+
+---
+
 ## 1. Custom events
 
 PC registers 11 events (`VivifyController.cs`, `Installers/VivifyPlayerInstaller.cs`) and parses them in `HeckImplementation/CustomDataDeserializer.cs`. Quest dispatches them in `Runtime::DispatchEvent` (`src/VivifyEvents.cpp`).
