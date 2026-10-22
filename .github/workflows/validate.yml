@@ -179,9 +179,9 @@ jobs:
 
     - name: Build the stall watchdog for the host, with sanitizers
       run: |
-        g++ -std=c++20 -O1 -g -fsanitize=address,undefined -pthread \
+        g++ -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -pthread \
             -I include -o /tmp/watchdog \
-            tools/watchdog/main.cpp src/VivifyWatchdog.cpp
+            tools/watchdog/main.cpp src/VivifyWatchdog.cpp src/VivifyStackSampler.cpp
 
     - name: Watchdog tests
       run: VIVIFY_WATCHDOG=/tmp/watchdog python3 tools/watchdog/run_tests.py

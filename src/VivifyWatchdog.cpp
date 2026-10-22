@@ -1,5 +1,7 @@
 #include "VivifyWatchdog.hpp"
 
+#include "VivifyStackSampler.hpp"
+
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -92,6 +94,7 @@ void Watchdog::Stop() {
 
 void Watchdog::Beat() {
   if (_mainTid.load(std::memory_order_relaxed) == 0) {
+    StackSampler::RegisterTarget();
     _mainTid.store(static_cast<int>(syscall(SYS_gettid)), std::memory_order_relaxed);
   }
   _lastBeatNs.store(NowNs(), std::memory_order_relaxed);
@@ -111,6 +114,35 @@ void Watchdog::SetBreadcrumb(std::string_view text) {
 std::string Watchdog::Breadcrumb() const {
   std::lock_guard lock(_breadcrumbMutex);
   return _breadcrumb;
+}
+
+bool Watchdog::OnMainThread() const {
+  int const mainTid = _mainTid.load(std::memory_order_relaxed);
+  return mainTid != 0 && mainTid == static_cast<int>(syscall(SYS_gettid));
+}
+
+bool Watchdog::WriteStackSample(int number, double stalledSeconds) {
+  StackSample sample;
+  auto const result = StackSampler::Sample(_options.sampleTimeout, sample);
+  char head[96];
+  std::snprintf(head, sizeof(head), "WATCHDOG: stack sample %d/%d (stalled %.0fs): ", number, _options.maxSamples,
+                stalledSeconds);
+  if (result != StackSampler::Result::Ok) {
+    bool const permanent = result == StackSampler::Result::HandlerTaken ||
+                           result == StackSampler::Result::InstallFailed ||
+                           result == StackSampler::Result::NoTarget || result == StackSampler::Result::Unsupported;
+    _write(std::string(head) + (permanent ? "stack sampling unavailable: " : "no sample: ") +
+           StackSampler::DescribeResult(result));
+    return !permanent;
+  }
+  _write(std::string(head) + "main tid=" + std::to_string(StackSampler::TargetTid()) + ", " +
+         std::to_string(sample.count) + " frame(s), stopped at: " + DescribeStop(sample.stop));
+  auto const maps = ParseProcMaps(ReadSmallFile("/proc/self/maps"));
+  for (int i = 0; i < sample.count; i++) {
+    auto const frame = ResolveAddress(sample.frames[i], maps, &ReadOwnMemory);
+    _write("WATCHDOG:   " + FormatFrame(i, frame, i == 1 && sample.lrUnconfirmed));
+  }
+  return true;
 }
 
 std::string Watchdog::DescribeThread(char const* label, int tid, std::optional<TaskStat> const& before,
@@ -140,9 +172,15 @@ void Watchdog::Run() {
     std::unique_lock lock(_sleepMutex);
     return !_wake.wait_for(lock, duration, [this] { return _stop.load(); });
   };
+  auto toNs = [](std::chrono::milliseconds duration) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+  };
 
   bool inStall = false;
   int reports = 0;
+  int samples = 0;
+  int64_t nextSampleNs = 0;
+  bool samplingUnavailable = false;  // for the life of the process
   int renderTid = 0;
   int64_t nextReportNs = 0;
   std::optional<TaskStat> previousMain;
@@ -153,9 +191,7 @@ void Watchdog::Run() {
     int64_t const lastBeat = _lastBeatNs.load(std::memory_order_relaxed);
     if (lastBeat == 0) continue;  // the first frame has not happened yet
     int64_t const now = NowNs();
-    bool const stale =
-        !_paused.load(std::memory_order_relaxed) &&
-        now - lastBeat > std::chrono::duration_cast<std::chrono::nanoseconds>(_options.stallAfter).count();
+    bool const stale = !_paused.load(std::memory_order_relaxed) && now - lastBeat > toNs(_options.stallAfter);
 
     if (!stale) {
       if (inStall) {
@@ -171,46 +207,55 @@ void Watchdog::Run() {
     if (!inStall) {
       inStall = true;
       reports = 0;
+      samples = 0;
       nextReportNs = now;
       previousMain.reset();
       previousRender.reset();
       renderTid = FindThreadByName(_options.renderThreadName);
     }
-    if (reports >= _options.maxReports || now < nextReportNs) continue;
 
-    int const mainTid = _mainTid.load(std::memory_order_relaxed);
-    std::optional<TaskStat> beforeMain = previousMain;
-    std::optional<TaskStat> beforeRender = previousRender;
-    int64_t sampleStart = previousSampleNs;
-    if (!beforeMain) {
-      // First report of this stall: two samples a moment apart, so it can say
-      // whether the thread is burning CPU or blocked.
-      beforeMain = ReadTaskStat(mainTid);
-      beforeRender = ReadTaskStat(renderTid);
-      sampleStart = NowNs();
-      if (!sleepFor(_options.cpuSample)) return;
-    }
-    std::optional<TaskStat> const afterMain = ReadTaskStat(mainTid);
-    std::optional<TaskStat> const afterRender = ReadTaskStat(renderTid);
-    int64_t const sampleEnd = NowNs();
-    double const sampleSeconds = static_cast<double>(sampleEnd - sampleStart) / 1e9;
-    double const stalledNow = static_cast<double>(sampleEnd - lastBeat) / 1e9;
+    if (reports < _options.maxReports && now >= nextReportNs) {
+      int const mainTid = _mainTid.load(std::memory_order_relaxed);
+      std::optional<TaskStat> beforeMain = previousMain;
+      std::optional<TaskStat> beforeRender = previousRender;
+      int64_t sampleStart = previousSampleNs;
+      if (!beforeMain) {
+        // First report of this stall: two samples a moment apart, so it can say
+        // whether the thread is burning CPU or blocked.
+        beforeMain = ReadTaskStat(mainTid);
+        beforeRender = ReadTaskStat(renderTid);
+        sampleStart = NowNs();
+        if (!sleepFor(_options.cpuSample)) return;
+      }
+      std::optional<TaskStat> const afterMain = ReadTaskStat(mainTid);
+      std::optional<TaskStat> const afterRender = ReadTaskStat(renderTid);
+      int64_t const sampleEnd = NowNs();
+      double const sampleSeconds = static_cast<double>(sampleEnd - sampleStart) / 1e9;
+      double const stalledNow = static_cast<double>(sampleEnd - lastBeat) / 1e9;
 
-    char head[64];
-    std::snprintf(head, sizeof(head), "WATCHDOG: main thread stalled %.0fs", stalledNow);
-    std::string line = std::string(head) + ", last breadcrumb=" + Breadcrumb() + " | " +
-                       DescribeThread("main", mainTid, beforeMain, afterMain, sampleSeconds) + " | " +
-                       DescribeThread(("render (" + _options.renderThreadName + ")").c_str(), renderTid,
-                                      beforeRender, afterRender, sampleSeconds);
-    _write(line);
-    reports++;
-    if (reports == _options.maxReports) {
-      _write("WATCHDOG: further stall reports suppressed until the main thread resumes");
+      char head[64];
+      std::snprintf(head, sizeof(head), "WATCHDOG: main thread stalled %.0fs", stalledNow);
+      std::string line = std::string(head) + ", last breadcrumb=" + Breadcrumb() + " | " +
+                         DescribeThread("main", mainTid, beforeMain, afterMain, sampleSeconds) + " | " +
+                         DescribeThread(("render (" + _options.renderThreadName + ")").c_str(), renderTid,
+                                        beforeRender, afterRender, sampleSeconds);
+      _write(line);
+      reports++;
+      if (reports == _options.maxReports) {
+        _write("WATCHDOG: further stall reports suppressed until the main thread resumes");
+      }
+      previousMain = afterMain;
+      previousRender = afterRender;
+      previousSampleNs = sampleEnd;
+      nextReportNs = sampleEnd + toNs(_options.reportEvery);
+      // The first stack sample follows the first report.
+      if (reports == 1) nextSampleNs = sampleEnd;
     }
-    previousMain = afterMain;
-    previousRender = afterRender;
-    previousSampleNs = sampleEnd;
-    nextReportNs = sampleEnd + std::chrono::duration_cast<std::chrono::nanoseconds>(_options.reportEvery).count();
+
+    if (samplingUnavailable || samples >= _options.maxSamples || NowNs() < nextSampleNs) continue;
+    samples++;
+    if (!WriteStackSample(samples, static_cast<double>(NowNs() - lastBeat) / 1e9)) samplingUnavailable = true;
+    nextSampleNs = NowNs() + toNs(_options.sampleEvery);
   }
 }
 

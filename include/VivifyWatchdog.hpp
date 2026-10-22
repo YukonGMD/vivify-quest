@@ -29,10 +29,13 @@ std::optional<TaskStat> ParseTaskStat(std::string_view text);
 // A background thread wakes once a second and, while the last beat is less
 // than stallAfter old, does nothing else. Once it is older, it writes a stall
 // line through `write` (which must flush), then one every reportEvery, up to
-// maxReports per stall, and a "resumed" line when beats start again.
+// maxReports per stall, and a "resumed" line when beats start again. From
+// naomi.3 it also takes up to maxSamples native stack samples of the main
+// thread per stall (VivifyStackSampler.hpp).
 //
 // The watchdog thread never calls Unity or il2cpp: it reads only its own
-// atomics, the breadcrumb string, and files under /proc/self/task.
+// atomics, the breadcrumb string, files under /proc/self, and the ELF headers
+// of loaded libraries.
 class Watchdog {
  public:
   struct Options {
@@ -45,6 +48,12 @@ class Watchdog {
     int maxReports = 12;
     // The render thread is found by this name in /proc/self/task/*/comm.
     std::string renderThreadName = "UnityGfxDeviceW";
+    // Native stack samples of the main thread during a stall (naomi.3): the
+    // first right after the first report, then one every sampleEvery, at most
+    // maxSamples per stall (0 turns sampling off).
+    int maxSamples = 3;
+    std::chrono::milliseconds sampleEvery{3000};
+    std::chrono::milliseconds sampleTimeout{500};
   };
   using Writer = std::function<void(std::string const& line)>;
 
@@ -66,9 +75,14 @@ class Watchdog {
   void SetPaused(bool paused);
   void SetBreadcrumb(std::string_view text);
   std::string Breadcrumb() const;
+  // True on the thread that beats (false until the first beat).
+  bool OnMainThread() const;
 
  private:
   void Run();
+  // Takes one stack sample and writes it; false when sampling cannot work at
+  // all in this process (said once, in the line written).
+  bool WriteStackSample(int number, double stalledSeconds);
   std::string DescribeThread(char const* label, int tid, std::optional<TaskStat> const& before,
                              std::optional<TaskStat> const& after, double sampleSeconds) const;
 
