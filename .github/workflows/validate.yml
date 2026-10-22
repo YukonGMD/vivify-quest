@@ -201,6 +201,15 @@ jobs:
     - name: Performance statistics tests
       run: VIVIFY_PERFSTATS=/tmp/perfstats python3 tools/perfstats/run_tests.py
 
+  ovrmetrics-summary-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: OVR Metrics summary tests
+      run: python3 tools/ovrmetrics/run_tests.py
+
   report-writer-tests:
     runs-on: ubuntu-latest
     steps:
