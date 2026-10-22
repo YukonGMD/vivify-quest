@@ -50,11 +50,38 @@ Test builds report themselves as 0.14.25-naomi.N.
   and allocates nothing while the song plays.
 - **`tools/ovrmetrics/summarize.py`** (naomi.4) summarises an OVR Metrics Tool
   capture in plain language, and can pull the newest one off the headset.
+- **Emulate Geometry-Shader Effects** (naomi.5, setting, on by default).
+  Wireframes, exploding triangles and generated grass on converted maps are
+  drawn with their geometry stage's maths run in the vertex stage, for known
+  shaders: Swifter/TriangleExplosion and Mawntee Wireframe 3D-Noise (743
+  Aether) and Bytesized/Grass. Conversion makes the bundle's meshes readable,
+  and at level load each object drawn with one of these shaders gets a
+  rebuilt mesh. An object that cannot be rebuilt keeps its grey stand-in, and
+  the log says why. Changing the setting reconverts converted maps.
+- **GPU Instancing For Scenery** (naomi.5, setting, experimental, off by
+  default). A converted map's scenery keeps its GPU instancing, as on PC;
+  notes, debris, sabers and trails keep it off. Changing it reconverts
+  converted maps.
+- **Reuse Note And Debris Copies** (naomi.5, setting, on by default). Custom
+  notes' and cut debris' replacement copies are kept and reused, fully reset,
+  instead of being made fresh for every note.
+- **Leak check** (naomi.5): at the end of every level, and in the menu 3
+  seconds later, a breadcrumb with the live GameObjects, meshes, materials,
+  textures and render textures, what Vivify still holds, and the change since
+  the previous level.
+
+### Fixed
+- Textures decoded to RGBA32 for a converted bundle were never destroyed and
+  outlived the bundle; they are now freed when it unloads (naomi.5).
 
 ### Changed
 - **Prepare Shaders** looks up the multiview shader keyword once per
   preparation instead of every frame. The same shader variants are
   prepared; it only makes less garbage while doing it (naomi.3).
+- Small per-frame savings with the same result (naomi.5): animated material
+  keywords no longer make a new string every frame; animation speeds are not
+  rewritten while unchanged (pauses); the multipass controller is not looked
+  up every frame; note colours reuse one property block.
 - The VRCenterAdjust breadcrumbs are written once per method per level, with
   totals at level end, instead of twice a frame on some maps (naomi.4).
 - **Force Reconvert All** now needs two presses within five seconds, like
