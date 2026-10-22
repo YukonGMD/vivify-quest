@@ -41,11 +41,22 @@ Test builds report themselves as 0.14.25-naomi.N.
   - Breadcrumb lines end with the garbage collection counts and the managed
     heap size, so a log shows whether a collection ran around a crash or
     stall.
+- **Song performance summary** (naomi.4). At the end of every song, `[PERF]`
+  lines in the session log: frame times (average, median, 95th and 99th
+  percentile, worst), frames that missed a refresh, garbage collections and
+  managed heap at start and end, Vivify prefab instances with their
+  renderers, particle systems and lights, and the ten worst frames with what
+  Vivify did just before each. It costs a clock read and a counter per frame
+  and allocates nothing while the song plays.
+- **`tools/ovrmetrics/summarize.py`** (naomi.4) summarises an OVR Metrics Tool
+  capture in plain language, and can pull the newest one off the headset.
 
 ### Changed
 - **Prepare Shaders** looks up the multiview shader keyword once per
   preparation instead of every frame. The same shader variants are
   prepared; it only makes less garbage while doing it (naomi.3).
+- The VRCenterAdjust breadcrumbs are written once per method per level, with
+  totals at level end, instead of twice a frame on some maps (naomi.4).
 - **Force Reconvert All** now needs two presses within five seconds, like
   Reset. It sits next to Convert All, and it also clears crash-guard strikes.
 
