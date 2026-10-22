@@ -212,7 +212,7 @@ A read-only audit of where Vivify Quest spends CPU, GPU and memory on a Quest 3S
 ## Not suspects (checked)
 
 - `CurrentSongTime` is cached per frame; `FindObjectOfType` runs only while the controller is missing.
-- Scene depth (`_CameraDepthTexture` pre-pass) is already enabled only for maps whose shaders read it (0.14.21). Measure it with the "Scene Depth For Map Shaders" toggle.
+- Scene depth (`_CameraDepthTexture` pre-pass) is already enabled only for maps whose shaders read it (0.14.21). Measure it with the "Scene Depth For Map Shaders" toggle. A map can still ask for it itself with SetCameraProperty, as Aether does (see the Aether section below).
 - Bundle conversion, the scene-depth scan and the blit-companion build run on worker threads with lowered priority.
 - The immediate and mid-render command buffers are pooled (0.14.25).
 - Material repair is memoised per material (`_repairedMaterials`). The per-spawn cost in item 1 is the hierarchy walk, not the repair.
@@ -223,3 +223,49 @@ A read-only audit of where Vivify Quest spends CPU, GPU and memory on a Quest 3S
 2. Remove the redundant full-screen copies (items 2 and 3) and the per-frame culling scans (item 3).
 3. Move texture decode and the bundle load off the main thread; skip the second `CacheBundleAssets` (item 4); fix decoded-texture memory (item 5).
 4. The remaining low-cost cleanups (items 6, 7, 9, 10, 11).
+
+---
+
+## Measured on 743 Aether (0.14.25-naomi.4)
+
+Read-only audit of Aether's PC bundle (`bundleWindows2021.vivify`), its converted bundle, its beatmap and the naomi.3 session logs. Nothing was profiled on the GPU yet; the counts below come from the bundles, and the timings from the logs.
+
+### What the level is made of
+
+| | |
+|---|---|
+| Section prefabs | intro, drop, ambient, bridge, buildup, outro; one live at a time, each preloaded (instantiated, inactive) at level start |
+| Mesh renderers | 4,587 in total (intro 979, drop 345, ambient 1,147, bridge 584, buildup 212, outro 1,282), drawing only 22 distinct meshes |
+| GameObjects / particle systems / animators / lights | 6,513 / 230 / 7 / 0 |
+| Materials / shaders | 226 / 35; 64 materials have GPU instancing on in the PC build |
+| Repetition | the same mesh and material, many times: intro 727 + 242 terrain cubes; outro 606 + 312 + 202 + 104; ambient 270 + 180 + 126 + 99 + 90 + 72; bridge 128 + 100 + 100 + 100 + 50 |
+| Textures | 5, 1.3 MB in total (BC4 ×2, DXT1, Alpha8, a font texture). Not a memory or bandwidth factor |
+| Meshes | 22, 28,571 vertices, 38,883 triangles; none marked readable |
+| Render textures | none in the bundle; 4 short Blit events (10–16 beats each) |
+| Camera | the map sets `depthTextureMode = Depth` at beat 0 for the whole song, so Unity renders a depth pre-pass of every opaque renderer every frame |
+| Shaders | procedural and math-heavy: CrackedRainbowSky's fragment program is about 1,370 statements with 6 loops; RainbowSkybox, TriangleExplosion, Gemstone (9 loops), Lattice and Star are 140–220. Almost no texture reads. All 180 translated fragment programs are `precision highp`; none use `mediump` |
+
+The headset's GLES driver reports `GL_EXT_texture_compression_s3tc`, `_rgtc` and `_bptc`, so BC1–BC7 are sampled natively and the RGBA32 decode path (item 5) does nothing for Aether (the log agrees: 0 of 222 materials needed it).
+
+### Re-ranked suspects for Aether
+
+| Rank | What | Expected gain | Risk to the look | Effort | How to measure |
+|---|---|---|---|---|---|
+| 1 | **GPU instancing is off on every converted material** (item 8; `RepairMaterialShader`, since 0.13.2). On PC those 727 cubes are a couple of instanced draws; here each is its own draw call, and again in the depth pre-pass. The 0.13.2 cause (instanced copies misplaced) was diagnosed the same day as two instancing fixes (0.13.1 array size; 0.11's `gl_InstanceID * 2 + gl_ViewID_OVR` stereo numbering) and a later uniform-block change (0.14.3); there is no record it was re-tested after them. | High on CPU (render thread and driver) in intro, ambient, bridge and outro: hundreds of draw calls a frame fewer | None if the instanced variants are right; misplaced objects if not. Test behind an off-by-default setting first | Low to test (a setting that skips `set_enableInstancing(false)`); medium if the instanced translation needs fixing | `[PERF]` summary and OVR Metrics app CPU time, same section, setting on vs off; look at chords and chains, and at terrain placement |
+| 2 | **Note and debris replacements instantiate per spawn** (item 1) | Medium for steady load, high for hitches: the naomi.3 stalls at song 61–82 s line up with the densest note bursts of that stretch (5 notes at 60 s, 8 at 80 s) and happened in the 10th play of the session, with the managed heap already 95 MB (60 MB at the session's first play) | None (pooling reuses identical instances) | Medium | `[PERF]` worst frames: garbage collections during each, and the last event; GC count over a play |
+| 3 | **Depth pre-pass for `depthTextureMode = Depth`** | Medium to high: one more pass over every opaque renderer, all song. Halves with rank 1 | None if the depth comes from a copy of the main pass's depth instead of a re-render; that copy has its own cost on a tiled GPU | Medium to high | OVR Metrics GPU time with "Scene Depth For Map Shaders" off (it shows how much the pass costs, though it changes StarFlare/RingArtifact/Bokeh) |
+| 4 | **`highp` everywhere in translated shaders** | Medium on GPU for ALU-bound shaders (Adreno runs FP16 at about twice the rate) | Real: banding or precision loss where a value needs 32 bits (positions, noise hashes, time). Only `mediump` on values the DX bytecode marked minimum-precision, or per shader by hand | Medium (translator) | OVR Metrics GPU time and utilisation; visual A/B |
+| 5 | **Managed heap growth across plays** | Fewer and shorter collections late in a session | None | Low to investigate (the `[PERF]` heap figures per play), then depends | Heap at each level start over 10 plays of one map |
+| 6 | **`UpdatePrefabAnimationSpeed` on every animator and particle system** (item 6) | Low to medium: Aether's live section has up to 111 particle systems | None with a dead-band | Low | Time it per second |
+| 7 | **Per-frame allocations in our code** | Low each; adds to rank 5 | None | Low | See the list below |
+
+Per-frame allocations and lookups found in our own code (naomi.4 audit):
+
+- `ApplyMaterialProperty` keyword case: a new managed `StringW` per animated material keyword per frame.
+- `CameraApplier::OnRenderImage`: two `RenderTexture.GetTemporary` per frame (pooled by Unity, but still a lookup and bookkeeping each frame).
+- `Camera.main` and `GetComponent<...>` every frame in `RefreshCameraComponents`, `SecondaryCameraController::OnPreCull/OnPostRender`, `CameraApplier::OnPreRender`, `BindSecondaryCameraTextures`, `RestoreSecondaryCullingLayers`.
+- `ApplyBlits`: a `std::vector` per frame while blits run.
+
+### What the naomi.3 stalls were not
+
+The six stalls of 1.0–2.1 s at song 61–82 s were in the drop section (32–108 s). Vivify's events in that window are 44 `AssignPathAnimation` and one `AssignObjectPrefab`: no prefab instantiation, blit, material change or camera change. The same difficulty, played five times in that session, stalled in only one play, and an earlier play ran past 82 s without a stall, so it was not first use of a shader or anything else in the content itself. Most likely: garbage collections triggered by note and debris replacement churn in a heap that had grown over ten plays (moderate confidence). The `[PERF]` summary now records the collections during each of the worst frames, which settles it.
