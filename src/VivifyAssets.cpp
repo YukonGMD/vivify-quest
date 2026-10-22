@@ -8,6 +8,7 @@
 #include "UnityEngine/AssetBundleRequest.hpp"
 #include "UnityEngine/HideFlags.hpp"
 #include "UnityEngine/Shader.hpp"
+#include "UnityEngine/Rendering/GlobalKeyword.hpp"
 #include "UnityEngine/GameObject.hpp"
 #include "UnityEngine/Renderer.hpp"
 #include "UnityEngine/Material.hpp"
@@ -2095,6 +2096,8 @@ void Runtime::StartShaderWarmup(std::string const& bundlePath) {
   _warmupQueue.clear();
   _warmupIndex = 0;
   _warmupPassesBound = 0;
+  _warmupMultiviewIndex.reset();
+  _warmupMultiviewName.clear();
   if (!GetPrepareShadersBeforePlaying()) return;
   if (bundlePath.rfind(ConvertedBundleCacheDir(), 0) != 0) {  // only bundles this mod translated
     VivifyBreadcrumb("shader prepare skipped: not a bundle this mod converted");
@@ -2146,11 +2149,25 @@ void Runtime::PollShaderWarmup() {
   }
   // The stereo keyword the eye cameras turn on, so the variants they use are
   // compiled too (a split 2021 shader keeps its two-eye program under it).
-  std::optional<UnityEngine::Rendering::GlobalKeyword> multiview;
-  if (auto keywords = UnityEngine::Shader::GetAllGlobalKeywords()) {
-    for (auto const& keyword : keywords) {
-      if (keyword.m_Name && std::string(keyword.m_Name) == "STEREO_MULTIVIEW_ON") multiview = keyword;
+  // Looked up until found, then kept for the rest of this preparation: the
+  // keyword list is a fresh managed array each call, and a global keyword's
+  // index does not change once it exists.
+  if (!_warmupMultiviewIndex.has_value()) {
+    if (auto keywords = UnityEngine::Shader::GetAllGlobalKeywords()) {
+      for (auto const& keyword : keywords) {
+        if (keyword.m_Name && std::string(keyword.m_Name) == "STEREO_MULTIVIEW_ON") {
+          _warmupMultiviewIndex = keyword.m_Index;
+          _warmupMultiviewName.emplace(static_cast<Il2CppString*>(keyword.m_Name));
+        }
+      }
     }
+  }
+  std::optional<UnityEngine::Rendering::GlobalKeyword> multiview;
+  if (_warmupMultiviewIndex.has_value()) {
+    UnityEngine::Rendering::GlobalKeyword keyword;
+    keyword.m_Name = StringW(_warmupMultiviewName.ptr());
+    keyword.m_Index = *_warmupMultiviewIndex;
+    multiview = keyword;
   }
   // Slowly: two materials a frame, so the menu keeps drawing.
   constexpr size_t kPerFrame = 2;

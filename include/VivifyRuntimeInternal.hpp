@@ -570,6 +570,11 @@ private:
   std::vector<UnityEngine::Material*> _warmupQueue;
   size_t _warmupIndex = 0;
   int _warmupPassesBound = 0;
+  // STEREO_MULTIVIEW_ON, once found in one preparation (naomi.3), instead of
+  // asking Unity for every global keyword each frame. The name is held through
+  // a SafePtr so the collector keeps it while only native code refers to it.
+  std::optional<uint32_t> _warmupMultiviewIndex;
+  SafePtr<Il2CppString> _warmupMultiviewName;
   // The breadcrumb for the first frame after PrepareBeatmap (naomi.2).
   bool _firstFrameCrumbPending = false;
   int _levelStartFrame = -1;
