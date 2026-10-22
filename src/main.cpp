@@ -22,6 +22,8 @@
 #include "bsml/shared/BSML/Settings/BSMLSettings.hpp"
 #include "custom-types/shared/register.hpp"
 #include "scotland2/shared/modloader.h"
+#include "System/GC.hpp"
+#include <dlfcn.h>
 
 static modloader::ModInfo modInfo{MOD_ID, VERSION, 0};
 
@@ -256,10 +258,42 @@ void InstallVivifyFileLogSink() {
 
 }  // namespace
 
+namespace {
+
+// " | gc 0/1/2=a/b/c heap used=..MB of ..MB", so the log shows whether a
+// garbage collection ran around a crash or stall. Main thread only (il2cpp is
+// not called from anywhere else); empty elsewhere. il2cpp's Boehm collector is
+// not generational, so the three counts are expected to move together.
+std::string GcText() {
+  if (!gWatchdog.OnMainThread()) return {};
+  std::string text = " | gc 0/1/2=" + std::to_string(System::GC::CollectionCount(0)) + "/" +
+                     std::to_string(System::GC::CollectionCount(1)) + "/" +
+                     std::to_string(System::GC::CollectionCount(2));
+  // Looked up directly: beatsaber-hook's wrappers abort when a function is
+  // missing, and a breadcrumb must never do that.
+  using SizeFn = int64_t (*)();
+  static SizeFn const usedSize = [] {
+    void* il2cpp = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD);
+    return il2cpp ? reinterpret_cast<SizeFn>(dlsym(il2cpp, "il2cpp_gc_get_used_size")) : nullptr;
+  }();
+  static SizeFn const heapSize = [] {
+    void* il2cpp = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD);
+    return il2cpp ? reinterpret_cast<SizeFn>(dlsym(il2cpp, "il2cpp_gc_get_heap_size")) : nullptr;
+  }();
+  if (usedSize && heapSize) {
+    text += fmt::format(" heap used={:.1f}MB of {:.1f}MB", static_cast<double>(usedSize()) / (1024.0 * 1024.0),
+                        static_cast<double>(heapSize()) / (1024.0 * 1024.0));
+  }
+  return text;
+}
+
+}  // namespace
+
 void VivifyBreadcrumb(std::string const& text) {
   gWatchdog.SetBreadcrumb(text);
-  WriteFlushedLogLine("[CRUMB " + ElapsedText() + "] " + text);
-  CrumbLogger.info("{}", text);
+  std::string const gc = GcText();
+  WriteFlushedLogLine("[CRUMB " + ElapsedText() + "] " + text + gc);
+  CrumbLogger.info("{}{}", text, gc);
 }
 
 void VivifyHeartbeat() {
