@@ -748,6 +748,7 @@ void Runtime::InstantiatePrefab(CustomJSONData::CustomEventData* customEventData
       .renderers = std::max(data.renderers, 0),
       .lights = std::max(data.lights, 0),
   };
+  _animationTargetsDirty = true;
   UpdatePerfPrefabCounts();
 }
 
@@ -1030,8 +1031,12 @@ bool Runtime::UsesStandInShading(std::vector<UnityEngine::Renderer*> const& rend
 void Runtime::ApplyColorToRenderers(std::vector<UnityEngine::Renderer*> const& renderers, UnityEngine::Color color) {
   if (renderers.empty()) return;
 
-  auto* block = UnityEngine::MaterialPropertyBlock::New_ctor();
+  // Renderer.SetPropertyBlock copies the block, so one block, cleared before
+  // each use, does what a new one per spawn did without the garbage.
+  if (!_colorBlock) _colorBlock = UnityEngine::MaterialPropertyBlock::New_ctor();
+  auto* block = _colorBlock.ptr();
   if (block == nullptr) return;
+  block->Clear();
   if (UsesStandInShading(renderers)) {
     SetTintColors(block, color);
   } else {

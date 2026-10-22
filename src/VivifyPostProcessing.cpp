@@ -1476,10 +1476,15 @@ void Runtime::RefreshMultipassRendering(UnityEngine::GameObject* mainCamGO) {
 
 MultipassKeywordController* Runtime::EnsureMultipassKeywordController(UnityEngine::GameObject* gameObject) {
   if (!IsAlive(gameObject)) return nullptr;
-  auto* controller = gameObject->GetComponent<MultipassKeywordController*>();
+  // Called every frame; the component is only looked up again when the
+  // camera changes or the one found is gone.
+  auto* controller = gameObject == _multipassControllerObject && IsAlive(_multipassController)
+                         ? _multipassController
+                         : gameObject->GetComponent<MultipassKeywordController*>();
   if (!IsAlive(controller)) {
     controller = gameObject->AddComponent<MultipassKeywordController*>();
   }
+  _multipassControllerObject = gameObject;
   if (IsAlive(controller)) {
     bool const enabled = GetMultipassRenderingEnabled();
     if (controller->get_enabled() != enabled) {

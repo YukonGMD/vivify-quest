@@ -4,6 +4,8 @@
 #include <algorithm>
 #include "VivifyComponents.hpp"
 #include "UnityEngine/ParticleSystem.hpp"
+#include "UnityEngine/Mesh.hpp"
+#include "UnityEngine/Texture2D.hpp"
 #include "GlobalNamespace/PlayerDataModel.hpp"
 #include "GlobalNamespace/PlayerData.hpp"
 #include "GlobalNamespace/PlayerSpecificSettings.hpp"
@@ -142,6 +144,10 @@ void Runtime::Update() {
     if (_currentBeatmapData == nullptr) {
       RefreshCameraComponents(false);
       _lastGameplayFrame = {};
+      if (_leakCheckDueAt >= 0.0f && UnityEngine::Time::get_realtimeSinceStartup() >= _leakCheckDueAt) {
+        _leakCheckDueAt = -1.0f;
+        LogLeakCheck("menu, 3 s after the level ended");
+      }
       return;
     }
     // A frame that took far longer than the game's own pacing is a stall
@@ -285,6 +291,7 @@ void Runtime::RegisterSyncedObject(UnityEngine::GameObject* root, float startTim
                  IsAlive(root) ? ToStdString(root->get_name()) : std::string("?"),
                  synced.videoPlayers.size(), synced.animators.size(), synced.particleSystems.size(), startTime);
     _syncedObjects.emplace_back(std::move(synced));
+    _animationTargetsDirty = true;
   }
 }
 
@@ -309,6 +316,13 @@ void Runtime::UpdatePrefabAnimationSpeed() {
     }
     _lastSyncSongTime = songTime;
   }
+
+  // The speed jitters from frame to frame (song time over frame time), so it
+  // is written every frame -- except when it is exactly what was written last
+  // and no object has been added since, as while paused.
+  if (speed == _lastAppliedAnimationSpeed && !_animationTargetsDirty) return;
+  _lastAppliedAnimationSpeed = speed;
+  _animationTargetsDirty = false;
 
   auto drive = [speed](std::vector<UnityEngine::Animator*> const& animators,
                        std::vector<UnityEngine::ParticleSystem*> const& particleSystems) {
@@ -500,6 +514,10 @@ void Runtime::RefreshIsolationSettings() {
 void Runtime::ResetRuntime(std::string_view reason) {
   SetSongPlaying(false);
   if (_perfActive) WritePerfSummary();
+  if (_currentBeatmapData != nullptr) {
+    LogLeakCheck("level end, before Vivify tears down");
+    _leakCheckDueAt = UnityEngine::Time::get_realtimeSinceStartup() + 3.0f;
+  }
   // Written before anything is torn down, while the numbers are still valid.
   // The song position is included rather than a guess at "quit" vs "beaten":
   // by the time this runs the AudioTimeSyncController is usually already gone,
@@ -570,6 +588,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
   _fallbackShadedMaterials.clear();
   // A new beatmap gets a fresh chance: the watchdog is per level, not permanent.
   _selfDisabledThisLevel = false;
+  _animationTargetsDirty = true;
   _slowFrameStreak = 0;
   _worstFrameMs = 0.0;
   _decodedTextures.clear();
@@ -719,6 +738,47 @@ void Runtime::WritePerfSummary() {
   _perfLastEventType = {};
   _perfEventsSinceFrame = 0;
   _perfPrefabsPeak = _perfRenderersPeak = _perfParticlesPeak = _perfLightsPeak = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Leak check (naomi.5)
+//
+// What is alive after a level: Unity objects by type (the whole process, not
+// only Vivify's) and what Vivify itself still holds. Run at the end of a level
+// and again in the menu a few seconds later, once the game scene has gone; a
+// count that climbs from one level's menu check to the next is something not
+// being let go. Costs a scan of every loaded object, which is why it runs
+// only at those two moments.
+void Runtime::LogLeakCheck(char const* when) {
+  auto count = [](System::Type* type) -> int {
+    try {
+      return static_cast<int>(UnityEngine::Resources::FindObjectsOfTypeAll(type).size());
+    } catch (...) {
+      return -1;
+    }
+  };
+  std::array<int, 5> const counts = {
+      count(csTypeOf(UnityEngine::GameObject*)), count(csTypeOf(UnityEngine::Mesh*)),
+      count(csTypeOf(UnityEngine::Material*)), count(csTypeOf(UnityEngine::Texture2D*)),
+      count(csTypeOf(UnityEngine::RenderTexture*))};
+  std::string line = fmt::format(
+      "leak check ({}): alive {} GameObject, {} Mesh, {} Material, {} Texture2D, {} RenderTexture; Vivify holds "
+      "{} decoded texture(s), {} rebuilt mesh(es), {} stand-in copy(ies), {} declared texture(s), {} camera(s), "
+      "{} live prefab(s), {} preloaded prefab(s), {} synced object(s)",
+      when, counts[0], counts[1], counts[2], counts[3], counts[4], _decodedTextureObjects.size(),
+      _emulationMeshes.size(), _emulationStandIns.size(), _declaredTextures.size(), _secondaryCameras.size(),
+      _livePrefabs.size(), _instantiatePrefabs.size(), _syncedObjects.size());
+  // The menu checks are the comparable ones: the game scene is gone each time.
+  bool const menu = std::string_view(when).rfind("menu", 0) == 0;
+  if (menu && _lastMenuLeakCounts[0] >= 0) {
+    line += fmt::format("; since the previous level's menu check {:+d} GameObject, {:+d} Mesh, {:+d} Material, "
+                        "{:+d} Texture2D, {:+d} RenderTexture",
+                        counts[0] - _lastMenuLeakCounts[0], counts[1] - _lastMenuLeakCounts[1],
+                        counts[2] - _lastMenuLeakCounts[2], counts[3] - _lastMenuLeakCounts[3],
+                        counts[4] - _lastMenuLeakCounts[4]);
+  }
+  if (menu) _lastMenuLeakCounts = counts;
+  VivifyBreadcrumb(line);
 }
 
 }

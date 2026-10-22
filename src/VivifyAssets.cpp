@@ -860,6 +860,7 @@ void Runtime::HandleLevelSelected(SongCore::API::LevelSelect::LevelWasSelectedEv
   if (!incomingLevelPath.empty() && incomingLevelPath != _selectedLevelPath) {
     if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
       ReleaseGeometryEmulation();
+      ReleaseDecodedTextures();
       _mainBundle->Unload(true);
       _mainBundle = nullptr;
     }
@@ -1563,6 +1564,7 @@ void Runtime::GraftShadersFrom(std::string const& levelPath, std::string const& 
   // Whatever bundle is loaded may share the converted one's internal names.
   if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
     ReleaseGeometryEmulation();
+    ReleaseDecodedTextures();
     _mainBundle->Unload(true);
     _mainBundle = nullptr;
   }
@@ -1988,6 +1990,7 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
   }
   if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
     ReleaseGeometryEmulation();
+    ReleaseDecodedTextures();
     _mainBundle->Unload(true);
     _mainBundle = nullptr;
   }
@@ -3109,6 +3112,7 @@ UnityEngine::Texture* Runtime::ResolveUsableTexture(UnityEngine::Texture* textur
   PaperLogger.info("Vivify texture decoded: '{}' {} {}x{} ({} mip(s)) -> RGBA32", name,
                    TextureDecode::FormatName(format), width, height, mipCount);
   _decodedTextures[texture] = replacement;
+  _decodedTextureObjects.push_back(replacement);
   return replacement;
 }
 
@@ -3304,6 +3308,7 @@ void SetSongPlaying(bool playing) {
 void Runtime::ReleaseBundlesForReset() {
   if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
     ReleaseGeometryEmulation();
+    ReleaseDecodedTextures();
     _mainBundle->Unload(true);
   }
   _mainBundle = nullptr;

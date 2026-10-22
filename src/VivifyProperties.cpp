@@ -68,6 +68,19 @@ std::optional<MaterialPropertyChange> Runtime::ParseMaterialProperty(rapidjson::
 }
 
 namespace {
+// An animated material keyword is set every frame of its animation, which used
+// to make a new managed string every time. One string per keyword name,
+// allocated outside the collector (beatsaber-hook's Manual creation), is made
+// once and reused; the keyword is still set every frame exactly as before.
+StringW KeywordName(std::string const& keyword) {
+  static std::unordered_map<std::string, Il2CppString*> names;
+  auto it = names.find(keyword);
+  if (it == names.end()) {
+    it = names.emplace(keyword, il2cpp_utils::newcsstr<il2cpp_utils::CreationType::Manual>(keyword)).first;
+  }
+  return StringW(it->second);
+}
+
 // A Color or Vector written as one flat list of numbers is Heck's single-point
 // shorthand: Heck appends a time of 0 and needs exactly four numbers before it.
 // Any other count (an [r,g,b] colour) fails Heck's assert, and PC Vivify skips
@@ -239,7 +252,7 @@ void Runtime::ApplyMaterialProperty(UnityEngine::Material* material, MaterialPro
       } else {
         enabled = std::get<bool>(property.value);
       }
-      SetMaterialKeyword(material, StringW(keyword), enabled);
+      SetMaterialKeyword(material, KeywordName(keyword), enabled);
       ApplyStereoKeywords(material);
       break;
     }

@@ -338,6 +338,16 @@ void Runtime::PrepareGeometryEmulation(std::string const& bundlePath) {
                                objectsRebuilt, objectsFellBack));
 }
 
+// The RGBA32 copies DecodeUnsupportedBundleTextures made for the bundle being
+// unloaded. Its materials go with it, so nothing can still be drawing them.
+void Runtime::ReleaseDecodedTextures() {
+  for (auto* texture : _decodedTextureObjects) {
+    if (IsAlive(texture)) UnityEngine::Object::Destroy(texture);
+  }
+  _decodedTextureObjects.clear();
+  _decodedTextures.clear();
+}
+
 void Runtime::ReleaseGeometryEmulation() {
   for (auto const& [key, mesh] : _emulationMeshes) {
     if (IsAlive(mesh)) UnityEngine::Object::Destroy(mesh);

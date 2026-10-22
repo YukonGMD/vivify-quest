@@ -465,6 +465,20 @@ private:
   CameraApplier* _cameraApplier = nullptr;
   UnityEngine::GameObject* _cameraApplierGO = nullptr;
   MultipassKeywordController* _multipassController = nullptr;
+  UnityEngine::GameObject* _multipassControllerObject = nullptr;  // where it was found
+  // UpdatePrefabAnimationSpeed's last write, and whether objects were added since.
+  float _lastAppliedAnimationSpeed = -1.0f;
+  bool _animationTargetsDirty = true;
+  // ApplyColorToRenderers' reusable block.
+  SafePtr<UnityEngine::MaterialPropertyBlock> _colorBlock;
+  // Textures decoded for the loaded bundle; destroyed with it (naomi.5: they
+  // used to outlive it, since ResetRuntime forgets _decodedTextures).
+  std::vector<UnityEngine::Texture2D*> _decodedTextureObjects;
+  // Leak check (naomi.5): run in the menu a few seconds after a level ends.
+  void LogLeakCheck(char const* when);
+  void ReleaseDecodedTextures();
+  float _leakCheckDueAt = -1.0f;
+  std::array<int, 5> _lastMenuLeakCounts = {-1, -1, -1, -1, -1};
 
   UnityEngine::GameObject* _lastMainCameraGO = nullptr;
   bool _mainCameraPropsDirty = false;
