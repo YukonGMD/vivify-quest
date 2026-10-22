@@ -540,6 +540,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
   DestroyCameraApplier();
   RestoreGlobalProperties();
   RestoreAllVisualReplacements();
+  ClearReplacementPool();
   RestoreOverlayRenderState();
   RestoreMainCameraOriginals();
   RestoreMirrorCameras();

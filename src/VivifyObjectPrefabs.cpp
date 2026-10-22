@@ -8,6 +8,8 @@
 #include "UnityEngine/Canvas.hpp"
 #include <exception>
 #include "UnityEngine/AnimatorCullingMode.hpp"
+#include "UnityEngine/ParticleSystemStopBehavior.hpp"
+#include "UnityEngine/MaterialPropertyBlock.hpp"
 
 namespace Vivify {
 namespace {
@@ -911,7 +913,7 @@ void Runtime::RestoreReplacementData(VisualReplacement& replacement) {
   for (auto* spawned : replacement.spawnedObjects) {
     if (IsAlive(spawned)) {
       UnregisterSyncedObject(spawned);
-      UnityEngine::Object::Destroy(spawned);
+      if (!ReleaseReplacement(spawned)) UnityEngine::Object::Destroy(spawned);
     }
   }
   replacement.disabledRenderers.clear();
@@ -943,13 +945,73 @@ void Runtime::InstantiateReplacementPrefab(AssignedPrefabInfo const& info,
                                            UnityEngine::Transform* parent,
                                            VisualReplacement& replacement, bool inheritParentLayer) {
   if (!IsAlive(parent)) return;
-  auto* prefab = GetAssetAs<UnityEngine::GameObject>(info.asset);
-  if (!IsManagedAlive(prefab)) return;
-  auto* spawned = UnityEngine::Object::Instantiate(prefab);
+  auto* spawned = AcquireReplacement(info, parent, inheritParentLayer);
   if (!IsAlive(spawned)) return;
-  CleanCustomObject(spawned);
-  RepairGameObjectMaterials(spawned, info.asset);
-  spawned->get_transform()->SetParent(parent, false);
+  RegisterSyncedObject(spawned, CurrentSongTime());
+  replacement.spawnedObjects.emplace_back(spawned);
+  if (auto pooled = _pooledReplacements.find(spawned); pooled != _pooledReplacements.end()) {
+    for (auto* renderer : pooled->second.renderers) {
+      if (IsAlive(renderer)) replacement.replacementRenderers.emplace_back(renderer);
+    }
+  } else {
+    CacheReplacementRenderers(spawned, replacement);
+  }
+}
+
+// Replacement pool (naomi.5). A note's or a cut half's replacement was
+// instantiated on every spawn and destroyed when its note controller was
+// reused, with a handful of component searches each time. Now a released one
+// is kept, inactive, and the next spawn of the same asset takes it back. It is
+// reset to exactly what a fresh copy would be: its root transform, which of
+// its renderers are on, no property blocks, particles stopped and cleared (so
+// play-on-awake starts them afresh on activation), animators rebound, sync
+// registration redone. PC Vivify pools the same way (ObjectPrefab/Pools).
+//
+// A prefab with a trail renderer is not pooled: there is no way here to clear
+// a trail, and a reused one would draw a streak from where it was.
+UnityEngine::GameObject* Runtime::AcquireReplacement(AssignedPrefabInfo const& info, UnityEngine::Transform* parent,
+                                                     bool inheritParentLayer) {
+  bool const pooling = GetPoolNoteReplacements() && !_unpoolableAssets.contains(info.asset);
+  std::string const key = info.asset + (inheritParentLayer ? "|note layer" : "|own layer");
+  UnityEngine::GameObject* spawned = nullptr;
+  PooledReplacement* pooled = nullptr;
+  if (pooling) {
+    auto& stack = _replacementPool[key];
+    while (!stack.empty() && spawned == nullptr) {
+      auto* candidate = stack.back();
+      stack.pop_back();
+      auto it = _pooledReplacements.find(candidate);
+      if (it != _pooledReplacements.end() && IsAlive(candidate)) {
+        spawned = candidate;
+        pooled = &it->second;
+      } else if (it != _pooledReplacements.end()) {
+        _pooledReplacements.erase(it);
+      }
+    }
+  }
+
+  if (pooled != nullptr) {
+    pooled->inPool = false;
+    _replacementsReused++;
+    auto* transform = spawned->get_transform().unsafePtr();
+    transform->SetParent(parent, false);
+    transform->set_localPosition(pooled->localPosition);
+    transform->set_localRotation(pooled->localRotation);
+    transform->set_localScale(pooled->localScale);
+    for (size_t i = 0; i < pooled->renderers.size(); i++) {
+      if (IsAlive(pooled->renderers[i])) pooled->renderers[i]->set_enabled(pooled->rendererEnabled[i]);
+    }
+    spawned->SetActive(true);
+  } else {
+    auto* prefab = GetAssetAs<UnityEngine::GameObject>(info.asset);
+    if (!IsManagedAlive(prefab)) return nullptr;
+    spawned = UnityEngine::Object::Instantiate(prefab);
+    if (!IsAlive(spawned)) return nullptr;
+    _replacementsCreated++;
+    CleanCustomObject(spawned);
+    RepairGameObjectMaterials(spawned, info.asset);
+    spawned->get_transform()->SetParent(parent, false);
+  }
 
   // Note replacements go on the SAME layer as the note they stand in for, so
   // they are culled and drawn by exactly the cameras that would have drawn the
@@ -977,6 +1039,15 @@ void Runtime::InstantiateReplacementPrefab(AssignedPrefabInfo const& info,
     }
   }
 
+  if (pooled != nullptr) {
+    for (auto* animator : pooled->animators) {
+      if (!IsAlive(animator)) continue;
+      animator->Rebind();
+      animator->Update(0.01f);
+    }
+    return spawned;
+  }
+
   auto animators = spawned->GetComponentsInChildren<UnityEngine::Animator*>(true);
   for (int i = 0; i < animators.size(); i++) {
     auto* animator = animators[i];
@@ -984,11 +1055,91 @@ void Runtime::InstantiateReplacementPrefab(AssignedPrefabInfo const& info,
     animator->Rebind();
     animator->Update(0.01f);
   }
-
   CullOffscreenAnimators(spawned);
-  RegisterSyncedObject(spawned, CurrentSongTime());
-  replacement.spawnedObjects.emplace_back(spawned);
-  CacheReplacementRenderers(spawned, replacement);
+
+  if (pooling) {
+    PooledReplacement record;
+    record.key = key;
+    auto* transform = spawned->get_transform().unsafePtr();
+    record.localPosition = transform->get_localPosition();
+    record.localRotation = transform->get_localRotation();
+    record.localScale = transform->get_localScale();
+    auto renderers = spawned->GetComponentsInChildren<UnityEngine::Renderer*>(true);
+    bool trail = false;
+    for (int i = 0; i < renderers.size(); i++) {
+      auto* renderer = renderers[i];
+      if (!IsAlive(renderer)) continue;
+      auto* klass = reinterpret_cast<Il2CppObject*>(renderer)->klass;
+      if (klass != nullptr && std::string_view(klass->name) == "TrailRenderer") trail = true;
+      record.renderers.push_back(renderer);
+      record.rendererEnabled.push_back(renderer->get_enabled());
+    }
+    if (trail) {
+      _unpoolableAssets.insert(info.asset);
+      PaperLogger.info("Vivify replacement pool: '{}' has a trail renderer, so its copies are made fresh each time",
+                       info.asset);
+      return spawned;
+    }
+    for (int i = 0; i < animators.size(); i++) {
+      if (IsAlive(animators[i])) record.animators.push_back(animators[i]);
+    }
+    auto particles = spawned->GetComponentsInChildren<UnityEngine::ParticleSystem*>(true);
+    for (int i = 0; i < particles.size(); i++) {
+      if (IsAlive(particles[i])) record.particleSystems.push_back(particles[i]);
+    }
+    _pooledReplacements[spawned] = std::move(record);
+  }
+  return spawned;
+}
+
+// False when `spawned` is not pooled (or the pool is full), and the caller
+// destroys it as before.
+bool Runtime::ReleaseReplacement(UnityEngine::GameObject* spawned) {
+  auto it = _pooledReplacements.find(spawned);
+  if (it == _pooledReplacements.end()) return false;
+  constexpr size_t kMaxPooledPerAsset = 48;
+  auto& stack = _replacementPool[it->second.key];
+  if (!GetPoolNoteReplacements() || it->second.inPool || stack.size() >= kMaxPooledPerAsset) {
+    _pooledReplacements.erase(it);
+    return false;
+  }
+  if (!_replacementPoolRoot) {
+    auto* root = UnityEngine::GameObject::New_ctor(u"VivifyReplacementPool");
+    root->SetActive(false);
+    _replacementPoolRoot = root;
+  }
+  auto& record = it->second;
+  for (auto* renderer : record.renderers) {
+    if (IsAlive(renderer)) renderer->SetPropertyBlock(nullptr);
+  }
+  for (auto* particleSystem : record.particleSystems) {
+    if (IsAlive(particleSystem)) {
+      particleSystem->Stop(true, UnityEngine::ParticleSystemStopBehavior::StopEmittingAndClear);
+    }
+  }
+  spawned->SetActive(false);
+  spawned->get_transform()->SetParent(_replacementPoolRoot->get_transform(), false);
+  record.inPool = true;
+  stack.push_back(spawned);
+  return true;
+}
+
+// Level end: the pooled copies go with the level.
+void Runtime::ClearReplacementPool() {
+  if (_replacementsCreated > 0 || _replacementsReused > 0) {
+    VivifyBreadcrumb(fmt::format("replacement pool: {} copies made, {} reused", _replacementsCreated,
+                                 _replacementsReused));
+  }
+  for (auto& [spawned, record] : _pooledReplacements) {
+    if (record.inPool && IsAlive(spawned)) UnityEngine::Object::Destroy(spawned);
+  }
+  _pooledReplacements.clear();
+  _replacementPool.clear();
+  _unpoolableAssets.clear();
+  if (_replacementPoolRoot) UnityEngine::Object::Destroy(_replacementPoolRoot.ptr());
+  _replacementPoolRoot = nullptr;
+  _replacementsCreated = 0;
+  _replacementsReused = 0;
 }
 
 UnityEngine::Color Runtime::GetSaberColor(GlobalNamespace::SaberModelController* smc, GlobalNamespace::Saber* saber) {

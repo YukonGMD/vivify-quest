@@ -54,6 +54,7 @@ constexpr std::string_view kBlitFixConfigKey = "blitScreenTextureFix";
 constexpr std::string_view kPrepareShadersConfigKey = "prepareShadersInMenu";
 constexpr std::string_view kGeometryEffectsConfigKey = "drawGeometryShaderEffects";
 constexpr std::string_view kEmulateGeometryConfigKey = "emulateGeometryShaderEffects";
+constexpr std::string_view kPoolReplacementsConfigKey = "poolNoteReplacements";
 constexpr std::string_view kPcShadersForEmptyConfigKey = "pcShadersForEmptyQuestShaders";
 constexpr std::string_view kStandInShaderNameConfigKey = "standInShaderName";
 constexpr std::string_view kEffectResolutionConfigKey = "effectResolutionPercent";
@@ -110,6 +111,7 @@ bool gBlitFix = false;
 bool gPrepareShaders = false;
 bool gGeometryEffects = false;
 bool gEmulateGeometry = true;
+bool gPoolReplacements = true;
 bool gPcShadersForEmpty = true;
 // Which shader to use as the stand-in, by name, overriding the automatic pick.
 //
@@ -598,6 +600,13 @@ void RegisterModSettings() {
             GetEmulateGeometryShaderEffects(),
             [](bool value) { SetBoolConfigValue(kEmulateGeometryConfigKey, value, gEmulateGeometry); });
 
+        // Custom notes and cut debris reuse their copies instead of making a
+        // new one per note. Off makes a new copy every time, as before.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Reuse Note And Debris Copies",
+            GetPoolNoteReplacements(),
+            [](bool value) { SetBoolConfigValue(kPoolReplacementsConfigKey, value, gPoolReplacements); });
+
         // Renders map post-process effects (blits, screen textures) below eye
         // resolution and scales the result up. Full-screen raymarchers cost
         // per pixel: 50% is a quarter of the work.
@@ -873,6 +882,10 @@ bool GetEmulateGeometryShaderEffects() {
   return gEmulateGeometry;
 }
 
+bool GetPoolNoteReplacements() {
+  return gPoolReplacements;
+}
+
 bool GetUsePcShadersForEmptyShaders() {
   return gPcShadersForEmpty;
 }
@@ -932,6 +945,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureBoolConfigValue(kPrepareShadersConfigKey, false, gPrepareShaders);
   needsWrite |= EnsureBoolConfigValue(kGeometryEffectsConfigKey, false, gGeometryEffects);
   needsWrite |= EnsureBoolConfigValue(kEmulateGeometryConfigKey, true, gEmulateGeometry);
+  needsWrite |= EnsureBoolConfigValue(kPoolReplacementsConfigKey, true, gPoolReplacements);
   needsWrite |= EnsureBoolConfigValue(kPcShadersForEmptyConfigKey, true, gPcShadersForEmpty);
   needsWrite |= EnsureStringConfigValue(kStandInShaderNameConfigKey, std::string(),
                                         gStandInShaderName);

@@ -364,6 +364,19 @@ struct VisualReplacement {
   // mirrored under _BaseColor/_TintColor/_MainColor as well as _Color.
   bool tintAliases = false;
 };
+// A note, debris or saber replacement kept for reuse (naomi.5), with what it
+// looked like fresh, so a reused one starts exactly as a new one would.
+struct PooledReplacement {
+  std::string key;
+  bool inPool = false;
+  UnityEngine::Vector3 localPosition;
+  UnityEngine::Quaternion localRotation;
+  UnityEngine::Vector3 localScale;
+  std::vector<UnityEngine::Renderer*> renderers;
+  std::vector<bool> rendererEnabled;
+  std::vector<UnityEngine::Animator*> animators;
+  std::vector<UnityEngine::ParticleSystem*> particleSystems;
+};
 struct ActiveSaberVisual {
   GlobalNamespace::SaberModelController* controller = nullptr;
   GlobalNamespace::Saber* saber = nullptr;

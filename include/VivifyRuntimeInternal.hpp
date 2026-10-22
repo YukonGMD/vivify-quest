@@ -600,6 +600,17 @@ private:
   void WritePerfSummary();
   void UpdatePerfPrefabCounts();
   void CountPrefabComponents(InstantiatePrefabData& data);
+  // Replacement pool (naomi.5, VivifyObjectPrefabs.cpp).
+  UnityEngine::GameObject* AcquireReplacement(AssignedPrefabInfo const& info, UnityEngine::Transform* parent,
+                                              bool inheritParentLayer);
+  bool ReleaseReplacement(UnityEngine::GameObject* spawned);
+  void ClearReplacementPool();
+  std::unordered_map<std::string, std::vector<UnityEngine::GameObject*>> _replacementPool;
+  std::unordered_map<UnityEngine::GameObject*, PooledReplacement> _pooledReplacements;
+  std::unordered_set<std::string> _unpoolableAssets;
+  SafePtrUnity<UnityEngine::GameObject> _replacementPoolRoot;
+  int _replacementsCreated = 0;
+  int _replacementsReused = 0;
   // Geometry-shader emulation at load (naomi.5, VivifyGeometryRuntime.cpp).
   void PrepareGeometryEmulation(std::string const& bundlePath);
   void ReleaseGeometryEmulation();

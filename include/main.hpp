@@ -47,6 +47,8 @@ bool GetPrepareShadersBeforePlaying();
 bool GetDrawGeometryShaderEffects();
 // Geometry-shader emulation for known shaders (naomi.5); on by default.
 bool GetEmulateGeometryShaderEffects();
+// Reuse note, debris and saber replacement copies (naomi.5); on by default.
+bool GetPoolNoteReplacements();
 // Whether a shader a map's Quest bundle shipped empty is replaced by the PC
 // build of it, converted (VivifyAssets.cpp).
 bool GetUsePcShadersForEmptyShaders();
