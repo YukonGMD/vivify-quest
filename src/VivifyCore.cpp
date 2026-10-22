@@ -508,6 +508,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
     }
     WriteLevelEndReport(outcome);
   }
+  EndLevelVRCenterAdjustCounts();
 
   VIVIFY_DEBUG("Vivify ResetRuntime: livePrefabs={} preloaded={} synced={} secondaryCameras={} declaredTextures={} assets={}",
                _livePrefabs.size(), _instantiatePrefabs.size(), _syncedObjects.size(),

@@ -6,6 +6,9 @@ namespace Vivify {
 void LateLoad();
 void RefreshMultipassRendering();
 void RefreshIsolationSettings();
+// Writes, as breadcrumbs, how many VRCenterAdjust calls were skipped in the
+// level just ended, and clears the counts (ResetRuntime).
+void EndLevelVRCenterAdjustCounts();
 
 // Progress of a bulk PC->Android bundle conversion pass.
 struct BulkConversionProgress {

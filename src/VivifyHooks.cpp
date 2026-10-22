@@ -223,6 +223,14 @@ MAKE_HOOK_MATCH(GamePause_Resume, &GlobalNamespace::GamePause::Resume, void, Glo
   VivifyPart("GamePause_Resume", [] { Runtime::Instance().SetPauseMenuActive(false); });
 }
 
+// VRCenterAdjust calls during the current level, per method, once one has
+// been skipped: how many were skipped, and how many went through after that.
+struct VRCenterAdjustCounts {
+  int skipped = 0;
+  int ran = 0;
+};
+std::map<std::string_view, VRCenterAdjustCounts> gVRCenterAdjustCounts;
+
 // Ported from the rbatteries1-design/Lars27110 base. VRCenterAdjust drives the
 // automatic room-scale recenter/floor-offset. Its methods touch
 // _settingsManager / _settingsApplicator fields that aren't always populated
@@ -248,10 +256,6 @@ bool ShouldSkipVRCenterAdjust(GlobalNamespace::VRCenterAdjust* self, std::string
     }
     return true;
   }
-  // Skips per method, so the first call that goes through can say how many
-  // came before it: whether the fields ever got filled in is the question
-  // when a map freezes right after these warnings.
-  static std::map<std::string_view, int> sSkipped;
   if (missingSettingsManager || missingSettingsApplicator) {
     // Update runs every frame, and with debug logging on this line alone was
     // 21,790 of a 25,005-line session log. Once per method is enough to know.
@@ -260,15 +264,17 @@ bool ShouldSkipVRCenterAdjust(GlobalNamespace::VRCenterAdjust* self, std::string
       PaperLogger.warn("VRCenterAdjust.{} skipped: missing _settingsManager={} _settingsApplicator={}",
                        method, BoolText(missingSettingsManager), BoolText(missingSettingsApplicator));
     }
-    if (sSkipped[method]++ == 0) {
-      VivifyBreadcrumb("VRCenterAdjust." + std::string(method) + " skipped (fields not set yet)");
+    // One breadcrumb for a method's first skip in a level; the rest are only
+    // counted, and EndLevelVRCenterAdjustCounts writes the totals. Logging
+    // every skip-then-run pair wrote two flushed lines a frame (naomi.3).
+    if (gVRCenterAdjustCounts[method].skipped++ == 0) {
+      VivifyBreadcrumb("VRCenterAdjust." + std::string(method) +
+                       " skipped (fields not set yet); further skips this level are counted at level end");
     }
     return true;
   }
-  if (auto it = sSkipped.find(method); it != sSkipped.end() && it->second > 0) {
-    VivifyBreadcrumb("VRCenterAdjust." + std::string(method) + " ran after " + std::to_string(it->second) +
-                     " skipped call(s)");
-    it->second = 0;
+  if (!gVRCenterAdjustCounts.empty()) {
+    if (auto it = gVRCenterAdjustCounts.find(method); it != gVRCenterAdjustCounts.end()) it->second.ran++;
   }
   return false;
 }
@@ -306,6 +312,14 @@ MAKE_HOOK_MATCH(VRCenterAdjust_SetRoomTransformOffset, &GlobalNamespace::VRCente
 }
 
 namespace Vivify {
+
+void EndLevelVRCenterAdjustCounts() {
+  for (auto const& [method, counts] : gVRCenterAdjustCounts) {
+    VivifyBreadcrumb(fmt::format("VRCenterAdjust.{} this level: {} call(s) skipped, {} went through after the first skip",
+                                 method, counts.skipped, counts.ran));
+  }
+  gVRCenterAdjustCounts.clear();
+}
 
 void LateLoad() {
   Runtime::Instance().LateLoad();
