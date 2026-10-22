@@ -29,8 +29,23 @@ Test builds report themselves as 0.14.25-naomi.N.
     CPU use and wait channel of the main and render threads, then again
     every 5 seconds (up to 12 times), and a line when the game recovers. It
     is silent while the game is healthy or in the background.
+- **More stall and crash diagnostics** (naomi.3). No setting or default
+  changes.
+  - During a stall, the watchdog now takes up to three samples of the main
+    thread's native call stack, about 3 seconds apart, and writes each frame
+    as `WATCHDOG:   #NN pc <offset>  <library>`. It interrupts the main
+    thread with a real-time signal nothing else in the game handles; if
+    something does, or the main thread blocks it, it writes
+    `stack sampling unavailable` (or `no sample`) with the reason instead.
+    Nothing is sampled while the game is healthy.
+  - Breadcrumb lines end with the garbage collection counts and the managed
+    heap size, so a log shows whether a collection ran around a crash or
+    stall.
 
 ### Changed
+- **Prepare Shaders** looks up the multiview shader keyword once per
+  preparation instead of every frame. The same shader variants are
+  prepared; it only makes less garbage while doing it (naomi.3).
 - **Force Reconvert All** now needs two presses within five seconds, like
   Reset. It sits next to Convert All, and it also clears crash-guard strikes.
 
