@@ -5,7 +5,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -114,6 +116,14 @@ void Watchdog::SetBreadcrumb(std::string_view text) {
 std::string Watchdog::Breadcrumb() const {
   std::lock_guard lock(_breadcrumbMutex);
   return _breadcrumb;
+}
+
+void Watchdog::CopyBreadcrumb(char* buffer, size_t size) const {
+  if (size == 0) return;
+  std::lock_guard lock(_breadcrumbMutex);
+  size_t const length = std::min(size - 1, _breadcrumb.size());
+  std::memcpy(buffer, _breadcrumb.data(), length);
+  buffer[length] = '\0';
 }
 
 bool Watchdog::OnMainThread() const {

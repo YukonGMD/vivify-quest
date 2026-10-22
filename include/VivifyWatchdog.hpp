@@ -75,6 +75,8 @@ class Watchdog {
   void SetPaused(bool paused);
   void SetBreadcrumb(std::string_view text);
   std::string Breadcrumb() const;
+  // The breadcrumb into a buffer, cut to fit, without allocating.
+  void CopyBreadcrumb(char* buffer, size_t size) const;
   // True on the thread that beats (false until the first beat).
   bool OnMainThread() const;
 

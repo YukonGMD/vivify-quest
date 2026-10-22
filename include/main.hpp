@@ -74,6 +74,15 @@ void EnsureConfigDefaults();
 void VivifyBreadcrumb(std::string const& text);
 void VivifyHeartbeat();
 void VivifySetAppPaused(bool paused);
+// For the song performance summary (naomi.4). VivifyWriteFlushedLine writes
+// one line to both log files and flushes them. VivifyGcCount (the number of
+// garbage collections so far, -1 if unknown) and VivifyHeapMB (managed heap
+// used and total, false if unknown) are cheap enough for every frame and do
+// not allocate; neither does VivifyCopyBreadcrumb.
+void VivifyWriteFlushedLine(std::string const& line);
+int VivifyGcCount();
+bool VivifyHeapMB(double& usedMB, double& totalMB);
+void VivifyCopyBreadcrumb(char* buffer, size_t size);
 constexpr auto PaperLogger = Paper::ConstLoggerContext("Vivify");
 
 #define VIVIFY_DEBUG(...)                                          \

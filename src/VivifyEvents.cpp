@@ -93,6 +93,9 @@ void Runtime::DispatchEvent(std::string_view type, CustomJSONData::CustomEventDa
                             rapidjson::Value const& json) {
 
   float const eventTime = customEventData != nullptr ? customEventData->time : -1.0f;
+  _perfLastEventType = type;
+  _perfLastEventBeat = eventTime;
+  _perfEventsSinceFrame++;
   try {
     if (type == kInstantiatePrefabEvent) {
       InstantiatePrefab(customEventData, json);

@@ -260,6 +260,25 @@ void InstallVivifyFileLogSink() {
 
 namespace {
 
+// il2cpp's heap-size exports, looked up once. beatsaber-hook's wrappers
+// abort when a function is missing, and diagnostics must never do that.
+using SizeFn = int64_t (*)();
+struct GcFunctions {
+  SizeFn usedSize = nullptr;
+  SizeFn heapSize = nullptr;
+};
+GcFunctions const& Gc() {
+  static GcFunctions const functions = [] {
+    GcFunctions found;
+    if (void* il2cpp = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD)) {
+      found.usedSize = reinterpret_cast<SizeFn>(dlsym(il2cpp, "il2cpp_gc_get_used_size"));
+      found.heapSize = reinterpret_cast<SizeFn>(dlsym(il2cpp, "il2cpp_gc_get_heap_size"));
+    }
+    return found;
+  }();
+  return functions;
+}
+
 // " | gc 0/1/2=a/b/c heap used=..MB of ..MB", so the log shows whether a
 // garbage collection ran around a crash or stall. Main thread only (il2cpp is
 // not called from anywhere else); empty elsewhere. il2cpp's Boehm collector is
@@ -269,25 +288,37 @@ std::string GcText() {
   std::string text = " | gc 0/1/2=" + std::to_string(System::GC::CollectionCount(0)) + "/" +
                      std::to_string(System::GC::CollectionCount(1)) + "/" +
                      std::to_string(System::GC::CollectionCount(2));
-  // Looked up directly: beatsaber-hook's wrappers abort when a function is
-  // missing, and a breadcrumb must never do that.
-  using SizeFn = int64_t (*)();
-  static SizeFn const usedSize = [] {
-    void* il2cpp = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD);
-    return il2cpp ? reinterpret_cast<SizeFn>(dlsym(il2cpp, "il2cpp_gc_get_used_size")) : nullptr;
-  }();
-  static SizeFn const heapSize = [] {
-    void* il2cpp = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD);
-    return il2cpp ? reinterpret_cast<SizeFn>(dlsym(il2cpp, "il2cpp_gc_get_heap_size")) : nullptr;
-  }();
-  if (usedSize && heapSize) {
-    text += fmt::format(" heap used={:.1f}MB of {:.1f}MB", static_cast<double>(usedSize()) / (1024.0 * 1024.0),
-                        static_cast<double>(heapSize()) / (1024.0 * 1024.0));
-  }
+  double used = 0, total = 0;
+  if (VivifyHeapMB(used, total)) text += fmt::format(" heap used={:.1f}MB of {:.1f}MB", used, total);
   return text;
 }
 
 }  // namespace
+
+void VivifyWriteFlushedLine(std::string const& line) {
+  WriteFlushedLogLine(line);
+}
+
+int VivifyGcCount() {
+  // cordl calls the compiled method directly: no invoke, no boxing.
+  try {
+    return System::GC::CollectionCount(0);
+  } catch (...) {
+    return -1;
+  }
+}
+
+bool VivifyHeapMB(double& usedMB, double& totalMB) {
+  auto const& gc = Gc();
+  if (!gc.usedSize || !gc.heapSize) return false;
+  usedMB = static_cast<double>(gc.usedSize()) / (1024.0 * 1024.0);
+  totalMB = static_cast<double>(gc.heapSize()) / (1024.0 * 1024.0);
+  return true;
+}
+
+void VivifyCopyBreadcrumb(char* buffer, size_t size) {
+  gWatchdog.CopyBreadcrumb(buffer, size);
+}
 
 void VivifyBreadcrumb(std::string const& text) {
   gWatchdog.SetBreadcrumb(text);

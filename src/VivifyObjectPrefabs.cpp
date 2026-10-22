@@ -1,4 +1,6 @@
 #include "VivifyRuntimeInternal.hpp"
+#include "UnityEngine/Light.hpp"
+#include "UnityEngine/Renderer.hpp"
 #include "UnityEngine/SkinnedMeshRenderer.hpp"
 #include "VivifyComponents.hpp"
 #include "GlobalNamespace/ColorNoteVisuals.hpp"
@@ -638,6 +640,7 @@ void Runtime::PreloadInstantiatePrefabs() {
       if (IsAlive(instance)) {
         instance->SetActive(false);
         data.instance = instance;
+        CountPrefabComponents(data);
       }
     }
     if (!prefabFound) {
@@ -651,6 +654,14 @@ void Runtime::PreloadInstantiatePrefabs() {
     _instantiatePrefabs.emplace(customEventData, std::move(data));
   }
   VIVIFY_DEBUG("Vivify PreloadInstantiatePrefabs: {} prefab event(s) preloaded", _instantiatePrefabs.size());
+}
+
+// Renderers and lights in a new instance, for the performance summary. Run
+// where the instance is created (at level load for preloaded prefabs), not
+// when it is shown.
+void Runtime::CountPrefabComponents(InstantiatePrefabData& data) {
+  data.renderers = static_cast<int>(data.instance->GetComponentsInChildren<UnityEngine::Renderer*>(true).size());
+  data.lights = static_cast<int>(data.instance->GetComponentsInChildren<UnityEngine::Light*>(true).size());
 }
 
 std::string Runtime::GetPrefabStorageId(CustomJSONData::CustomEventData* customEventData,
@@ -689,6 +700,7 @@ void Runtime::InstantiatePrefab(CustomJSONData::CustomEventData* customEventData
       return;
     }
     data.instance->SetActive(false);
+    CountPrefabComponents(data);
   }
   auto* instance = data.instance;
   instance->SetActive(true);
@@ -733,7 +745,10 @@ void Runtime::InstantiatePrefab(CustomJSONData::CustomEventData* customEventData
       .tracks = data.tracks,
       .animators = std::move(animators),
       .particleSystems = std::move(particleSystems),
+      .renderers = std::max(data.renderers, 0),
+      .lights = std::max(data.lights, 0),
   };
+  UpdatePerfPrefabCounts();
 }
 
 bool Runtime::DestroyPrefabById(std::string const& id) {
@@ -744,6 +759,7 @@ bool Runtime::DestroyPrefabById(std::string const& id) {
   VIVIFY_DEBUG("Vivify DestroyObject: destroying live prefab id='{}'", id);
   auto prefab = std::move(it->second);
   _livePrefabs.erase(it);
+  UpdatePerfPrefabCounts();
   if (prefab.gameObject != nullptr) {
     UnregisterSyncedObject(prefab.gameObject);
     for (auto const& track : prefab.tracks) {

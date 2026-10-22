@@ -190,12 +190,18 @@ struct InstantiatePrefabData {
   Tracks::TransformData transformData;
   std::vector<TrackW> tracks;
   UnityEngine::GameObject* instance = nullptr;
+  // Components in the instance, counted once when it is created (for the
+  // performance summary; -1 until then).
+  int renderers = -1;
+  int lights = -1;
 };
 struct LivePrefab {
   UnityEngine::GameObject* gameObject = nullptr;
   std::vector<TrackW> tracks;
   std::vector<UnityEngine::Animator*> animators;
   std::vector<UnityEngine::ParticleSystem*> particleSystems;
+  int renderers = 0;
+  int lights = 0;
 };
 
 struct SyncedObject {

@@ -1,5 +1,6 @@
 #include "VivifyRuntimeInternal.hpp"
 #include <chrono>
+#include <filesystem>
 #include <algorithm>
 #include "VivifyComponents.hpp"
 #include "UnityEngine/ParticleSystem.hpp"
@@ -7,6 +8,8 @@
 #include "GlobalNamespace/PlayerData.hpp"
 #include "GlobalNamespace/PlayerSpecificSettings.hpp"
 #include "GlobalNamespace/MultiplayerController.hpp"
+#include "GlobalNamespace/OVRDisplay.hpp"
+#include "GlobalNamespace/OVRManager.hpp"
 
 namespace Vivify {
 
@@ -154,6 +157,7 @@ void Runtime::Update() {
       }
     }
     _lastGameplayFrame = frameStart;
+    RecordPerfFrame(frameStart);
     // The frame level start ran in has finished, rendering included: whatever
     // freezes after "level start end" and before this line is in that frame.
     if (_firstFrameCrumbPending && UnityEngine::Time::get_frameCount() != _levelStartFrame) {
@@ -495,6 +499,7 @@ void Runtime::RefreshIsolationSettings() {
 
 void Runtime::ResetRuntime(std::string_view reason) {
   SetSongPlaying(false);
+  if (_perfActive) WritePerfSummary();
   // Written before anything is torn down, while the numbers are still valid.
   // The song position is included rather than a guess at "quit" vs "beaten":
   // by the time this runs the AudioTimeSyncController is usually already gone,
@@ -615,6 +620,105 @@ void Runtime::ResetRuntime(std::string_view reason) {
   _inMultiplayerGameplayCached = false;
   _inMultiplayerGameplay = false;
   _isResetting = false;
+}
+
+// ---------------------------------------------------------------------------
+// Song performance summary (naomi.4)
+//
+// Gathered from the first gameplay frame to the end of the level, and written
+// to the session log as [PERF] lines when ResetRuntime runs. Per frame it is
+// one clock read, the garbage collection count, the song time (already cached
+// for the frame) and PerfStats::AddFrame, none of which allocates.
+
+void Runtime::BeginPerfSummary() {
+  float refreshHz = 0.0f;
+  try {
+    if (auto* display = GlobalNamespace::OVRManager::get_display()) refreshHz = display->get_displayFrequency();
+  } catch (...) {
+  }
+  _perf.Reset(refreshHz);
+  _perfActive = true;
+  _perfSkipNext = true;  // the first frame's gap is level loading, not play
+  _perfStartWall = std::chrono::steady_clock::now();
+  _perfGcStart = _perfGcLast = VivifyGcCount();
+  if (!VivifyHeapMB(_perfHeapUsedStartMB, _perfHeapSizeStartMB)) _perfHeapUsedStartMB = _perfHeapSizeStartMB = -1.0;
+  UpdatePerfPrefabCounts();
+}
+
+void Runtime::RecordPerfFrame(std::chrono::steady_clock::time_point frameStart) {
+  if (!_perfActive) {
+    BeginPerfSummary();
+    _perfLastFrame = frameStart;
+    return;
+  }
+  int const gc = VivifyGcCount();
+  if (_pauseMenuActive || _perfSkipNext) {
+    // A paused frame, or the first after a pause or the level's start.
+    _perf.SkipFrame();
+    _perfSkipNext = _pauseMenuActive;
+  } else {
+    float const frameMs = std::chrono::duration<float, std::milli>(frameStart - _perfLastFrame).count();
+    int const gcDelta = gc >= 0 && _perfGcLast >= 0 ? gc - _perfGcLast : -1;
+    _perf.AddFrame(frameMs, CurrentSongTime(), gcDelta,
+                   [this](char* buffer, size_t size) { WritePerfLabel(buffer, size); });
+  }
+  _perfGcLast = gc;
+  _perfLastFrame = frameStart;
+  _perfEventsSinceFrame = 0;
+}
+
+void Runtime::WritePerfLabel(char* buffer, size_t size) const {
+  char crumb[96];
+  VivifyCopyBreadcrumb(crumb, sizeof(crumb));
+  if (_perfLastEventType.empty()) {
+    std::snprintf(buffer, size, "%d Vivify event(s) since the previous frame; no Vivify event yet; last breadcrumb: %s",
+                  _perfEventsSinceFrame, crumb);
+  } else {
+    std::snprintf(buffer, size,
+                  "%d Vivify event(s) since the previous frame; last Vivify event: %.*s at beat %.2f; last "
+                  "breadcrumb: %s",
+                  _perfEventsSinceFrame, static_cast<int>(_perfLastEventType.size()), _perfLastEventType.data(),
+                  _perfLastEventBeat, crumb);
+  }
+}
+
+void Runtime::UpdatePerfPrefabCounts() {
+  _perfPrefabsNow = static_cast<int>(_livePrefabs.size());
+  _perfRenderersNow = _perfParticlesNow = _perfLightsNow = 0;
+  for (auto const& [id, prefab] : _livePrefabs) {
+    _perfRenderersNow += prefab.renderers;
+    _perfParticlesNow += static_cast<int>(prefab.particleSystems.size());
+    _perfLightsNow += prefab.lights;
+  }
+  _perfPrefabsPeak = std::max(_perfPrefabsPeak, _perfPrefabsNow);
+  _perfRenderersPeak = std::max(_perfRenderersPeak, _perfRenderersNow);
+  _perfParticlesPeak = std::max(_perfParticlesPeak, _perfParticlesNow);
+  _perfLightsPeak = std::max(_perfLightsPeak, _perfLightsNow);
+}
+
+void Runtime::WritePerfSummary() {
+  _perfActive = false;
+  PerfStats::Context context;
+  std::filesystem::path const level(_selectedLevelPath);
+  context.map = level.filename().string().empty() ? std::string("(unknown map)") : level.filename().string();
+  context.wallSeconds = std::chrono::duration<double>(_perfLastFrame - _perfStartWall).count();
+  context.gcStart = _perfGcStart;
+  context.gcEnd = _perfGcLast;
+  context.heapUsedStartMB = _perfHeapUsedStartMB;
+  context.heapSizeStartMB = _perfHeapSizeStartMB;
+  if (!VivifyHeapMB(context.heapUsedEndMB, context.heapSizeEndMB)) context.heapUsedEndMB = context.heapSizeEndMB = -1;
+  context.prefabsEnd = _perfPrefabsNow;
+  context.prefabsPeak = _perfPrefabsPeak;
+  context.renderersEnd = _perfRenderersNow;
+  context.renderersPeak = _perfRenderersPeak;
+  context.particleSystemsEnd = _perfParticlesNow;
+  context.particleSystemsPeak = _perfParticlesPeak;
+  context.lightsEnd = _perfLightsNow;
+  context.lightsPeak = _perfLightsPeak;
+  for (auto const& line : _perf.Summary(context)) VivifyWriteFlushedLine("[PERF] " + line);
+  _perfLastEventType = {};
+  _perfEventsSinceFrame = 0;
+  _perfPrefabsPeak = _perfRenderersPeak = _perfParticlesPeak = _perfLightsPeak = 0;
 }
 
 }

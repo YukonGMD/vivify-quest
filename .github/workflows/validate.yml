@@ -186,6 +186,21 @@ jobs:
     - name: Watchdog tests
       run: VIVIFY_WATCHDOG=/tmp/watchdog python3 tools/watchdog/run_tests.py
 
+  perfstats-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Build the song performance statistics for the host, with sanitizers
+      run: |
+        g++ -std=c++20 -O1 -g -fsanitize=address,undefined \
+            -I include -o /tmp/perfstats \
+            tools/perfstats/main.cpp src/VivifyPerfStats.cpp
+
+    - name: Performance statistics tests
+      run: VIVIFY_PERFSTATS=/tmp/perfstats python3 tools/perfstats/run_tests.py
+
   report-writer-tests:
     runs-on: ubuntu-latest
     steps:

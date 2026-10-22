@@ -9,6 +9,7 @@
 #include <optional>
 #include <mutex>
 #include "VivifyTypes.hpp"
+#include "VivifyPerfStats.hpp"
 #include "UnityEngine/Rendering/CommandBuffer.hpp"
 #include "UnityEngine/AssetBundleCreateRequest.hpp"
 #include "UnityEngine/AssetBundleRequest.hpp"
@@ -575,6 +576,28 @@ private:
   // a SafePtr so the collector keeps it while only native code refers to it.
   std::optional<uint32_t> _warmupMultiviewIndex;
   SafePtr<Il2CppString> _warmupMultiviewName;
+  // Song performance summary (naomi.4): frame statistics gathered from the
+  // first gameplay frame and written to the session log when the level ends.
+  void BeginPerfSummary();
+  void RecordPerfFrame(std::chrono::steady_clock::time_point frameStart);
+  void WritePerfSummary();
+  void UpdatePerfPrefabCounts();
+  void CountPrefabComponents(InstantiatePrefabData& data);
+  void WritePerfLabel(char* buffer, size_t size) const;
+  PerfStats _perf;
+  bool _perfActive = false;
+  bool _perfSkipNext = false;
+  std::chrono::steady_clock::time_point _perfLastFrame{};
+  std::chrono::steady_clock::time_point _perfStartWall{};
+  int _perfGcStart = -1;
+  int _perfGcLast = -1;
+  double _perfHeapUsedStartMB = -1.0;
+  double _perfHeapSizeStartMB = -1.0;
+  std::string_view _perfLastEventType;
+  float _perfLastEventBeat = 0.0f;
+  int _perfEventsSinceFrame = 0;
+  int _perfPrefabsPeak = 0, _perfRenderersPeak = 0, _perfParticlesPeak = 0, _perfLightsPeak = 0;
+  int _perfPrefabsNow = 0, _perfRenderersNow = 0, _perfParticlesNow = 0, _perfLightsNow = 0;
   // The breadcrumb for the first frame after PrepareBeatmap (naomi.2).
   bool _firstFrameCrumbPending = false;
   int _levelStartFrame = -1;
