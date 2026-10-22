@@ -49,6 +49,8 @@ bool GetDrawGeometryShaderEffects();
 bool GetEmulateGeometryShaderEffects();
 // Reuse note, debris and saber replacement copies (naomi.5); on by default.
 bool GetPoolNoteReplacements();
+// Converted maps' scenery keeps GPU instancing (naomi.5, experimental); off by default.
+bool GetSceneryGpuInstancing();
 // Whether a shader a map's Quest bundle shipped empty is replaced by the PC
 // build of it, converted (VivifyAssets.cpp).
 bool GetUsePcShadersForEmptyShaders();

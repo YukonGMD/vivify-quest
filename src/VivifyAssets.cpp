@@ -12,6 +12,7 @@
 #include "UnityEngine/GameObject.hpp"
 #include "UnityEngine/Renderer.hpp"
 #include "UnityEngine/Material.hpp"
+#include <functional>
 #include <set>
 #include "UnityEngine/TextureFormat.hpp"
 #include <atomic>
@@ -172,7 +173,9 @@ int ConversionSplitMode() {
   // +8: geometry-shader effects drawn without their geometry stage (setting).
   // +16: known geometry-shader effects emulated in the vertex stage (setting,
   // naomi.5), with the bundle's meshes made readable for it.
-  int const geometry = (GetDrawGeometryShaderEffects() ? 8 : 0) + (GetEmulateGeometryShaderEffects() ? 16 : 0);
+  // +32: GPU-instanced variants translated, for scenery instancing (setting).
+  int const geometry = (GetDrawGeometryShaderEffects() ? 8 : 0) + (GetEmulateGeometryShaderEffects() ? 16 : 0) +
+                       (GetSceneryGpuInstancing() ? 32 : 0);
   if (GetReplayRenderMode()) return 4 + geometry;
   return (SplitStereoVariants() ? 1 : 0) + geometry;
 }
@@ -386,6 +389,9 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   // On by default in naomi.5 (setting): the known geometry-shader effects run
   // in the vertex stage, for meshes rebuilt at load (PrepareGeometryEmulation).
   options.emulateGeometry = GetEmulateGeometryShaderEffects();
+  // Off by default (setting): translate the GPU-instanced variants too, for
+  // the scenery that keeps its instancing (ApplySceneryInstancing).
+  options.keepInstancingVariants = GetSceneryGpuInstancing();
   // See version 17 above. Converted maps only: a donor build for a Quest
   // map's empty shaders keeps everything, since Quest materials keep their
   // instancing.
@@ -428,6 +434,13 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   }
   for (auto const& refusal : conversion.geometryEmulationRefusals) {
     PaperLogger.info("Vivify geometry emulation not possible, so the shader keeps its old treatment -- {}", refusal);
+  }
+  if (options.keepInstancingVariants) {
+    PaperLogger.info("Vivify scenery instancing: {} GPU-instanced variant(s) translated", conversion.instancingVariantsLinked);
+    for (auto const& shader : conversion.shadersWithoutInstancing) {
+      PaperLogger.info("Vivify scenery instancing: '{}' has no GPU-instanced variant; its objects are drawn one at a "
+                       "time whatever their material says", shader);
+    }
   }
   if (conversion.geometryStagesEmulated > 0 || conversion.meshesMarkedReadable > 0) {
     PaperLogger.info("Vivify geometry emulation: {} variant(s) emulated, {} mesh(es) marked readable",
@@ -2288,6 +2301,7 @@ void Runtime::LoadMainBundle() {
     RepairLoadedMaterialShaders();
     VivifyBreadcrumb("geometry emulation begin");
     PrepareGeometryEmulation(bundlePath);
+    ApplySceneryInstancing();
     VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s)", _assets.size()));
     return;
   }
@@ -2326,6 +2340,7 @@ void Runtime::LoadMainBundle() {
   _loadMsDecodeTextures = phase("decode textures", [this]() { DecodeUnsupportedBundleTextures(); });
   _loadMsRepairShaders = phase("repair shaders", [this]() { RepairLoadedMaterialShaders(); });
   phase("geometry emulation", [this, &bundlePath]() { PrepareGeometryEmulation(bundlePath); });
+  ApplySceneryInstancing();
   _loadMsTotal = _loadMsCacheAssets + _loadMsDecodeTextures + _loadMsRepairShaders;
   PaperLogger.info("Vivify level load: {:.0f}ms total", _loadMsTotal);
   VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s), {:.0f}ms", _assets.size(), _loadMsTotal));
@@ -2736,7 +2751,10 @@ void Runtime::RepairMaterialShader(UnityEngine::Material* material, std::string_
   // notes, drawn through the plain variant, were right. With instancing off
   // every object is drawn on its own through that plain variant; notes are
   // few enough that the extra draw calls cost little.
-  if (_preloadedBundlePath.rfind(ConvertedBundleCacheDir(), 0) == 0 && material->get_enableInstancing()) {
+  // With "GPU Instancing For Scenery" on, ApplySceneryInstancing decides per
+  // material after repair instead: scenery keeps it, notes and the like not.
+  if (_preloadedBundlePath.rfind(ConvertedBundleCacheDir(), 0) == 0 && material->get_enableInstancing() &&
+      !GetSceneryGpuInstancing()) {
     material->set_enableInstancing(false);
     _instancingDisabledMaterials++;
   }
@@ -2891,6 +2909,74 @@ void Runtime::RepairMaterialShader(UnityEngine::Material* material, std::string_
     }
   }
   _repairedMaterials.emplace(material);
+}
+
+// "GPU Instancing For Scenery" (naomi.5, off by default). The 0.13.2 fix for
+// misplaced chord notes turned instancing off on every converted material;
+// with this on, it stays on (as the PC material has it) for everything except
+// what note, bomb, chain, debris and saber prefabs draw with, and the trails.
+// Those are found from the level's AssignObjectPrefab events: every asset any
+// of them names, and every material under those prefabs.
+void Runtime::ApplySceneryInstancing() {
+  if (!GetSceneryGpuInstancing() || _preloadedBundlePath.rfind(ConvertedBundleCacheDir(), 0) != 0) return;
+  std::set<UnityEngine::Material*> keepOff;
+  auto collect = [&](UnityEngine::Object* asset) {
+    if (auto* material = il2cpp_utils::try_cast<UnityEngine::Material>(asset).value_or(nullptr); IsAlive(material)) {
+      keepOff.insert(material);
+    } else if (auto* gameObject = il2cpp_utils::try_cast<UnityEngine::GameObject>(asset).value_or(nullptr);
+               IsAlive(gameObject)) {
+      auto renderers = gameObject->GetComponentsInChildren<UnityEngine::Renderer*>(true);
+      for (auto* renderer : renderers) {
+        if (!IsAlive(renderer)) continue;
+        for (auto material : renderer->get_sharedMaterials()) {
+          if (IsAlive(material)) keepOff.insert(material);
+        }
+      }
+    }
+  };
+  std::function<void(rapidjson::Value const&)> walk = [&](rapidjson::Value const& value) {
+    if (value.IsString()) {
+      if (auto* asset = LookUpAsset(std::string_view(value.GetString(), value.GetStringLength()))) collect(asset);
+    } else if (value.IsObject()) {
+      for (auto const& member : value.GetObject()) walk(member.value);
+    } else if (value.IsArray()) {
+      for (auto const& element : value.GetArray()) walk(element);
+    }
+  };
+  if (_currentBeatmapData != nullptr) {
+    for (auto* customEventData : _currentBeatmapData->customEventDatas) {
+      if (customEventData == nullptr || customEventData->type != kAssignObjectPrefabEvent) continue;
+      if (auto* json = GetEventJson(customEventData)) walk(*json);
+    }
+  }
+  int instanced = 0;
+  int keptOff = 0;
+  std::set<UnityEngine::Material*> seen;
+  auto apply = [&](UnityEngine::Material* material) {
+    if (!IsAlive(material) || !seen.insert(material).second || !material->get_enableInstancing()) return;
+    if (keepOff.contains(material)) {
+      material->set_enableInstancing(false);
+      keptOff++;
+    } else {
+      instanced++;
+    }
+  };
+  for (auto const& [path, asset] : _assets) {
+    if (auto* material = il2cpp_utils::try_cast<UnityEngine::Material>(asset).value_or(nullptr)) {
+      apply(material);
+    } else if (auto* gameObject = il2cpp_utils::try_cast<UnityEngine::GameObject>(asset).value_or(nullptr);
+               IsAlive(gameObject)) {
+      auto renderers = gameObject->GetComponentsInChildren<UnityEngine::Renderer*>(true);
+      for (auto* renderer : renderers) {
+        if (!IsAlive(renderer)) continue;
+        for (auto material : renderer->get_sharedMaterials()) apply(material);
+      }
+    }
+  }
+  PaperLogger.info("Vivify scenery instancing: {} material(s) keep GPU instancing; {} note, debris, saber or trail "
+                   "material(s) have it turned off",
+                   instanced, keptOff);
+  VivifyBreadcrumb(fmt::format("scenery instancing: {} material(s) instanced, {} kept off", instanced, keptOff));
 }
 
 // A copy of `material` wearing the stand-in shader, for an object geometry

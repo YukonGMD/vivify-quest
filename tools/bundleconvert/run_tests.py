@@ -1005,6 +1005,43 @@ pc_shader_case("variants a Quest never selects are left untranslated; the plain 
                spi2019_body, expect_unused_skipped)
 del os.environ["VIVIFY_SKIP_UNUSED"]
 
+# Scenery instancing (naomi.5): with unused variants skipped, an
+# INSTANCING_ON variant stays DirectX unless instanced variants are kept.
+instanced_body, _ = pc_shader_2021("Custom/Instanced", [(_vs(spi=False), []), (_vs(spi=False), [0])],
+                                   [(_ps(spi=False, flat=False), []), (_ps(spi=False, flat=False), [0])],
+                                   keyword_names=("INSTANCING_ON",))
+
+
+def instanced_refs(dst):
+    _, refs, _ = inspect_converted(dst)
+    return {r["keywords"]: r["type"] for r in refs if r["stage"] == "0"}
+
+
+def expect_instancing_skipped(proc, fields, refusals, dst):
+    vertex = instanced_refs(dst)
+    if vertex.get("") not in ("3", "4") or vertex.get("INSTANCING_ON") in ("3", "4"):
+        return f"vertex variant types {vertex}; the instanced one should stay DirectX"
+    return None
+
+
+def expect_instancing_kept(proc, fields, refusals, dst):
+    vertex = instanced_refs(dst)
+    if vertex.get("") not in ("3", "4") or vertex.get("INSTANCING_ON") not in ("3", "4"):
+        return f"vertex variant types {vertex}; both should be GLES"
+    if fields.get("instancingVariants") != "1":
+        return f"instancingVariants={fields.get('instancingVariants')}"
+    return None
+
+
+os.environ["VIVIFY_SKIP_UNUSED"] = "1"
+pc_shader_case("an instanced variant stays DirectX when unused variants are skipped",
+               instanced_body, expect_instancing_skipped)
+os.environ["VIVIFY_KEEP_INSTANCING"] = "1"
+pc_shader_case("an instanced variant is translated when instanced variants are kept",
+               instanced_body, expect_instancing_kept)
+del os.environ["VIVIFY_KEEP_INSTANCING"]
+del os.environ["VIVIFY_SKIP_UNUSED"]
+
 mono_body, _ = pc_shader_2021("Custom/Mono", [(_vs(spi=False, texcoord=False), [])],
                               [(_ps(spi=False, flat=False), [])], keyword_names=())
 

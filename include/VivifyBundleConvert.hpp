@@ -176,6 +176,10 @@ struct ShaderConversion {
   std::vector<std::string> geometryEmulated;
   std::vector<std::string> geometryEmulationRefusals;
   int meshesMarkedReadable = 0;
+  // keepInstancingVariants: instanced variants linked, and shaders that have
+  // none (their objects are drawn one at a time even with instancing on).
+  int instancingVariantsLinked = 0;
+  std::vector<std::string> shadersWithoutInstancing;
   int variantsSkipped = 0;  // program refs of variants a Quest never selects, left untranslated
   // Block-compressed textures seen, and how many had their m_IsReadable flag
   // set so the mod can decode them on device. A texture that is already
@@ -255,6 +259,9 @@ struct ShaderConversionOptions {
   // make the bundle's meshes readable so it can. All of a shader's geometry
   // variants or none; a shader that cannot be done keeps the treatment above.
   bool emulateGeometry = false;
+  // Translate the GPU-instanced variants (INSTANCING_ON) even with
+  // skipQuestUnusedVariants, for scenery that keeps its instancing.
+  bool keepInstancingVariants = false;
   // Leave untranslated the variants a Quest never selects in a converted
   // map: GPU instancing (turned off on converted materials) and unsplit
   // single-pass stereo. Most of a PC bundle's programs; far less to load and

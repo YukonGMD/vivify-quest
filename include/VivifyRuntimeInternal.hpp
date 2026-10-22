@@ -617,6 +617,7 @@ private:
   UnityEngine::Mesh* EmulationMeshFor(UnityEngine::Mesh* source, GeometryEmulation::Plan const& plan,
                                       std::string& reason);
   UnityEngine::Material* StandInCopyFor(UnityEngine::Material* material);
+  void ApplySceneryInstancing();
   std::map<std::tuple<UnityEngine::Mesh*, int, int>, UnityEngine::Mesh*> _emulationMeshes;
   std::unordered_set<UnityEngine::Mesh*> _emulationMeshSet;
   std::unordered_map<UnityEngine::Material*, UnityEngine::Material*> _emulationStandIns;

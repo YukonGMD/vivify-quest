@@ -1489,6 +1489,8 @@ struct LinkedShader {
   int geometryEmulated = 0;  // variants whose geometry program runs in the vertex stage
   std::string emulationPlan;     // "triangle 3" / "point 7" when emulated
   std::string emulationRefusal;  // why a known geometry shader was not emulated
+  bool hasInstancingVariant = false;  // a vertex variant with INSTANCING_ON
+  int instancingVariantsLinked = 0;
   int variantsSkipped = 0;  // program refs a Quest never selects, left alone
   int programsTranslated = 0;
   std::set<std::string> variantReasons;  // why individual variants stayed on DirectX
@@ -1848,6 +1850,7 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
     for (uint16_t k : ref.keywordIndices) {
       if (k >= keywordNames.size()) continue;
       std::string const& name = keywordNames[k];
+      if (name == "INSTANCING_ON" && conversionOptions.keepInstancingVariants) continue;
       if (name == "INSTANCING_ON" || name == "DOTS_INSTANCING_ON" || name == "PROCEDURAL_INSTANCING_ON") return true;
       if (splitKeyword < 0 && (name == "STEREO_INSTANCING_ON" || name == "UNITY_SINGLE_PASS_STEREO")) return true;
     }
@@ -1903,6 +1906,13 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
   // A known geometry shader is emulated only if every one of its geometry
   // variants can be; otherwise it keeps its current treatment whole, since
   // the mod rebuilds an object's mesh for the shader, not for one variant.
+  for (auto const& ref : refs) {
+    if (ref.stage != SerializedFileParse::kProgramStageVertex) continue;
+    for (uint16_t k : ref.keywordIndices) {
+      if (k < keywordNames.size() && keywordNames[k] == "INSTANCING_ON") out.hasInstancingVariant = true;
+    }
+  }
+
   bool emulating = false;
   if (conversionOptions.emulateGeometry && Vivify::GeometryEmulation::IsKnownShader(shader.name)) {
     bool any = false;
@@ -1987,6 +1997,12 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
       }
       out.variantsLinked++;
       if (dropped) out.geometryDropped++;
+      for (uint16_t k : vertex->keywordIndices) {
+        if (k < keywordNames.size() && keywordNames[k] == "INSTANCING_ON") {
+          out.instancingVariantsLinked++;
+          break;
+        }
+      }
       if (emulatedVariant) out.geometryEmulated++;
       emulatedVariant = false;
     }
@@ -2172,6 +2188,10 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
         conversion.stereoVariantsSplit += linked.stereoSplit;
         conversion.geometryStagesDropped += linked.geometryDropped;
         conversion.geometryStagesEmulated += linked.geometryEmulated;
+        conversion.instancingVariantsLinked += linked.instancingVariantsLinked;
+        if (options.keepInstancingVariants && linked.converted && !linked.hasInstancingVariant) {
+          conversion.shadersWithoutInstancing.push_back(shader.name);
+        }
         if (!linked.emulationPlan.empty()) conversion.geometryEmulated.push_back(shader.name + " " + linked.emulationPlan);
         if (!linked.emulationRefusal.empty()) {
           conversion.geometryEmulationRefusals.push_back(shader.name + ": " + linked.emulationRefusal);

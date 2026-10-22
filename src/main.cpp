@@ -55,6 +55,7 @@ constexpr std::string_view kPrepareShadersConfigKey = "prepareShadersInMenu";
 constexpr std::string_view kGeometryEffectsConfigKey = "drawGeometryShaderEffects";
 constexpr std::string_view kEmulateGeometryConfigKey = "emulateGeometryShaderEffects";
 constexpr std::string_view kPoolReplacementsConfigKey = "poolNoteReplacements";
+constexpr std::string_view kSceneryInstancingConfigKey = "sceneryGpuInstancing";
 constexpr std::string_view kPcShadersForEmptyConfigKey = "pcShadersForEmptyQuestShaders";
 constexpr std::string_view kStandInShaderNameConfigKey = "standInShaderName";
 constexpr std::string_view kEffectResolutionConfigKey = "effectResolutionPercent";
@@ -112,6 +113,7 @@ bool gPrepareShaders = false;
 bool gGeometryEffects = false;
 bool gEmulateGeometry = true;
 bool gPoolReplacements = true;
+bool gSceneryInstancing = false;
 bool gPcShadersForEmpty = true;
 // Which shader to use as the stand-in, by name, overriding the automatic pick.
 //
@@ -607,6 +609,15 @@ void RegisterModSettings() {
             GetPoolNoteReplacements(),
             [](bool value) { SetBoolConfigValue(kPoolReplacementsConfigKey, value, gPoolReplacements); });
 
+        // Experimental, off by default: a converted map's scenery keeps its
+        // GPU instancing (many copies of one mesh in one draw), as on PC.
+        // Notes, debris and sabers keep it off. If scenery appears in the
+        // wrong place, turn this off. Changing it reconverts converted maps.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"GPU Instancing For Scenery (experimental)",
+            GetSceneryGpuInstancing(),
+            [](bool value) { SetBoolConfigValue(kSceneryInstancingConfigKey, value, gSceneryInstancing); });
+
         // Renders map post-process effects (blits, screen textures) below eye
         // resolution and scales the result up. Full-screen raymarchers cost
         // per pixel: 50% is a quarter of the work.
@@ -886,6 +897,10 @@ bool GetPoolNoteReplacements() {
   return gPoolReplacements;
 }
 
+bool GetSceneryGpuInstancing() {
+  return gSceneryInstancing;
+}
+
 bool GetUsePcShadersForEmptyShaders() {
   return gPcShadersForEmpty;
 }
@@ -946,6 +961,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureBoolConfigValue(kGeometryEffectsConfigKey, false, gGeometryEffects);
   needsWrite |= EnsureBoolConfigValue(kEmulateGeometryConfigKey, true, gEmulateGeometry);
   needsWrite |= EnsureBoolConfigValue(kPoolReplacementsConfigKey, true, gPoolReplacements);
+  needsWrite |= EnsureBoolConfigValue(kSceneryInstancingConfigKey, false, gSceneryInstancing);
   needsWrite |= EnsureBoolConfigValue(kPcShadersForEmptyConfigKey, true, gPcShadersForEmpty);
   needsWrite |= EnsureStringConfigValue(kStandInShaderNameConfigKey, std::string(),
                                         gStandInShaderName);
