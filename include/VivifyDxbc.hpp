@@ -293,7 +293,19 @@ struct GlslResult {
   // SV_RenderTargetArrayIndex to pick the eye. With `multiview` set its eye
   // selection is remapped onto gl_ViewID_OVR.
   bool stereoInstanced = false;
+  // A geometry program translated as a function (GlslOptions::functionMode):
+  // vertices per input primitive (1 point, 3 triangle), its declared maximum
+  // output vertex count, its output topology (D3D: 1 points, 3 line strip,
+  // 5 triangle strip), and how many emit instructions its code holds.
+  int geometryInputVertices = 0;
+  int geometryMaxVertices = 0;
+  int geometryOutputTopology = 0;
+  int geometryEmitInstructions = 0;
 };
+
+// In a function-mode result, the declarations end at this line and the
+// functions begin.
+inline constexpr char const* kFunctionDeclarationsEnd = "// vivify:end-declarations\n";
 
 // Reflection supplied from outside the bytecode.
 //
@@ -341,6 +353,21 @@ struct GlslOptions {
   bool multiview = false;
   // Used only when the program has no RDEF of its own.
   ExternalReflection const* reflection = nullptr;
+  // For running a geometry program inside the vertex stage (geometry-shader
+  // emulation, 0.14.25-naomi.5). Neither function mode writes a #version
+  // header or a main(); the caller composes the program (GeometryEmulation).
+  //
+  // VertexFunction: `void vivify_vs_main()`, reading its inputs from
+  // `vivify_vi_<SEMANTIC>` globals and writing `vivify_vo_<SEMANTIC>` and
+  // `vivify_vo_Position` instead of varyings and gl_Position.
+  //
+  // GeometryFunction: `void vivify_gs_main()`, reading `vivify_gi_<SEMANTIC>[n]`
+  // and `vivify_gi_Position[n]`. Its outputs go to `vivify_go_*` globals, and
+  // each EmitVertex() becomes `vivify_emit()`, which copies them to the real
+  // varyings and gl_Position only for emit number `vivify_wantEmit`. Inputs are
+  // no longer varyings, so a semantic passed straight through is no clash.
+  enum class FunctionMode { None, VertexFunction, GeometryFunction };
+  FunctionMode functionMode = FunctionMode::None;
 };
 
 // Translates a parsed program to GLSL ES source.

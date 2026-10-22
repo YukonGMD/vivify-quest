@@ -45,6 +45,8 @@ bool GetBlitScreenTextureFix();
 bool GetPrepareShadersBeforePlaying();
 // Draw geometry-shader effects without their geometry stage (opt-in, 0.14.17).
 bool GetDrawGeometryShaderEffects();
+// Geometry-shader emulation for known shaders (naomi.5); on by default.
+bool GetEmulateGeometryShaderEffects();
 // Whether a shader a map's Quest bundle shipped empty is replaced by the PC
 // build of it, converted (VivifyAssets.cpp).
 bool GetUsePcShadersForEmptyShaders();

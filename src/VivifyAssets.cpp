@@ -170,7 +170,9 @@ bool SplitStereoVariants() {
 // 4 = single-view only (replay render mode).
 int ConversionSplitMode() {
   // +8: geometry-shader effects drawn without their geometry stage (setting).
-  int const geometry = GetDrawGeometryShaderEffects() ? 8 : 0;
+  // +16: known geometry-shader effects emulated in the vertex stage (setting,
+  // naomi.5), with the bundle's meshes made readable for it.
+  int const geometry = (GetDrawGeometryShaderEffects() ? 8 : 0) + (GetEmulateGeometryShaderEffects() ? 16 : 0);
   if (GetReplayRenderMode()) return 4 + geometry;
   return (SplitStereoVariants() ? 1 : 0) + geometry;
 }
@@ -381,6 +383,9 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   // Opt-in (setting): links a variant whose geometry stage cannot run without
   // it, instead of leaving it to a grey stand-in. Off by default since 0.14.13.
   options.dropUntranslatableGeometry = GetDrawGeometryShaderEffects();
+  // On by default in naomi.5 (setting): the known geometry-shader effects run
+  // in the vertex stage, for meshes rebuilt at load (PrepareGeometryEmulation).
+  options.emulateGeometry = GetEmulateGeometryShaderEffects();
   // See version 17 above. Converted maps only: a donor build for a Quest
   // map's empty shaders keeps everything, since Quest materials keep their
   // instancing.
@@ -414,6 +419,19 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
         "in a companion stream). A texture that is not readable loses its pixels at load, and decoding "
         "it then produces solid black.",
         conversion.texturesMarkedReadable, conversion.texturesSeen, conversion.texturesStreamed);
+  }
+  // Which shaders were emulated, and how, for the rebuild at load. Rewritten
+  // (or removed) with every conversion, so it always matches the bundle.
+  WriteGeometryEmulationList(dest, conversion.geometryEmulated);
+  for (auto const& shader : conversion.geometryEmulated) {
+    PaperLogger.info("Vivify geometry emulation: {} runs in the vertex stage", shader);
+  }
+  for (auto const& refusal : conversion.geometryEmulationRefusals) {
+    PaperLogger.info("Vivify geometry emulation not possible, so the shader keeps its old treatment -- {}", refusal);
+  }
+  if (conversion.geometryStagesEmulated > 0 || conversion.meshesMarkedReadable > 0) {
+    PaperLogger.info("Vivify geometry emulation: {} variant(s) emulated, {} mesh(es) marked readable",
+                     conversion.geometryStagesEmulated, conversion.meshesMarkedReadable);
   }
   return {conversion.status, conversion.message};
 }
@@ -841,6 +859,7 @@ void Runtime::HandleLevelSelected(SongCore::API::LevelSelect::LevelWasSelectedEv
   }
   if (!incomingLevelPath.empty() && incomingLevelPath != _selectedLevelPath) {
     if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
+      ReleaseGeometryEmulation();
       _mainBundle->Unload(true);
       _mainBundle = nullptr;
     }
@@ -1543,6 +1562,7 @@ void Runtime::GraftShadersFrom(std::string const& levelPath, std::string const& 
                                std::vector<std::string> const& names) {
   // Whatever bundle is loaded may share the converted one's internal names.
   if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
+    ReleaseGeometryEmulation();
     _mainBundle->Unload(true);
     _mainBundle = nullptr;
   }
@@ -1967,6 +1987,7 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
     return;
   }
   if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
+    ReleaseGeometryEmulation();
     _mainBundle->Unload(true);
     _mainBundle = nullptr;
   }
@@ -2262,6 +2283,8 @@ void Runtime::LoadMainBundle() {
     DecodeUnsupportedBundleTextures();
     VivifyBreadcrumb("texture decode end; shader repair begin");
     RepairLoadedMaterialShaders();
+    VivifyBreadcrumb("geometry emulation begin");
+    PrepareGeometryEmulation(bundlePath);
     VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s)", _assets.size()));
     return;
   }
@@ -2299,6 +2322,7 @@ void Runtime::LoadMainBundle() {
   _loadMsCacheAssets = phase("cache bundle assets", [this]() { CacheBundleAssets(); });
   _loadMsDecodeTextures = phase("decode textures", [this]() { DecodeUnsupportedBundleTextures(); });
   _loadMsRepairShaders = phase("repair shaders", [this]() { RepairLoadedMaterialShaders(); });
+  phase("geometry emulation", [this, &bundlePath]() { PrepareGeometryEmulation(bundlePath); });
   _loadMsTotal = _loadMsCacheAssets + _loadMsDecodeTextures + _loadMsRepairShaders;
   PaperLogger.info("Vivify level load: {:.0f}ms total", _loadMsTotal);
   VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s), {:.0f}ms", _assets.size(), _loadMsTotal));
@@ -2866,6 +2890,35 @@ void Runtime::RepairMaterialShader(UnityEngine::Material* material, std::string_
   _repairedMaterials.emplace(material);
 }
 
+// A copy of `material` wearing the stand-in shader, for an object geometry
+// emulation could not rebuild (naomi.5). Its shader's variants are emulated
+// now, so the material itself no longer gets a stand-in; the copy gives that
+// one object the look it had before, by the same rules as RepairMaterialShader.
+// nullptr where RepairMaterialShader would have declined (stand-in shading off,
+// or a screen effect with nothing to carry over).
+UnityEngine::Material* Runtime::StandInCopyFor(UnityEngine::Material* material) {
+  if (!IsAlive(material)) return nullptr;
+  if (auto it = _emulationStandIns.find(material); it != _emulationStandIns.end()) return it->second;
+  auto* replacement = FindFallbackShader();
+  if (!IsAlive(replacement) || !GetStandInShading()) return nullptr;
+  auto state = CaptureMaterialFallbackState(material);
+  bool const canCarryLook = state.color.has_value() || IsManagedAlive(state.mainTexture);
+  std::string const shaderName = ShaderNameForLog(material->get_shader().unsafePtr());
+  if (!canCarryLook && IsScreenSpaceEffectShader(shaderName)) return nullptr;
+  if (!IsManagedAlive(state.mainTexture) && state.color.has_value() && IsUninformativeColor(*state.color)) {
+    state.color = UnityEngine::Color(0.55f, 0.55f, 0.58f, 1.0f);
+  }
+  if (!canCarryLook) state.color = UnityEngine::Color(0.25f, 0.25f, 0.28f, 1.0f);
+  auto* copy = UnityEngine::Material::New_ctor(material);
+  copy->set_shader(replacement);
+  RestoreMaterialFallbackState(copy, state);
+  ApplyStereoKeywords(copy);
+  _fallbackShadedMaterials.emplace(copy);
+  _repairedMaterials.emplace(copy);
+  _emulationStandIns[material] = copy;
+  return copy;
+}
+
 void Runtime::RepairGameObjectMaterials(UnityEngine::GameObject* gameObject, std::string_view context) {
   if (!IsAlive(gameObject)) return;
   auto renderers = gameObject->GetComponentsInChildren<UnityEngine::Renderer*>(true);
@@ -3250,6 +3303,7 @@ void SetSongPlaying(bool playing) {
 
 void Runtime::ReleaseBundlesForReset() {
   if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
+    ReleaseGeometryEmulation();
     _mainBundle->Unload(true);
   }
   _mainBundle = nullptr;

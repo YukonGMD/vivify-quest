@@ -53,6 +53,7 @@ constexpr std::string_view kBlitFixConfigKey = "blitScreenTextureFix";
 // as on, and it may be what froze converted maps in the menu.
 constexpr std::string_view kPrepareShadersConfigKey = "prepareShadersInMenu";
 constexpr std::string_view kGeometryEffectsConfigKey = "drawGeometryShaderEffects";
+constexpr std::string_view kEmulateGeometryConfigKey = "emulateGeometryShaderEffects";
 constexpr std::string_view kPcShadersForEmptyConfigKey = "pcShadersForEmptyQuestShaders";
 constexpr std::string_view kStandInShaderNameConfigKey = "standInShaderName";
 constexpr std::string_view kEffectResolutionConfigKey = "effectResolutionPercent";
@@ -108,6 +109,7 @@ bool gReplayRenderMode = false;
 bool gBlitFix = false;
 bool gPrepareShaders = false;
 bool gGeometryEffects = false;
+bool gEmulateGeometry = true;
 bool gPcShadersForEmpty = true;
 // Which shader to use as the stand-in, by name, overriding the automatic pick.
 //
@@ -587,6 +589,15 @@ void RegisterModSettings() {
             GetDrawGeometryShaderEffects(),
             [](bool value) { SetBoolConfigValue(kGeometryEffectsConfigKey, value, gGeometryEffects); });
 
+        // Wireframes, exploding triangles and generated grass on converted
+        // maps, drawn with their geometry stage's maths moved into the vertex
+        // stage (known shaders only; anything it cannot do keeps its
+        // stand-in). Changing it reconverts converted maps.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Emulate Geometry-Shader Effects",
+            GetEmulateGeometryShaderEffects(),
+            [](bool value) { SetBoolConfigValue(kEmulateGeometryConfigKey, value, gEmulateGeometry); });
+
         // Renders map post-process effects (blits, screen textures) below eye
         // resolution and scales the result up. Full-screen raymarchers cost
         // per pixel: 50% is a quarter of the work.
@@ -858,6 +869,10 @@ bool GetDrawGeometryShaderEffects() {
   return gGeometryEffects;
 }
 
+bool GetEmulateGeometryShaderEffects() {
+  return gEmulateGeometry;
+}
+
 bool GetUsePcShadersForEmptyShaders() {
   return gPcShadersForEmpty;
 }
@@ -916,6 +931,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureBoolConfigValue(kBlitFixConfigKey, false, gBlitFix);
   needsWrite |= EnsureBoolConfigValue(kPrepareShadersConfigKey, false, gPrepareShaders);
   needsWrite |= EnsureBoolConfigValue(kGeometryEffectsConfigKey, false, gGeometryEffects);
+  needsWrite |= EnsureBoolConfigValue(kEmulateGeometryConfigKey, true, gEmulateGeometry);
   needsWrite |= EnsureBoolConfigValue(kPcShadersForEmptyConfigKey, true, gPcShadersForEmpty);
   needsWrite |= EnsureStringConfigValue(kStandInShaderNameConfigKey, std::string(),
                                         gStandInShaderName);

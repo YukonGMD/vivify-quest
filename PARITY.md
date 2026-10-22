@@ -179,7 +179,10 @@ Quest adds about 25 settings with no PC equivalent (`src/main.cpp`): debug loggi
 
 These come from Quest hardware or the Quest build of the game, not from porting logic. Logic fixes can't remove them; workarounds can only soften them.
 
-1. **Geometry shaders.** Multiview rendering forbids a geometry stage. Wireframe notes, exploding-triangle effects and geometry-shader grass in converted Windows bundles (743 Aether, Through The Screen) can't run as authored. "Draw Geometry-Shader Effects (experimental)" draws them without that stage instead.
+1. **Geometry shaders.** Multiview rendering forbids a geometry stage, and the headset's driver has no extension that allows one (it has `GL_EXT_geometry_shader`, not `GL_EXT_multiview_tessellation_geometry_shader`). Wireframe notes, exploding-triangle effects and geometry-shader grass in converted Windows bundles (743 Aether, Through The Screen) can't run as authored.
+   - "Emulate Geometry-Shader Effects" (on by default from naomi.5) runs the geometry program inside the vertex stage for known shaders (`src/VivifyGeometryEmulation.cpp`): Swifter/TriangleExplosion and Mawntee Wireframe 3D-Noise (triangle in, same triangle out) and Bytesized/Grass (a point in, a 7-vertex strip out). The bundle's meshes are made readable at conversion and rebuilt at load so each vertex carries what its geometry program needs. An object that cannot be rebuilt keeps the stand-in, with the reason in the log.
+   - Lifelike's only grass object draws the point-input grass shader on a triangle mesh; it keeps the stand-in, since what PC shows for that mismatch is not known here.
+   - "Draw Geometry-Shader Effects (experimental)" draws any other geometry shader without that stage.
 2. **DirectX-only shaders in Windows bundles.** PC-only maps ship DXBC programs. Quest translates them to GLSL ES (`src/VivifyDxbc.cpp`). Anything untranslatable becomes a stand-in shader. A stand-in on a full-screen blit material is skipped (`CanUseBlitMaterial`), so that effect is simply missing.
 3. **Unity 2019 single-pass double-wide shader variants** in Windows bundles assume `unity_StereoScaleOffset` layouts that Quest's multiview never sets.
 4. **BC/DXT texture formats.** These are decoded to RGBA32 on the CPU when the texture is readable (`DecodeUnsupportedBundleTextures`, 8 s budget). Unreadable ones draw untextured.

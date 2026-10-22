@@ -13,6 +13,7 @@ namespace {
 // Unity ClassID for UnityEngine.Shader.
 constexpr int32_t kClassIdShader = 48;
 constexpr int32_t kClassIdTexture2D = 28;
+constexpr int32_t kClassIdMesh = 43;
 
 // Type-tree node flags. Bit 0 of typeFlags marks a node whose children are the
 // [size, data] pair of an array; bit 14 of metaFlag requests 4-byte alignment
@@ -1351,6 +1352,36 @@ TextureObject ReadTextureObject(uint8_t const* data, size_t size, size_t fileOff
   return texture;
 }
 
+// Reads a Mesh object's name and its m_IsReadable byte, walking its
+// top-level fields by the file's own type tree like ReadTextureObject.
+MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, SerializedTypeInfo const& type) {
+  MeshObject mesh;
+  if (type.nodes.empty()) return mesh;
+  Reader reader(data, size);
+  for (size_t child : ChildIndices(type.nodes, 0)) {
+    if (!reader.ok()) break;
+    std::string const name = NodeName(type, type.nodes[child]);
+    size_t const before = reader.position();
+    WalkNode(reader, type, child, nullptr, 1);
+    if (reader.position() <= before) continue;
+    if (name == "m_Name" && before + 4 <= size) {
+      uint32_t length = 0;
+      std::memcpy(&length, data + before, 4);
+      if (length > 0 && length <= 256 && before + 4 + length <= size) {
+        mesh.name.assign(reinterpret_cast<char const*>(data + before + 4), length);
+      }
+    } else if (name == "m_IsReadable") {
+      if (type.nodes[child].byteSize == 1 && before < size) {
+        mesh.isReadablePresent = true;
+        mesh.isReadableFileOffset = fileOffset + before;
+        mesh.isReadable = data[before] != 0;
+      }
+      break;  // nothing after it is needed
+    }
+  }
+  return mesh;
+}
+
 }  // namespace
 
 bool TextureFormatNeedsDecodingOnQuest(int32_t unityTextureFormat) {
@@ -2541,14 +2572,19 @@ FileReport InspectSerializedFile(uint8_t const* data, size_t size) {
     SerializedTypeInfo const& type = layout.types[static_cast<size_t>(object.typeIndex)];
     bool const isShader = type.classID == kClassIdShader;
     bool const isTexture = type.classID == kClassIdTexture2D;
-    if (!isShader && !isTexture) continue;
+    bool const isMesh = type.classID == kClassIdMesh;
+    if (!isShader && !isTexture && !isMesh) continue;
     if (isShader) report.shaderObjectCount++;
     if (isTexture) report.textureObjectCount++;
     if (!layout.typeTreePresent || type.nodes.empty()) continue;
 
     uint64_t const start = static_cast<uint64_t>(object.byteStart) + layout.dataOffset;
     if (start >= size || object.byteSize > size - start) continue;
-    if (isShader) {
+    if (isMesh) {
+      MeshObject mesh = ReadMeshObject(data + start, object.byteSize, static_cast<size_t>(start), type);
+      mesh.pathID = object.pathID;
+      report.meshes.push_back(std::move(mesh));
+    } else if (isShader) {
       ShaderObject shader =
           ReadShaderObject(data + start, object.byteSize, static_cast<size_t>(start), type);
       shader.pathID = object.pathID;

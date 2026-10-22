@@ -6,7 +6,8 @@ and exercised with a desktop compiler.
 
 ```sh
 g++ -std=c++20 -O1 -g -fsanitize=address,undefined \
-    -I ../../include -o /tmp/conv main.cpp ../../src/VivifyBundleConvert.cpp
+    -I ../../include -o /tmp/conv main.cpp ../../src/VivifyBundleConvert.cpp \
+    ../../src/VivifySerializedFile.cpp ../../src/VivifyDxbc.cpp ../../src/VivifyGeometryEmulation.cpp
 
 python3 run_tests.py    # structural round-trip suite
 python3 fuzz.py         # corruption resistance

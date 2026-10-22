@@ -169,6 +169,13 @@ struct ShaderConversion {
   int stereoVariantsRemapped = 0;
   int stereoVariantsSplit = 0;  // separateStereoVariants: variants renamed to STEREO_MULTIVIEW_ON
   int geometryStagesDropped = 0;  // variants linked without the geometry stage they could not use
+  // Geometry-shader emulation (naomi.5): variants whose geometry program now
+  // runs inside the vertex stage, the shaders done ("name mode vertices"),
+  // why a known shader was not, and meshes marked readable for the rebuild.
+  int geometryStagesEmulated = 0;
+  std::vector<std::string> geometryEmulated;
+  std::vector<std::string> geometryEmulationRefusals;
+  int meshesMarkedReadable = 0;
   int variantsSkipped = 0;  // program refs of variants a Quest never selects, left untranslated
   // Block-compressed textures seen, and how many had their m_IsReadable flag
   // set so the mod can decode them on device. A texture that is already
@@ -243,6 +250,11 @@ struct ShaderConversionOptions {
   // did the projection, instead of leaving the variant on DirectX. Off in the
   // mod since 0.14.13: maps looked better and started faster without it.
   bool dropUntranslatableGeometry = false;
+  // Run the geometry program of a few known shaders inside the vertex stage
+  // (VivifyGeometryEmulation.hpp), for meshes the mod rebuilds at load; and
+  // make the bundle's meshes readable so it can. All of a shader's geometry
+  // variants or none; a shader that cannot be done keeps the treatment above.
+  bool emulateGeometry = false;
   // Leave untranslated the variants a Quest never selects in a converted
   // map: GPU instancing (turned off on converted materials) and unsplit
   // single-pass stereo. Most of a PC bundle's programs; far less to load and

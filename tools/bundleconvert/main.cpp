@@ -117,6 +117,7 @@ int main(int argc, char** argv) {
     options.renameArchiveFiles = companion;
     options.dropUntranslatableGeometry = std::getenv("VIVIFY_DROP_GEOMETRY") != nullptr;
     options.skipQuestUnusedVariants = std::getenv("VIVIFY_SKIP_UNUSED") != nullptr;
+    options.emulateGeometry = std::getenv("VIVIFY_EMULATE_GEOMETRY") != nullptr;
     ShaderConversion c = ConvertShadersToGles(src, dst, options);
     std::printf("status=%s\nmessage=%s\nseen=%d translated=%d leftAlone=%d refused=%d "
                 "programs=%d outBytes=%llu\ntexSeen=%d texReadable=%d texStreamed=%d\n"
@@ -128,6 +129,9 @@ int main(int argc, char** argv) {
                 c.stereoVariantsRemapped, c.stereoVariantsSplit, c.geometryStagesDropped, c.variantsSkipped);
     for (auto const& refusal : c.refusals) std::printf("refusal=%s\n", refusal.c_str());
     for (auto const& refusal : c.variantRefusals) std::printf("variantRefusal=%s\n", refusal.c_str());
+    std::printf("geometryEmulated=%d meshesReadable=%d\n", c.geometryStagesEmulated, c.meshesMarkedReadable);
+    for (auto const& shader : c.geometryEmulated) std::printf("emulatedShader=%s\n", shader.c_str());
+    for (auto const& refusal : c.geometryEmulationRefusals) std::printf("emulationRefusal=%s\n", refusal.c_str());
     return c.ok() ? 0 : 1;
   }
 

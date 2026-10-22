@@ -1243,6 +1243,13 @@ class GlslEmitter {
                                         uint32_t registerIndex) const;
   std::string VaryingName(SignatureElement const& element, bool vertexInput) const;
   std::string InterpolationQualifier(uint32_t registerIndex) const;
+  bool VertexFunction() const { return _options.functionMode == GlslOptions::FunctionMode::VertexFunction; }
+  bool GeometryFunction() const {
+    return _options.functionMode == GlslOptions::FunctionMode::GeometryFunction;
+  }
+  // "in_POSITION0" / "vs_TEXCOORD0" -> "POSITION0" / "TEXCOORD0".
+  static std::string SemanticSuffix(std::string const& varyingName) { return varyingName.substr(3); }
+  int GeometryInputVertexCount() const;
 
   Program const& _program;
   GlslOptions _options;
@@ -1275,6 +1282,13 @@ class GlslEmitter {
   bool _usedFrontFace = false;
   bool _usedVertexID = false;
   bool _usedInstanceID = false;
+  // Geometry function mode: the varyings it feeds the fragment stage, by
+  // semantic suffix; and what it declared.
+  std::vector<std::string> _gsOutputs;
+  int _gsInputVertices = 0;
+  int _gsMaxVertices = 0;
+  int _gsOutputTopology = 0;
+  int _gsEmits = 0;
   bool _usedPrimitiveID = false;
   bool _usedSampleIndex = false;
   bool _usedThreadID = false;
@@ -1322,6 +1336,21 @@ std::string GlslEmitter::VaryingName(SignatureElement const& element, bool verte
     if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) c = '_';
   }
   return (vertexInput ? "in_" : "vs_") + name + std::to_string(element.semanticIndex);
+}
+
+int GlslEmitter::GeometryInputVertexCount() const {
+  for (auto const& instruction : _program.instructions) {
+    if (instruction.opcode != OP_DCL_GS_INPUT_PRIMITIVE) continue;
+    switch (instruction.controls & 0x3fu) {
+      case 1: return 1;  // points
+      case 2: return 2;  // lines
+      case 3: return 3;  // triangles
+      case 6: return 4;  // lines with adjacency
+      case 7: return 6;  // triangles with adjacency
+      default: return 0;
+    }
+  }
+  return 0;
 }
 
 // dcl_input_ps carries the interpolation mode in its opcode controls. Getting
@@ -1718,13 +1747,32 @@ bool GlslEmitter::BuildSignatures() {
     return false;
   }
   if (isCompute) return true;  // compute has no signature; see BuildStageDeclarations
-  if (isGeometry && !Require(320, "a geometry shader")) return false;
+  if (isGeometry && !GeometryFunction() && !Require(320, "a geometry shader")) return false;
+  if (GeometryFunction()) {
+    if (!isGeometry) {
+      Fail("geometry function mode on a program that is not a geometry program");
+      return false;
+    }
+    _gsInputVertices = GeometryInputVertexCount();
+    if (_gsInputVertices != 1 && _gsInputVertices != 3) {
+      Fail("only point and triangle geometry programs can run inside the vertex stage");
+      return false;
+    }
+  }
+  if (VertexFunction() && !isVertex) {
+    Fail("vertex function mode on a program that is not a vertex program");
+    return false;
+  }
 
   for (auto const& element : _program.inputSignature) {
     switch (element.systemValueType) {
       case kSvUndefined:
         break;
       case kSvPosition:
+        if (GeometryFunction()) {
+          _declarations += "vec4 vivify_gi_Position[" + std::to_string(_gsInputVertices) + "];\n";
+          continue;
+        }
         if (isPixel || isGeometry) continue;  // gl_FragCoord / gl_in[].gl_Position
         Fail("a vertex program declares SV_Position as an input");
         return false;
@@ -1739,8 +1787,9 @@ bool GlslEmitter::BuildSignatures() {
       case kSvRenderTargetArrayIndex:
         // The eye index in PC single-pass instanced stereo. It is a built-in
         // here too -- gl_ViewID_OVR under multiview, eye 0 otherwise -- bound
-        // in the prologue.
-        if (isPixel) continue;
+        // in the prologue. A geometry program run inside the vertex stage
+        // (function mode) reads it the same way: the eye is the view.
+        if (isPixel || GeometryFunction()) continue;
         Fail("input semantic '" + element.semanticName +
              "' is SV_RenderTargetArrayIndex outside a pixel program");
         return false;
@@ -1751,6 +1800,14 @@ bool GlslEmitter::BuildSignatures() {
         return false;
     }
     std::string const name = VaryingName(element, isVertex);
+    if (GeometryFunction()) {
+      _declarations += "vec4 vivify_gi_" + SemanticSuffix(name) + "[" + std::to_string(_gsInputVertices) + "];\n";
+      continue;
+    }
+    if (VertexFunction()) {
+      _declarations += "vec4 vivify_vi_" + SemanticSuffix(name) + ";\n";
+      continue;
+    }
     if (isGeometry) {
       // A geometry shader reads its inputs per vertex, so every varying is an
       // array sized by the input primitive.
@@ -1783,6 +1840,8 @@ bool GlslEmitter::BuildSignatures() {
       case kSvUndefined:
         break;
       case kSvPosition:
+        if (VertexFunction()) _declarations += "vec4 vivify_vo_Position;\n";
+        if (GeometryFunction()) _declarations += "vec4 vivify_go_Position;\n";
         continue;  // gl_Position
       case kSvTarget:
         break;
@@ -1800,6 +1859,13 @@ bool GlslEmitter::BuildSignatures() {
           // prologue so the program's eye maths agrees with them.
           _writesRTArrayIndex = true;
           _stereoInstanced = true;
+          _declarations += "vec4 vivify_RTArrayIndexOut;\n";
+          continue;
+        }
+        if (GeometryFunction()) {
+          // In the vertex stage the views do the routing, as for a vertex
+          // program's SPI layer write: the value lands in a dummy.
+          _writesRTArrayIndex = true;
           _declarations += "vec4 vivify_RTArrayIndexOut;\n";
           continue;
         }
@@ -1823,6 +1889,16 @@ bool GlslEmitter::BuildSignatures() {
       _declarations += "layout(location = " + std::to_string(element.registerIndex) +
                        ") out vec4 " + element.semanticName +
                        std::to_string(element.semanticIndex) + ";\n";
+      continue;
+    }
+    if (VertexFunction()) {
+      _declarations += "vec4 vivify_vo_" + SemanticSuffix(VaryingName(element, false)) + ";\n";
+      continue;
+    }
+    if (GeometryFunction()) {
+      std::string const suffix = SemanticSuffix(VaryingName(element, false));
+      _declarations += "out vec4 vs_" + suffix + ";\nvec4 vivify_go_" + suffix + ";\n";
+      _gsOutputs.push_back(suffix);
       continue;
     }
     _declarations += "out vec4 " + VaryingName(element, false) + ";\n";
@@ -1894,6 +1970,7 @@ bool GlslEmitter::BuildStageDeclarations() {
           Fail("a geometry shader input primitive GLSL ES has no layout for");
           return false;
         }
+        if (GeometryFunction()) break;
         _declarations += "layout(" + std::string(primitive) + ") in;\n";
         break;
       }
@@ -1909,6 +1986,9 @@ bool GlslEmitter::BuildStageDeclarations() {
           Fail("a geometry shader output topology GLSL ES has no layout for");
           return false;
         }
+        _gsOutputTopology = static_cast<int>(instruction.controls & 0x3fu);
+        _gsMaxVertices = static_cast<int>(_program.maxOutputVertexCount);
+        if (GeometryFunction()) break;
         _declarations += "layout(" + std::string(topology) + ", max_vertices = " +
                          std::to_string(_program.maxOutputVertexCount == 0
                                             ? 1u
@@ -1916,6 +1996,10 @@ bool GlslEmitter::BuildStageDeclarations() {
         break;
       }
       case OP_DCL_GS_INSTANCE_COUNT:
+        if (GeometryFunction() && !instruction.extra.empty() && instruction.extra[0] > 1) {
+          Fail("an instanced geometry program cannot run inside the vertex stage");
+          return false;
+        }
         if (!instruction.extra.empty() && instruction.extra[0] > 1) {
           _declarations += "layout(invocations = " + std::to_string(instruction.extra[0]) + ") in;\n";
         }
@@ -2008,9 +2092,14 @@ std::string GlslEmitter::RegisterName(Operand const& operand) {
         } else {
           vertex = std::to_string(vertexPart.immediate);
         }
+        if (GeometryFunction()) {
+          if (name == "gl_in") return "vivify_gi_Position[" + vertex + "]";
+          return "vivify_gi_" + SemanticSuffix(name) + "[" + vertex + "]";
+        }
         if (name == "gl_in") return "gl_in[" + vertex + "].gl_Position";
         return name + "[" + vertex + "]";
       }
+      if (VertexFunction()) return "vivify_vi_" + SemanticSuffix(name);
       return name;
     }
     case kOperandOutput: {
@@ -2026,7 +2115,10 @@ std::string GlslEmitter::RegisterName(Operand const& operand) {
         return {};
       }
       switch (element->systemValueType) {
-        case kSvPosition: return "gl_Position";
+        case kSvPosition:
+          if (VertexFunction()) return "vivify_vo_Position";
+          if (GeometryFunction()) return "vivify_go_Position";
+          return "gl_Position";
         case kSvDepth:
         case kSvDepthGreaterEqual:
         case kSvDepthLessEqual: return "gl_FragDepth";
@@ -2038,6 +2130,8 @@ std::string GlslEmitter::RegisterName(Operand const& operand) {
       if (_program.stage == Stage::Pixel) {
         return element->semanticName + std::to_string(element->semanticIndex);
       }
+      if (VertexFunction()) return "vivify_vo_" + SemanticSuffix(VaryingName(*element, false));
+      if (GeometryFunction()) return "vivify_go_" + SemanticSuffix(VaryingName(*element, false));
       return VaryingName(*element, false);
     }
     case kOperandOutputDepth:
@@ -3651,16 +3745,20 @@ bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
     // ---- geometry shader output ---------------------------------------------
     case OP_EMIT:
     case OP_EMIT_STREAM:
-      Line("EmitVertex();");
+      _gsEmits++;
+      Line(GeometryFunction() ? "vivify_emit();" : "EmitVertex();");
       break;
     case OP_CUT:
     case OP_CUT_STREAM:
-      Line("EndPrimitive();");
+      // Inside the vertex stage there is no strip to end: the caller builds
+      // the triangles from where each emit falls (GeometryEmulation).
+      Line(GeometryFunction() ? "// cut" : "EndPrimitive();");
       break;
     case OP_EMITTHENCUT:
     case OP_EMITTHENCUT_STREAM:
-      Line("EmitVertex();");
-      Line("EndPrimitive();");
+      _gsEmits++;
+      Line(GeometryFunction() ? "vivify_emit();" : "EmitVertex();");
+      Line(GeometryFunction() ? "// cut" : "EndPrimitive();");
       break;
 
     case OP_ABORT:
@@ -3848,6 +3946,10 @@ GlslResult GlslEmitter::Run() {
                     ? "ivec4 vRTArrayIndex = ivec4(int(gl_ViewID_OVR));"
                     : "ivec4 vRTArrayIndex = ivec4(0);");
   }
+  if (GeometryFunction() && (_usedPrimitiveID || _usedGsInstanceID)) {
+    result.error = "a geometry program that reads its primitive or instance ID cannot run inside the vertex stage";
+    return result;
+  }
   if (_usedPrimitiveID) addPrologue("ivec4 vPrimitiveID = ivec4(gl_PrimitiveID);");
   if (_usedSampleIndex) addPrologue("ivec4 vSampleIndex = ivec4(gl_SampleID);");
   if (_usedGsInstanceID) {
@@ -3885,6 +3987,39 @@ GlslResult GlslEmitter::Run() {
       immediateBuffer += row + 1 == rows ? ")\n" : "),\n";
     }
     immediateBuffer += ");\n";
+  }
+
+  if (_options.functionMode != GlslOptions::FunctionMode::None) {
+    // Subroutines move the registers to file scope, where a second program
+    // composed into the same source would collide with them.
+    if (!_functions.empty()) {
+      result.error = "a program with subroutines cannot be composed into another stage";
+      return result;
+    }
+    std::string source = _declarations + immediateBuffer;
+    if (GeometryFunction()) source += "int vivify_emitIndex;\nint vivify_wantEmit;\n";
+    source += kFunctionDeclarationsEnd;
+    if (GeometryFunction()) {
+      source += "void vivify_emit() {\n  if (vivify_emitIndex == vivify_wantEmit) {\n"
+                "    gl_Position = vivify_go_Position;\n";
+      for (auto const& suffix : _gsOutputs) source += "    vs_" + suffix + " = vivify_go_" + suffix + ";\n";
+      source += "  }\n  vivify_emitIndex++;\n}\n";
+    }
+    source += GeometryFunction() ? "void vivify_gs_main() {\n" : "void vivify_vs_main() {\n";
+    source += prologue;
+    source += _body;
+    source += "}\n";
+    result.ok = true;
+    result.source = std::move(source);
+    result.uniforms = _uniformNames;
+    result.samplers = _samplerList;
+    result.version = _version;
+    result.stereoInstanced = _stereoInstanced;
+    result.geometryInputVertices = _gsInputVertices;
+    result.geometryMaxVertices = _gsMaxVertices;
+    result.geometryOutputTopology = _gsOutputTopology;
+    result.geometryEmitInstructions = _gsEmits;
+    return result;
   }
 
   std::string source;

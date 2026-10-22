@@ -10,6 +10,9 @@
 #include <mutex>
 #include "VivifyTypes.hpp"
 #include "VivifyPerfStats.hpp"
+#include "VivifyGeometryEmulation.hpp"
+#include <map>
+#include <tuple>
 #include "UnityEngine/Rendering/CommandBuffer.hpp"
 #include "UnityEngine/AssetBundleCreateRequest.hpp"
 #include "UnityEngine/AssetBundleRequest.hpp"
@@ -583,6 +586,15 @@ private:
   void WritePerfSummary();
   void UpdatePerfPrefabCounts();
   void CountPrefabComponents(InstantiatePrefabData& data);
+  // Geometry-shader emulation at load (naomi.5, VivifyGeometryRuntime.cpp).
+  void PrepareGeometryEmulation(std::string const& bundlePath);
+  void ReleaseGeometryEmulation();
+  UnityEngine::Mesh* EmulationMeshFor(UnityEngine::Mesh* source, GeometryEmulation::Plan const& plan,
+                                      std::string& reason);
+  UnityEngine::Material* StandInCopyFor(UnityEngine::Material* material);
+  std::map<std::tuple<UnityEngine::Mesh*, int, int>, UnityEngine::Mesh*> _emulationMeshes;
+  std::unordered_set<UnityEngine::Mesh*> _emulationMeshSet;
+  std::unordered_map<UnityEngine::Material*, UnityEngine::Material*> _emulationStandIns;
   void WritePerfLabel(char* buffer, size_t size) const;
   PerfStats _perf;
   bool _perfActive = false;
@@ -651,4 +663,10 @@ private:
   std::string _pendingDownloadLevelPath;
   std::string _pendingDownloadPcFallback;
 };
+
+// The shaders a converted bundle's geometry programs were emulated for, kept
+// beside the bundle (VivifyGeometryRuntime.cpp).
+void WriteGeometryEmulationList(std::string const& bundlePath, std::vector<std::string> const& shaders);
+std::map<std::string, GeometryEmulation::Plan> ReadGeometryEmulationList(std::string const& bundlePath);
+
 }

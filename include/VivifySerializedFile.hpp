@@ -372,6 +372,17 @@ struct TextureObject {
   size_t bodySize = 0;
 };
 
+// One Mesh object, as far as making it readable on device needs (geometry-
+// shader emulation rebuilds meshes at load, which needs their CPU copy). The
+// same single serialized bool as a texture's, written where it sits.
+struct MeshObject {
+  int64_t pathID = 0;
+  std::string name;
+  bool isReadablePresent = false;
+  size_t isReadableFileOffset = 0;
+  bool isReadable = false;
+};
+
 // True for the block-compressed formats no Quest GPU can sample, which are the
 // only ones worth making readable: an ETC2 or RGBA32 texture already works.
 bool TextureFormatNeedsDecodingOnQuest(int32_t unityTextureFormat);
@@ -532,6 +543,7 @@ struct FileReport {
   int32_t textureObjectCount = 0;
   std::vector<ShaderObject> shaders;
   std::vector<TextureObject> textures;
+  std::vector<MeshObject> meshes;
   std::string unityVersion;
   std::string message;
 };

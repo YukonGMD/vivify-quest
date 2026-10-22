@@ -1,9 +1,11 @@
 #include "VivifyBundleConvert.hpp"
 #include "VivifySerializedFile.hpp"
 #include "VivifyDxbc.hpp"
+#include "VivifyGeometryEmulation.hpp"
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <cstdio>
@@ -1484,6 +1486,9 @@ struct LinkedShader {
   int stereoRemapped = 0;
   int stereoSplit = 0;
   int geometryDropped = 0;  // variants linked without their geometry stage
+  int geometryEmulated = 0;  // variants whose geometry program runs in the vertex stage
+  std::string emulationPlan;     // "triangle 3" / "point 7" when emulated
+  std::string emulationRefusal;  // why a known geometry shader was not emulated
   int variantsSkipped = 0;  // program refs a Quest never selects, left alone
   int programsTranslated = 0;
   std::set<std::string> variantReasons;  // why individual variants stayed on DirectX
@@ -1755,6 +1760,81 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
     return cached->second.ok ? &cached->second : nullptr;
   };
 
+  // Geometry-shader emulation (naomi.5): the same programs translated as
+  // functions, and composed into one vertex program per variant.
+  std::map<std::tuple<uint32_t, bool, int>, Vivify::Dxbc::GlslResult> functionTranslated;
+  auto translateFunction = [&](ParsedProgramRef const& ref, bool multiview,
+                               Vivify::Dxbc::GlslOptions::FunctionMode mode) -> Vivify::Dxbc::GlslResult const* {
+    auto const key = std::make_tuple(ref.blobIndex, multiview, static_cast<int>(mode));
+    auto cached = functionTranslated.find(key);
+    if (cached == functionTranslated.end()) {
+      Vivify::Dxbc::GlslResult result;
+      auto at = entryAt.find(ref.blobIndex);
+      if (at == entryAt.end() || decoded.programs[at->second].raw ||
+          !IsTranslatableDirectXProgram(decoded.programs[at->second].programType)) {
+        result.error = "entry " + std::to_string(ref.blobIndex) + " is not DirectX bytecode";
+      } else {
+        auto const& program = decoded.programs[at->second];
+        auto const reflection = ReflectionFrom(ref.parameters);
+        Vivify::Dxbc::GlslOptions options;
+        options.multiview = multiview;
+        options.reflection = &reflection;
+        options.functionMode = mode;
+        result = Vivify::Dxbc::TranslateDxbcToGlsl(program.code.empty() ? nullptr : program.code.data(),
+                                                   program.code.size(), options);
+      }
+      cached = functionTranslated.emplace(key, std::move(result)).first;
+    }
+    return &cached->second;
+  };
+  std::optional<Vivify::GeometryEmulation::Plan> shaderPlan;
+  std::string emulationError;
+  auto emulate = [&](ParsedProgramRef const& vertex, ParsedProgramRef const* fragment,
+                     ParsedProgramRef const& geometry, std::string& source, int& version) {
+    auto const at = entryAt.find(geometry.blobIndex);
+    if (at == entryAt.end()) {
+      emulationError = "its geometry entry is not in the store";
+      return false;
+    }
+    auto const& code = decoded.programs[at->second].code;
+    auto const parsed = Vivify::Dxbc::ParseProgram(code.empty() ? nullptr : code.data(), code.size());
+    std::string reason;
+    auto const plan = Vivify::GeometryEmulation::PlanFor(parsed, reason);
+    if (!plan) {
+      emulationError = reason;
+      return false;
+    }
+    if (shaderPlan && (shaderPlan->mode != plan->mode || shaderPlan->outputVertices != plan->outputVertices)) {
+      emulationError = "its geometry variants do not all have the same shape";
+      return false;
+    }
+    bool const multiview = multiviewRef[indexOf(vertex)];
+    auto const* vs = translateFunction(vertex, multiview, Vivify::Dxbc::GlslOptions::FunctionMode::VertexFunction);
+    auto const* gs =
+        translateFunction(geometry, multiview, Vivify::Dxbc::GlslOptions::FunctionMode::GeometryFunction);
+    if (!vs->ok || !gs->ok) {
+      emulationError = !vs->ok ? "vertex program: " + vs->error : "geometry program: " + gs->error;
+      return false;
+    }
+    auto const* fs = fragment != nullptr ? translate(*fragment) : nullptr;
+    if (fragment != nullptr && fs == nullptr) {
+      emulationError = "its fragment program did not translate";
+      return false;
+    }
+    auto const composed = Vivify::GeometryEmulation::Compose(*vs, *gs, *plan, multiview);
+    if (!composed.ok) {
+      emulationError = composed.error;
+      return false;
+    }
+    Vivify::Dxbc::GlslResult fused;
+    fused.ok = true;
+    fused.source = composed.source;
+    fused.version = composed.version;
+    source = LinkStages(fused, fs, nullptr, version);
+    shaderPlan = plan;
+    return true;
+  };
+
   // Variants a Quest never selects, skipped when asked: their entries stay
   // DirectX, so Unity drops them instead of loading and compiling them. In
   // 743Aether that is 573 of 774 program references:
@@ -1819,6 +1899,34 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
   for (auto const& stage : byStage) {
     for (auto const& [key, _] : stage) keys.insert(key);
   }
+
+  // A known geometry shader is emulated only if every one of its geometry
+  // variants can be; otherwise it keeps its current treatment whole, since
+  // the mod rebuilds an object's mesh for the shader, not for one variant.
+  bool emulating = false;
+  if (conversionOptions.emulateGeometry && Vivify::GeometryEmulation::IsKnownShader(shader.name)) {
+    bool any = false;
+    bool all = true;
+    for (auto const& key : keys) {
+      for (auto const* vertex : byStage[0][key]) {
+        auto const* geometry = BestMatch(byStage[2][key], *vertex);
+        if (geometry == nullptr) continue;
+        any = true;
+        std::string source;
+        int version = 300;
+        if (!emulate(*vertex, BestMatch(byStage[1][key], *vertex), *geometry, source, version)) {
+          all = false;
+          break;
+        }
+      }
+      if (!all) break;
+    }
+    emulating = any && all;
+    if (any && !all) out.emulationRefusal = emulationError;
+    if (!any) out.emulationRefusal = "no variant has a geometry program";
+    if (!emulating) shaderPlan.reset();
+  }
+
   for (auto const& key : keys) {
     auto const& vertices = byStage[0][key];
     auto const& fragments = byStage[1][key];
@@ -1845,10 +1953,16 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
     // pass without that stage: effects built on it (exploding triangles,
     // wireframes) come out as the plain mesh with the pass's own shading.
     // Fragment inputs only the geometry stage wrote read as zero.
+    bool emulatedVariant = false;
     auto linkDroppingGeometry = [&](ParsedProgramRef const& vertex, ParsedProgramRef const* fragment,
                                     ParsedProgramRef const* geometry, std::string& source, int& version,
                                     bool& dropped) {
       dropped = false;
+      if (emulating && geometry != nullptr) {
+        if (!emulate(vertex, fragment, *geometry, source, version)) return false;
+        emulatedVariant = true;
+        return true;
+      }
       if (link(vertex, fragment, geometry, source, version)) return true;
       if (geometry == nullptr || !conversionOptions.dropUntranslatableGeometry) return false;
       auto const* vs = translate(vertex);
@@ -1873,6 +1987,8 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
       }
       out.variantsLinked++;
       if (dropped) out.geometryDropped++;
+      if (emulatedVariant) out.geometryEmulated++;
+      emulatedVariant = false;
     }
     for (auto const* stageList : {&fragments, &geometries}) {
       for (auto const* ref : *stageList) {
@@ -1881,6 +1997,9 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
         bool dropped = false;
         auto const* vertex = BestMatch(vertices, *ref);
         if (stageList == &geometries) {
+          // Emulated: the geometry entry stays DirectX, so Unity attaches no
+          // geometry stage; its work is in the vertex program.
+          if (emulating) continue;
           // A geometry entry only takes a program that keeps its stage; one
           // that dropped it is left on DirectX, so Unity skips the stage.
           if (vertex != nullptr && link(*vertex, BestMatch(fragments, *ref), ref, source, version)) {
@@ -1940,6 +2059,10 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
     return out;
   }
   out.converted = true;
+  if (emulating && shaderPlan && out.geometryEmulated > 0) {
+    out.emulationPlan = std::string(Vivify::GeometryEmulation::ModeName(shaderPlan->mode)) + " " +
+                        std::to_string(shaderPlan->outputVertices);
+  }
   out.body = std::move(rebuilt.body);
   return out;
 }
@@ -2010,6 +2133,23 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
       conversion.texturesMarkedReadable++;
     }
 
+    // Geometry-shader emulation rebuilds meshes at load, which needs their CPU
+    // copy: the same one-byte flag, for every mesh of a file that holds a
+    // shader it may emulate.
+    if (options.emulateGeometry) {
+      bool known = false;
+      for (auto const& shader : file.shaders) known |= Vivify::GeometryEmulation::IsKnownShader(shader.name);
+      if (known) {
+        for (auto const& mesh : file.meshes) {
+          if (!mesh.isReadablePresent || mesh.isReadable) continue;
+          size_t const at = nodes[index].offset + mesh.isReadableFileOffset;
+          if (at >= data.size() || data[at] > 1) continue;
+          data[at] = 1;
+          conversion.meshesMarkedReadable++;
+        }
+      }
+    }
+
     if (file.shaders.empty()) continue;
 
     std::vector<SerializedFileParse::ObjectEdit> edits;
@@ -2031,6 +2171,11 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
         conversion.stereoVariantsRemapped += linked.stereoRemapped;
         conversion.stereoVariantsSplit += linked.stereoSplit;
         conversion.geometryStagesDropped += linked.geometryDropped;
+        conversion.geometryStagesEmulated += linked.geometryEmulated;
+        if (!linked.emulationPlan.empty()) conversion.geometryEmulated.push_back(shader.name + " " + linked.emulationPlan);
+        if (!linked.emulationRefusal.empty()) {
+          conversion.geometryEmulationRefusals.push_back(shader.name + ": " + linked.emulationRefusal);
+        }
         conversion.variantsSkipped += linked.variantsSkipped;
         for (auto const& reason : linked.variantReasons) {
           if (conversion.variantRefusals.size() >= kMaxLoggedRefusals * 2) break;
