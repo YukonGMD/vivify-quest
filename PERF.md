@@ -269,3 +269,29 @@ Per-frame allocations and lookups found in our own code (naomi.4 audit):
 ### What the naomi.3 stalls were not
 
 The six stalls of 1.0–2.1 s at song 61–82 s were in the drop section (32–108 s). Vivify's events in that window are 44 `AssignPathAnimation` and one `AssignObjectPrefab`: no prefab instantiation, blit, material change or camera change. The same difficulty, played five times in that session, stalled in only one play, and an earlier play ran past 82 s without a stall, so it was not first use of a shader or anything else in the content itself. Most likely: garbage collections triggered by note and debris replacement churn in a heap that had grown over ten plays (moderate confidence). The `[PERF]` summary now records the collections during each of the worst frames, which settles it.
+
+### Aether: shader cost by section (naomi.5, analysis only)
+
+Score = estimated screen coverage x fragment cost. Coverage is each renderer's world bounding sphere, from the bundle's transforms in their authored pose (no animation, no occlusion), as a share of a 100-degree view from the player, summed per shader; a sky around the player counts as 1 screen. Cost is the statement count of the shader's most expensive translated fragment program (loops count once, so looping shaders cost more than shown). For opaque scenery the coverage is overdraw *potential*: early depth testing rejects most hidden pixels before shading, so its real cost is mostly draw calls and vertices. Transparent effects really pay for every layer.
+
+| Section (song time) | Top shaders (renderers, coverage in screens, cost) |
+|---|---|
+| intro (0–32 s) | SimpleTerrainFog (713, 61.0, 72); RingArtifact (4, 3.7, 65); StarFlare (2, 1.2, 142) |
+| drop (32–108 s) | StarFlare (22, 12.2, 142); RingArtifact (33, 22.8, 65); GlowingWisp (18, 12.6, 79); Star (30, 6.0, 156); RainbowSkybox (3, 3.0, 224); RainbowSkyboxFromNormals (3, 3.0, 218) |
+| ambient (108–154 s) | GlassTerrain (865, 55.0, 92); TriangleExplosion (36, 10.8, 218); StarFlare (14, 5.7, 142); Wireframe (243, 12.6, 25) |
+| bridge (154–211 s) | Gemstone (412, 39.5, 179, 9 loops); StarFlare (12, 7.6, 142); RainbowSkybox (1, 1.0, 224) |
+| buildup (211–237 s) | **CrackedRainbowSky (2, 2.0, 1,372, 6 loops)**; SimpleTerrainFog (190, 8.7, 72); Gemstone (10, 2.5, 179) |
+| outro (237–272 s) | StarFlare (12, 10.2, 142); Star (12, 8.4, 156); SimpleTerrainFog (829, 18.1, 72); RingArtifact (12, 9.3, 65) |
+
+What that suggests: the drop and outro are dominated by transparent VFX overdraw (flares, rings, wisps); the intro, ambient and bridge by thousands of opaque scenery draws (instancing, item 1 above); the buildup by one full-screen sky.
+
+**Full-screen procedural skies** (CrackedRainbowSky in the buildup, RainbowSkybox and RainbowSkyboxFromNormals in the drop and bridge, HorizonSkybox). Facts from the bundle: all four are opaque, write depth (ZWrite On), test it (LEqual) and do not blend; CrackedRainbowSky's colour is a function of the object-space position on the sky mesh, `_Time` and material values only, and it carries no queue tag, so it draws in the opaque queue (2000). Unity sorts opaque objects front to back by their bounds' distance, and a sky sphere is centred on the player, so it is likely drawn first and every one of its pixels is shaded before the terrain covers part of it.
+
+| Option | Look | Expected gain | Notes |
+|---|---|---|---|
+| Draw opaque full-screen skies after the rest of the opaque queue (render queue 2449) | **Same image.** For an opaque, depth-writing, depth-tested, unblended surface, the depth test decides visibility whatever the order; anything beyond the sky sphere is hidden either way. Only a surface at exactly the sky's depth could differ. | The fraction of the sky the scenery covers, times about 1,370 operations per pixel, per eye. Large in the buildup | Low effort: a queue change on materials whose shader matches those facts (checked at load). Verify with a GPU capture and OVR Metrics GPU time, and an A/B screenshot |
+| Translator: emit counted loops as `for` loops (the 3x3x3 Voronoi loops are `while (true) { if (i > 1) break; ... i++; }` today) | **Same results**, operation for operation | Driver can unroll; perhaps 1.3–2x on loop-heavy shaders (Voronoi skies, Gemstone, TriangleExplosion). Unmeasured | Medium effort, all converted maps. Verify bit-exact output on host, then GPU time |
+| Bake the sky into a cubemap (it depends on direction and time only), refreshed every frame | Softer: a 512 px face is about 0.18 degrees per texel against the display's about 0.05, and CrackedRainbowSky's cell borders are sharp | About 4x fewer shaded pixels than full screen, even refreshing every frame | Off-by-default setting only |
+| The same, refreshed every few frames | Softer, and its animation steps | Much larger | Off-by-default setting only |
+| Render the sky at lower resolution and upscale | Softer borders | Proportional to the pixel reduction | Off-by-default setting only |
+| `mediump` | **Changes the look badly**: the shader's hash is `fract(sin(x) * 43758.5)`, which falls apart in 16-bit floats | About 2x ALU where it holds | Not recommended for these shaders |
