@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -86,5 +87,19 @@ bool ExpandTriangles(std::vector<std::vector<uint32_t>> const& submeshes, uint32
                      std::string& reason);
 bool ExpandPoints(std::vector<std::vector<uint32_t>> const& submeshes, uint32_t vertexCount, int stripVertices,
                   Expansion& out, std::string& reason);
+
+// The list of emulated shaders the converter writes beside a bundle
+// ("<bundle>.geometry"): a format line, then one "<shader name> <mode>
+// <vertices>" line per shader. The format line marks a conversion whose
+// readable flags can be trusted (naomi.6: 19's flagged streamed meshes, and
+// rebuilding one crashed); a list without it belongs to an older conversion,
+// whose objects all keep the stand-in.
+inline constexpr char const* kEmulationListHeader = "# vivify-geometry 2";
+std::string FormatEmulationList(std::vector<std::string> const& shaderLines);
+struct EmulationList {
+  bool current = false;  // has this build's format line
+  std::map<std::string, Plan> plans;
+};
+EmulationList ParseEmulationList(std::string_view text);
 
 }  // namespace Vivify::GeometryEmulation

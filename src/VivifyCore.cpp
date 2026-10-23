@@ -624,7 +624,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
   _mainCameraPropsDirty = false;
 
   if (_mainBundle != nullptr && !UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
-    _mainBundle = nullptr;
+    ReleaseMainBundle();
     _preloadedBundlePath.clear();
   }
   _currentBeatmapData = nullptr;

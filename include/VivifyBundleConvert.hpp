@@ -176,6 +176,13 @@ struct ShaderConversion {
   std::vector<std::string> geometryEmulated;
   std::vector<std::string> geometryEmulationRefusals;
   int meshesMarkedReadable = 0;
+  // naomi.6: streamed meshes left unreadable (Unity keeps no CPU copy of
+  // them), streamed meshes whose readable flag was cleared, and meshes left
+  // as they were: not read to their end, or uncompressed with vertices but no
+  // vertex bytes anywhere.
+  int meshesLeftStreamed = 0;
+  int meshesReadableCleared = 0;
+  int meshesUnread = 0;
   // keepInstancingVariants: instanced variants linked, and shaders that have
   // none (their objects are drawn one at a time even with instancing on).
   int instancingVariantsLinked = 0;

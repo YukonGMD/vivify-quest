@@ -614,13 +614,25 @@ private:
   // Geometry-shader emulation at load (naomi.5, VivifyGeometryRuntime.cpp).
   void PrepareGeometryEmulation(std::string const& bundlePath);
   void ReleaseGeometryEmulation();
+  // Unloads the main bundle with what was made for it (naomi.6).
+  void ReleaseMainBundle();
   UnityEngine::Mesh* EmulationMeshFor(UnityEngine::Mesh* source, GeometryEmulation::Plan const& plan,
                                       std::string& reason);
   UnityEngine::Material* StandInCopyFor(UnityEngine::Material* material);
   void ApplySceneryInstancing();
-  std::map<std::tuple<UnityEngine::Mesh*, int, int>, UnityEngine::Mesh*> _emulationMeshes;
-  std::unordered_set<UnityEngine::Mesh*> _emulationMeshSet;
-  std::unordered_map<UnityEngine::Material*, UnityEngine::Material*> _emulationStandIns;
+  // Rebuilt meshes and stand-in copies, keyed by the instance ID of what they
+  // were made from (naomi.6). The game unloads a bundle's unused assets between
+  // levels and Unity loads them again for the next start under new wrappers,
+  // while a freed wrapper's address can come back as another object; an
+  // instance ID is never reused. Each goes with its prefab in that unload, as
+  // it did in naomi.5, and SafePtrUnity makes one that went read as null.
+  std::map<std::tuple<int, int, int>, SafePtrUnity<UnityEngine::Mesh>> _emulationMeshes;  // source, mode, vertices
+  std::unordered_set<int> _emulationMeshSet;  // the rebuilt meshes
+  std::unordered_map<int, SafePtrUnity<UnityEngine::Material>> _emulationStandIns;  // by original
+  // The list that came with the main bundle, read when the bundle was loaded:
+  // a conversion can rewrite the files beside a bundle that stays loaded
+  // (naomi.6).
+  GeometryEmulation::EmulationList _emulationList;
   void WritePerfLabel(char* buffer, size_t size) const;
   PerfStats _perf;
   bool _perfActive = false;
@@ -691,8 +703,9 @@ private:
 };
 
 // The shaders a converted bundle's geometry programs were emulated for, kept
-// beside the bundle (VivifyGeometryRuntime.cpp).
-void WriteGeometryEmulationList(std::string const& bundlePath, std::vector<std::string> const& shaders);
-std::map<std::string, GeometryEmulation::Plan> ReadGeometryEmulationList(std::string const& bundlePath);
+// beside the bundle (VivifyGeometryRuntime.cpp). False, logged, when the list
+// could not be written or removed.
+bool WriteGeometryEmulationList(std::string const& bundlePath, std::vector<std::string> const& shaders);
+GeometryEmulation::EmulationList ReadGeometryEmulationList(std::string const& bundlePath);
 
 }

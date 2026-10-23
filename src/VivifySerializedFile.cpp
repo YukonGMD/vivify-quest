@@ -1357,32 +1357,105 @@ TextureObject ReadTextureObject(uint8_t const* data, size_t size, size_t fileOff
 MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, SerializedTypeInfo const& type) {
   MeshObject mesh;
   if (type.nodes.empty()) return mesh;
+  auto u32At = [&](size_t at) -> uint32_t {
+    uint32_t value = 0;
+    if (at + 4 <= size) std::memcpy(&value, data + at, 4);
+    return value;
+  };
   Reader reader(data, size);
   for (size_t child : ChildIndices(type.nodes, 0)) {
     if (!reader.ok()) break;
-    std::string const name = NodeName(type, type.nodes[child]);
+    TypeTreeNode const& node = type.nodes[child];
+    std::string const name = NodeName(type, node);
     size_t const before = reader.position();
+
+    if (name == "m_VertexData") {
+      for (size_t sub : ChildIndices(type.nodes, child)) {
+        if (!reader.ok()) break;
+        std::string const subName = NodeName(type, type.nodes[sub]);
+        size_t const subBefore = reader.position();
+        WalkNode(reader, type, sub, nullptr, 2);
+        if (!reader.ok()) break;
+        size_t const consumed = reader.position() - subBefore;
+        if (subName == "m_VertexCount" && consumed == 4) {
+          mesh.vertexCount = u32At(subBefore);
+        } else if (subName == "m_DataSize" && consumed >= 4) {
+          // A byte array: its count, then the bytes. A walk that gave up on a
+          // bad count consumed less than the count says.
+          uint32_t const count = u32At(subBefore);
+          if (consumed >= 4 + static_cast<size_t>(count)) {
+            mesh.vertexDataSize = count;
+            mesh.vertexDataRead = true;
+          }
+        }
+      }
+      if ((node.metaFlag & kMetaFlagAlignBytes) != 0) reader.align4();
+      continue;
+    }
+
+    if (name == "m_StreamData") {
+      bool offsetRead = false;
+      bool sizeRead = false;
+      bool pathRead = false;
+      for (size_t sub : ChildIndices(type.nodes, child)) {
+        if (!reader.ok()) break;
+        TypeTreeNode const& subNode = type.nodes[sub];
+        std::string const subName = NodeName(type, subNode);
+        size_t const subBefore = reader.position();
+        WalkNode(reader, type, sub, nullptr, 2);
+        if (!reader.ok()) break;
+        size_t const consumed = reader.position() - subBefore;
+        if (subName == "offset") {
+          // 4 bytes in 2019, 8 from 2020.1. Only whether it was read matters.
+          offsetRead = (subNode.byteSize == 4 && consumed == 4) || (subNode.byteSize == 8 && consumed == 8);
+        } else if (subName == "size" && consumed == 4) {
+          mesh.streamSize = u32At(subBefore);
+          sizeRead = true;
+        } else if (subName == "path" && consumed >= 4) {
+          uint32_t const length = u32At(subBefore);
+          if (consumed >= 4 + static_cast<size_t>(length)) {
+            mesh.streamPathLength = length;
+            pathRead = true;
+          }
+        }
+      }
+      if ((node.metaFlag & kMetaFlagAlignBytes) != 0) reader.align4();
+      mesh.streamDataRead = reader.ok() && offsetRead && sizeRead && pathRead;
+      continue;
+    }
+
     WalkNode(reader, type, child, nullptr, 1);
-    if (reader.position() <= before) continue;
+    if (!reader.ok() || reader.position() <= before) continue;
     if (name == "m_Name" && before + 4 <= size) {
-      uint32_t length = 0;
-      std::memcpy(&length, data + before, 4);
+      uint32_t const length = u32At(before);
       if (length > 0 && length <= 256 && before + 4 + length <= size) {
         mesh.name.assign(reinterpret_cast<char const*>(data + before + 4), length);
       }
-    } else if (name == "m_IsReadable") {
-      if (type.nodes[child].byteSize == 1 && before < size) {
-        mesh.isReadablePresent = true;
-        mesh.isReadableFileOffset = fileOffset + before;
-        mesh.isReadable = data[before] != 0;
-      }
-      break;  // nothing after it is needed
+    } else if (name == "m_MeshCompression" && node.byteSize == 1) {
+      mesh.compression = data[before];
+    } else if (name == "m_IsReadable" && node.byteSize == 1) {
+      mesh.isReadablePresent = true;
+      mesh.isReadableFileOffset = fileOffset + before;
+      mesh.isReadable = data[before] != 0;
     }
   }
   return mesh;
 }
 
 }  // namespace
+
+bool MeshIsStreamed(MeshObject const& mesh) {
+  return mesh.streamSize != 0 || mesh.streamPathLength != 0;
+}
+
+bool MeshDataStaysInMemoryWhenReadable(MeshObject const& mesh) {
+  if (!mesh.isReadablePresent || !mesh.streamDataRead || MeshIsStreamed(mesh)) return false;
+  // An uncompressed mesh with vertices that are not inline has them nowhere.
+  if (mesh.compression == 0 && mesh.vertexCount > 0 && (!mesh.vertexDataRead || mesh.vertexDataSize == 0)) {
+    return false;
+  }
+  return true;
+}
 
 bool TextureFormatNeedsDecodingOnQuest(int32_t unityTextureFormat) {
   switch (unityTextureFormat) {

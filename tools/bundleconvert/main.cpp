@@ -130,7 +130,9 @@ int main(int argc, char** argv) {
                 c.stereoVariantsRemapped, c.stereoVariantsSplit, c.geometryStagesDropped, c.variantsSkipped);
     for (auto const& refusal : c.refusals) std::printf("refusal=%s\n", refusal.c_str());
     for (auto const& refusal : c.variantRefusals) std::printf("variantRefusal=%s\n", refusal.c_str());
-    std::printf("geometryEmulated=%d meshesReadable=%d\n", c.geometryStagesEmulated, c.meshesMarkedReadable);
+    std::printf("geometryEmulated=%d meshesReadable=%d meshesStreamedLeft=%d meshesCleared=%d meshesUnread=%d\n",
+                c.geometryStagesEmulated, c.meshesMarkedReadable, c.meshesLeftStreamed, c.meshesReadableCleared,
+                c.meshesUnread);
     std::printf("instancingVariants=%d\n", c.instancingVariantsLinked);
     for (auto const& shader : c.shadersWithoutInstancing) std::printf("noInstancing=%s\n", shader.c_str());
     for (auto const& shader : c.geometryEmulated) std::printf("emulatedShader=%s\n", shader.c_str());

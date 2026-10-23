@@ -2150,18 +2150,35 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
     }
 
     // Geometry-shader emulation rebuilds meshes at load, which needs their CPU
-    // copy: the same one-byte flag, for every mesh of a file that holds a
-    // shader it may emulate.
+    // copy: the same one-byte flag, for the meshes of a file that holds a
+    // shader it may emulate -- but only those Unity will actually keep in
+    // memory (naomi.6). A streamed mesh keeps no CPU copy whatever the flag
+    // says, so it stays unreadable and its objects keep the stand-in; one that
+    // is somehow flagged readable already is cleared. A mesh this cannot read
+    // to its end, or one with vertices stored nowhere, is left exactly as it
+    // was (the rebuild at load checks for the data itself).
     if (options.emulateGeometry) {
       bool known = false;
       for (auto const& shader : file.shaders) known |= Vivify::GeometryEmulation::IsKnownShader(shader.name);
       if (known) {
         for (auto const& mesh : file.meshes) {
-          if (!mesh.isReadablePresent || mesh.isReadable) continue;
+          if (!mesh.isReadablePresent) continue;
           size_t const at = nodes[index].offset + mesh.isReadableFileOffset;
           if (at >= data.size() || data[at] > 1) continue;
-          data[at] = 1;
-          conversion.meshesMarkedReadable++;
+          if (SerializedFileParse::MeshDataStaysInMemoryWhenReadable(mesh)) {
+            if (!mesh.isReadable) {
+              data[at] = 1;
+              conversion.meshesMarkedReadable++;
+            }
+          } else if (mesh.streamDataRead && SerializedFileParse::MeshIsStreamed(mesh)) {
+            conversion.meshesLeftStreamed++;
+            if (mesh.isReadable) {
+              data[at] = 0;
+              conversion.meshesReadableCleared++;
+            }
+          } else {
+            conversion.meshesUnread++;
+          }
         }
       }
     }
@@ -2293,7 +2310,8 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
   // Nothing to retarget and nothing translated means the bundle already runs
   // here; writing a byte-for-byte copy of it would only cost storage on the
   // headset and hide that fact from the caller.
-  if (retargeted == 0 && conversion.shadersTranslated == 0 && conversion.texturesMarkedReadable == 0) {
+  if (retargeted == 0 && conversion.shadersTranslated == 0 && conversion.texturesMarkedReadable == 0 &&
+      conversion.meshesMarkedReadable == 0 && conversion.meshesReadableCleared == 0) {
     conversion.status = Status::AlreadyAndroid;
     conversion.message =
         conversion.shadersRefused > 0

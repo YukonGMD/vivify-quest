@@ -54,10 +54,11 @@ Test builds report themselves as 0.14.25-naomi.N.
   Wireframes, exploding triangles and generated grass on converted maps are
   drawn with their geometry stage's maths run in the vertex stage, for known
   shaders: Swifter/TriangleExplosion and Mawntee Wireframe 3D-Noise (743
-  Aether) and Bytesized/Grass. Conversion makes the bundle's meshes readable,
-  and at level load each object drawn with one of these shaders gets a
-  rebuilt mesh. An object that cannot be rebuilt keeps its grey stand-in, and
-  the log says why. Changing the setting reconverts converted maps.
+  Aether) and Bytesized/Grass. Conversion makes the bundle's meshes readable
+  (from naomi.6, only those stored inline), and at level load each object
+  drawn with one of these shaders gets a rebuilt mesh. An object that cannot
+  be rebuilt keeps its grey stand-in, and the log says why. Changing the
+  setting reconverts converted maps.
 - **GPU Instancing For Scenery** (naomi.5, setting, experimental, off by
   default). A converted map's scenery keeps its GPU instancing, as on PC;
   notes, debris, sabers and trails keep it off. Changing it reconverts
@@ -71,6 +72,42 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **743 Aether crashed on every start with Emulate Geometry-Shader Effects
+  on** (naomi.6). Conversion flagged every mesh of the bundle readable, but
+  Unity keeps no copy in memory of a mesh it streams from the bundle's
+  `.resS` file, whatever that flag says; rebuilding the streamed NurbsPath
+  mesh at level load read from an empty buffer. Conversion now flags only
+  meshes stored inline, and the rebuild first asks Unity whether a mesh's
+  vertices and indices are in memory. Objects on a streamed mesh keep their
+  stand-in (in Aether the cracked paths, the tower and the custom-note
+  wireframes; all of Lifelike's meshes are streamed). A rebuilt mesh now has
+  at most 256k vertices (naomi.5 allowed 4M). The conversion version goes to
+  20, so every converted map is converted again once, by itself; no Force
+  Reconvert is needed. Crash-guard strikes recorded by earlier builds no
+  longer count, but a load that naomi.5 left unfinished, as Aether's crash
+  did, counts once: the first selection says so in a warning, and the first
+  load that finishes forgives it.
+- **Rebuilt meshes and stand-in copies could be handed to the wrong object on
+  a later start of the same map** (naomi.6). The game unloads a bundle's
+  unused assets between levels and loads them again as new objects; the
+  rebuilt meshes and stand-in copies were looked up by an address that could
+  by then belong to another object. They are now looked up by Unity's
+  instance ID. They are also released when another mod has unloaded the
+  bundle.
+- **A converted bundle's cache marker could describe the wrong conversion**
+  (naomi.6). The marker now records the settings a conversion started with,
+  not the ones in force when it ended; before, turning Emulate
+  Geometry-Shader Effects off while Convert All ran could leave a bundle
+  that counted as converted without it, and its emulated objects drew
+  nothing. The old marker is removed before a bundle is converted again, and
+  a new one is written only once the bundle and its geometry-emulation list
+  are both in place; a bundle whose list cannot be written fails to convert.
+  An interrupted conversion, or one done with Translate Shaders off, is
+  therefore never taken for a current one; before, turning Translate Shaders
+  back on could reuse the grey bundle. At level load the mesh rebuild follows
+  the list read when the bundle was loaded, so it still matches the bundle in
+  memory after a conversion rewrites the files beside it, or after the
+  setting is turned off.
 - Textures decoded to RGBA32 for a converted bundle were never destroyed and
   outlived the bundle; they are now freed when it unloads (naomi.5).
 

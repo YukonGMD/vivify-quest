@@ -129,7 +129,14 @@ namespace {
 //      a converted map's load counted against the map, and two put it into the
 //      grey untranslated fallback for good -- 0.14.23's Yoi Okashi, whose
 //      translation compiles and links cleanly
-constexpr int kBundleConversionVersion = 19;
+//  20  geometry-shader emulation (setting) only flags a mesh readable when
+//      Unity keeps its data in memory: stored inline, not streamed from the
+//      .resS. 19 flagged every mesh, and rebuilding a streamed one at level
+//      load read from a null buffer -- 743 Aether crashed on every start in
+//      naomi.5. Strikes 19 recorded no longer count; a load 19 left
+//      unfinished counts once against 20, and its first finished load
+//      forgives it
+constexpr int kBundleConversionVersion = 20;
 
 // Whether Beat Saber's own shaders use STEREO_MULTIVIEW_ON: -1 not looked yet,
 // 0 no, 1 yes. Unity registers every keyword a loaded shader declares, so the
@@ -166,18 +173,32 @@ bool SplitStereoVariants() {
   return gMultiviewKeyword.load() == 1;
 }
 
-// What the cache marker records about how a bundle's programs were built:
-// 0 = multiview in the plain variants, 1 = 2021 bundles split,
-// 4 = single-view only (replay render mode).
+// The settings a conversion is built with, read once as it starts: the marker
+// then records what the bundle was built with even if one is changed while it
+// converts (Convert All runs beside the settings panel). naomi.6.
+struct ConversionSettings {
+  bool splitStereo = SplitStereoVariants();
+  bool replay = GetReplayRenderMode();
+  bool drawGeometry = GetDrawGeometryShaderEffects();
+  bool emulateGeometry = GetEmulateGeometryShaderEffects();
+  bool instancing = GetSceneryGpuInstancing();
+
+  // What the cache marker records about how a bundle's programs were built:
+  // 0 = multiview in the plain variants, 1 = 2021 bundles split,
+  // 4 = single-view only (replay render mode).
+  int SplitMode() const {
+    // +8: geometry-shader effects drawn without their geometry stage (setting).
+    // +16: known geometry-shader effects emulated in the vertex stage (setting,
+    // naomi.5), with the bundle's inline meshes made readable for it.
+    // +32: GPU-instanced variants translated, for scenery instancing (setting).
+    int const geometry = (drawGeometry ? 8 : 0) + (emulateGeometry ? 16 : 0) + (instancing ? 32 : 0);
+    if (replay) return 4 + geometry;
+    return (splitStereo ? 1 : 0) + geometry;
+  }
+};
+
 int ConversionSplitMode() {
-  // +8: geometry-shader effects drawn without their geometry stage (setting).
-  // +16: known geometry-shader effects emulated in the vertex stage (setting,
-  // naomi.5), with the bundle's meshes made readable for it.
-  // +32: GPU-instanced variants translated, for scenery instancing (setting).
-  int const geometry = (GetDrawGeometryShaderEffects() ? 8 : 0) + (GetEmulateGeometryShaderEffects() ? 16 : 0) +
-                       (GetSceneryGpuInstancing() ? 32 : 0);
-  if (GetReplayRenderMode()) return 4 + geometry;
-  return (SplitStereoVariants() ? 1 : 0) + geometry;
+  return ConversionSettings{}.SplitMode();
 }
 
 std::string ConversionMarkerPath(std::string const& destPath) {
@@ -198,14 +219,14 @@ bool CachedConversionIsCurrent(std::string const& destPath) {
   return version == kBundleConversionVersion && split == ConversionSplitMode();
 }
 
-void MarkConversionCurrent(std::string const& destPath) {
+void MarkConversionCurrent(std::string const& destPath, int splitMode = ConversionSplitMode()) {
   std::ofstream marker(ConversionMarkerPath(destPath), std::ios::out | std::ios::trunc);
   if (!marker) {
     PaperLogger.warn("Vivify could not record the converter version beside '{}'; the bundle will "
                      "be reconverted every launch", destPath);
     return;
   }
-  marker << kBundleConversionVersion << " " << ConversionSplitMode() << "\n";
+  marker << kBundleConversionVersion << " " << splitMode << "\n";
 }
 
 // CRASH GUARD FOR CONVERTED BUNDLES
@@ -363,17 +384,31 @@ BundleConversionOutcome RunBundleConversion(std::string const& source, std::stri
 }
 
 BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, std::string const& dest) {
+  ConversionSettings const settings;
+  // The marker beside dest describes a conversion this one replaces (it was
+  // not current, or this would not run). Removed first, so that one that is
+  // interrupted, fails or is retarget-only never leaves dest looking current;
+  // a bundle is marked current only once it and its list are both written.
+  {
+    std::error_code ec;
+    std::filesystem::remove(ConversionMarkerPath(dest), ec);
+  }
   if (GetTranslateShadersOnConversion() && TranslationCrashedBefore(dest)) {
     auto const result = BundleConvert::ConvertToAndroid(source, dest);
+    // No shader of a retarget-only bundle is emulated, so no list beside it.
+    bool const listWritten = WriteGeometryEmulationList(dest, {});
     // Marked current, unlike the setting's retarget-only path: this is the
     // version's answer for this bundle until a newer converter retries it.
-    if (result.status == BundleConvert::Status::Success) MarkConversionCurrent(dest);
+    if (result.status == BundleConvert::Status::Success && listWritten) {
+      MarkConversionCurrent(dest, settings.SplitMode());
+    }
     PaperLogger.warn("Vivify converted '{}' without shader translation, because the translated "
                      "version crashed the game: {}", source, result.message);
     return {result.status, result.message};
   }
   if (!GetTranslateShadersOnConversion()) {
     auto const result = BundleConvert::ConvertToAndroid(source, dest);
+    WriteGeometryEmulationList(dest, {});
     // Deliberately not marked current: a retarget-only bundle is what the
     // marker exists to invalidate, so turning the setting back on has to
     // reconvert rather than reuse this.
@@ -381,24 +416,34 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   }
   BundleConvert::ShaderConversionOptions options;
   // As 0.14.7 did (version 16 above): 2021 bundles split, 2019 not.
-  options.separateStereoVariants = SplitStereoVariants();
+  options.separateStereoVariants = settings.splitStereo;
   options.splitUnity2019 = false;
   // Opt-in (setting): links a variant whose geometry stage cannot run without
   // it, instead of leaving it to a grey stand-in. Off by default since 0.14.13.
-  options.dropUntranslatableGeometry = GetDrawGeometryShaderEffects();
+  options.dropUntranslatableGeometry = settings.drawGeometry;
   // On by default in naomi.5 (setting): the known geometry-shader effects run
   // in the vertex stage, for meshes rebuilt at load (PrepareGeometryEmulation).
-  options.emulateGeometry = GetEmulateGeometryShaderEffects();
+  options.emulateGeometry = settings.emulateGeometry;
   // Off by default (setting): translate the GPU-instanced variants too, for
   // the scenery that keeps its instancing (ApplySceneryInstancing).
-  options.keepInstancingVariants = GetSceneryGpuInstancing();
+  options.keepInstancingVariants = settings.instancing;
   // See version 17 above. Converted maps only: a donor build for a Quest
   // map's empty shaders keeps everything, since Quest materials keep their
   // instancing.
   options.skipQuestUnusedVariants = true;
-  options.singleViewOnly = GetReplayRenderMode();
+  options.singleViewOnly = settings.replay;
   auto const conversion = BundleConvert::ConvertShadersToGles(source, dest, options);
-  if (conversion.status == BundleConvert::Status::Success) MarkConversionCurrent(dest);
+  // Which shaders were emulated, and how, for the rebuild at load. Rewritten
+  // (or removed) with every conversion, before the bundle is marked current,
+  // so a current bundle always has its own list beside it. A bundle whose list
+  // could not be written is not used at all: without it, its emulated
+  // programs would draw nothing.
+  bool const listWritten = WriteGeometryEmulationList(dest, conversion.geometryEmulated);
+  if (conversion.status == BundleConvert::Status::Success && !listWritten) {
+    return {BundleConvert::Status::DestUnwritable,
+            "could not write the geometry-emulation list beside '" + dest + "'"};
+  }
+  if (conversion.status == BundleConvert::Status::Success) MarkConversionCurrent(dest, settings.SplitMode());
   // Logged here, on the worker, rather than folded into the message: a bundle
   // can refuse several shaders and each reason is a line worth reading on its
   // own when working out why a converted map still looks wrong.
@@ -426,9 +471,6 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
         "it then produces solid black.",
         conversion.texturesMarkedReadable, conversion.texturesSeen, conversion.texturesStreamed);
   }
-  // Which shaders were emulated, and how, for the rebuild at load. Rewritten
-  // (or removed) with every conversion, so it always matches the bundle.
-  WriteGeometryEmulationList(dest, conversion.geometryEmulated);
   for (auto const& shader : conversion.geometryEmulated) {
     PaperLogger.info("Vivify geometry emulation: {} runs in the vertex stage", shader);
   }
@@ -442,9 +484,19 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
                        "time whatever their material says", shader);
     }
   }
-  if (conversion.geometryStagesEmulated > 0 || conversion.meshesMarkedReadable > 0) {
-    PaperLogger.info("Vivify geometry emulation: {} variant(s) emulated, {} mesh(es) marked readable",
-                     conversion.geometryStagesEmulated, conversion.meshesMarkedReadable);
+  if (conversion.geometryStagesEmulated > 0 || conversion.meshesMarkedReadable > 0 ||
+      conversion.meshesLeftStreamed > 0) {
+    PaperLogger.info("Vivify geometry emulation: {} variant(s) emulated, {} mesh(es) marked readable, {} streamed "
+                     "mesh(es) left unreadable (Unity keeps no copy of them to rebuild from, so an object drawn "
+                     "with an emulated shader on one keeps the stand-in){}{}",
+                     conversion.geometryStagesEmulated, conversion.meshesMarkedReadable, conversion.meshesLeftStreamed,
+                     conversion.meshesReadableCleared > 0
+                         ? fmt::format(", {} wrongly flagged readable and cleared", conversion.meshesReadableCleared)
+                         : std::string(),
+                     conversion.meshesUnread > 0
+                         ? fmt::format(", {} left as they were (not read to their end, or with no vertex data)",
+                                       conversion.meshesUnread)
+                         : std::string());
   }
   return {conversion.status, conversion.message};
 }
@@ -871,12 +923,7 @@ void Runtime::HandleLevelSelected(SongCore::API::LevelSelect::LevelWasSelectedEv
     incomingLevelPath = std::string(event.customBeatmapLevel->customLevelPath);
   }
   if (!incomingLevelPath.empty() && incomingLevelPath != _selectedLevelPath) {
-    if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
-      ReleaseGeometryEmulation();
-      ReleaseDecodedTextures();
-      _mainBundle->Unload(true);
-      _mainBundle = nullptr;
-    }
+    ReleaseMainBundle();
     _preloadedBundlePath.clear();
     ClearBlitCompanion();
   }
@@ -1575,12 +1622,7 @@ void Runtime::ConvertPcForGraft(std::string const& levelPath, std::string const&
 void Runtime::GraftShadersFrom(std::string const& levelPath, std::string const& convertedPath,
                                std::vector<std::string> const& names) {
   // Whatever bundle is loaded may share the converted one's internal names.
-  if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
-    ReleaseGeometryEmulation();
-    ReleaseDecodedTextures();
-    _mainBundle->Unload(true);
-    _mainBundle = nullptr;
-  }
+  ReleaseMainBundle();
   _preloadedBundlePath.clear();
   _graftedShaders.clear();
   _graftLevelPath = levelPath;
@@ -1993,6 +2035,17 @@ void Runtime::WriteLevelEndReport(std::string_view outcome) {
   Report::Append("LEVEL ENDED", BuildLevelReport(outcome));
 }
 
+// What was made for the bundle -- rebuilt meshes, stand-in copies, decoded
+// textures -- goes with it, and also when something other than Vivify has
+// already unloaded it.
+void Runtime::ReleaseMainBundle() {
+  if (_mainBundle == nullptr) return;
+  ReleaseGeometryEmulation();
+  ReleaseDecodedTextures();
+  if (UnityEngine::Object::op_Implicit_bool(_mainBundle)) _mainBundle->Unload(true);
+  _mainBundle = nullptr;
+}
+
 void Runtime::PreloadBundle(std::string const& bundlePath) {
   if (_preloadedBundlePath == bundlePath && _mainBundle != nullptr &&
       UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
@@ -2001,12 +2054,7 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
     }
     return;
   }
-  if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
-    ReleaseGeometryEmulation();
-    ReleaseDecodedTextures();
-    _mainBundle->Unload(true);
-    _mainBundle = nullptr;
-  }
+  ReleaseMainBundle();
   _preloadedBundlePath = bundlePath;
   if (TranslationCrashedBefore(bundlePath)) {
     PaperLogger.warn("Vivify: '{}' is in the crash guard's grey fallback (converted without shader "
@@ -2016,12 +2064,14 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
   ArmLoadGuard(bundlePath);
   auto const preloadStart = std::chrono::steady_clock::now();
   VivifyBreadcrumb("bundle preload begin: '" + bundlePath + "'");
+  _emulationList = ReadGeometryEmulationList(bundlePath);
   _mainBundle = UnityEngine::AssetBundle::LoadFromFile(StringW(bundlePath));
   if (_mainBundle == nullptr) {
     VivifyBreadcrumb("bundle preload failed");
     if (GetVivifyDebugLogging()) {
       PaperLogger.warn("Vivify bundle preload failed: '{}'", bundlePath);
     }
+    _emulationList = {};
     _preloadedBundlePath.clear();
     DisarmLoadGuard();
     return;
@@ -2309,12 +2359,16 @@ void Runtime::LoadMainBundle() {
   if (GetVivifyDebugLogging()) {
     PaperLogger.info("Vivify loading asset bundle: path='{}'", bundlePath);
   }
+  // One something else unloaded leaves what was made for it behind.
+  if (_mainBundle != nullptr && !UnityEngine::Object::op_Implicit_bool(_mainBundle)) ReleaseMainBundle();
+  _emulationList = ReadGeometryEmulationList(bundlePath);
   _mainBundle = UnityEngine::AssetBundle::LoadFromFile(StringW(bundlePath));
   if (_mainBundle == nullptr) {
     VivifyBreadcrumb("level bundle load failed");
     if (GetVivifyDebugLogging()) {
       PaperLogger.warn("Vivify asset bundle load failed: path='{}'", bundlePath);
     }
+    _emulationList = {};
     return;
   }
   _preloadedBundlePath = bundlePath;
@@ -2987,7 +3041,16 @@ void Runtime::ApplySceneryInstancing() {
 // or a screen effect with nothing to carry over).
 UnityEngine::Material* Runtime::StandInCopyFor(UnityEngine::Material* material) {
   if (!IsAlive(material)) return nullptr;
-  if (auto it = _emulationStandIns.find(material); it != _emulationStandIns.end()) return it->second;
+  int const materialId = material->GetInstanceID();
+  if (auto it = _emulationStandIns.find(materialId); it != _emulationStandIns.end()) {
+    if (it->second) {
+      // Kept from an earlier start of the level; these are cleared with it.
+      _fallbackShadedMaterials.emplace(it->second.ptr());
+      _repairedMaterials.emplace(it->second.ptr());
+      return it->second.ptr();
+    }
+    _emulationStandIns.erase(it);
+  }
   auto* replacement = FindFallbackShader();
   if (!IsAlive(replacement) || !GetStandInShading()) return nullptr;
   auto state = CaptureMaterialFallbackState(material);
@@ -3004,7 +3067,7 @@ UnityEngine::Material* Runtime::StandInCopyFor(UnityEngine::Material* material) 
   ApplyStereoKeywords(copy);
   _fallbackShadedMaterials.emplace(copy);
   _repairedMaterials.emplace(copy);
-  _emulationStandIns[material] = copy;
+  _emulationStandIns[materialId] = copy;
   return copy;
 }
 
@@ -3392,12 +3455,7 @@ void SetSongPlaying(bool playing) {
 }
 
 void Runtime::ReleaseBundlesForReset() {
-  if (_mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle)) {
-    ReleaseGeometryEmulation();
-    ReleaseDecodedTextures();
-    _mainBundle->Unload(true);
-  }
-  _mainBundle = nullptr;
+  ReleaseMainBundle();
   _preloadedBundlePath.clear();
   _selectedBundlePath.clear();
   _selectedLevelPath.clear();

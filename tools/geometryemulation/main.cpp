@@ -9,6 +9,10 @@
 //   geoemu expand-points <vertexCount> <stripVertices> <submesh> [<submesh>...]
 //     a submesh is comma-separated indices; prints one line per new vertex
 //     ("v source corner otherA otherB") and one per submesh ("s indices...")
+//   geoemu format-list <shader line>...
+//     prints the list the converter writes beside a bundle
+//   geoemu parse-list <file>
+//     prints "current=0|1" and one "plan=<name>|<mode>|<vertices>" per shader
 #include "VivifyGeometryEmulation.hpp"
 
 #include <cstdio>
@@ -96,6 +100,21 @@ int main(int argc, char** argv) {
       return 0;
     }
     std::printf("---\n%s", composed.source.c_str());
+    return 0;
+  }
+  if (command == "format-list") {
+    std::vector<std::string> lines(argv + 2, argv + argc);
+    std::printf("%s", GeometryEmulation::FormatEmulationList(lines).c_str());
+    return 0;
+  }
+  if (command == "parse-list" && argc >= 3) {
+    std::ifstream in(argv[2], std::ios::binary);
+    std::string const text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    auto const list = GeometryEmulation::ParseEmulationList(text);
+    std::printf("current=%d\n", list.current ? 1 : 0);
+    for (auto const& [name, plan] : list.plans) {
+      std::printf("plan=%s|%s|%d\n", name.c_str(), GeometryEmulation::ModeName(plan.mode), plan.outputVertices);
+    }
     return 0;
   }
   if ((command == "expand-triangles" && argc >= 4) || (command == "expand-points" && argc >= 5)) {

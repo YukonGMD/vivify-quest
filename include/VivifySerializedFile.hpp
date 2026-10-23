@@ -375,13 +375,40 @@ struct TextureObject {
 // One Mesh object, as far as making it readable on device needs (geometry-
 // shader emulation rebuilds meshes at load, which needs their CPU copy). The
 // same single serialized bool as a texture's, written where it sits.
+//
+// The flag alone does not give a mesh a CPU copy (naomi.6). A mesh whose vertex
+// data is streamed from the bundle's .resS node (m_StreamData set) is uploaded
+// by Unity's async path, which never keeps the vertices in memory and frees the
+// indices unless m_KeepIndices is set -- without ever reading m_IsReadable. A
+// streamed mesh flagged readable passes Mesh.GetIndices' managed check and then
+// copies from a null buffer, which is what crashed 743 Aether in naomi.5. So
+// the whole object is walked, to its last field (m_StreamData), and only a
+// mesh read cleanly and stored inline may be flagged.
 struct MeshObject {
   int64_t pathID = 0;
   std::string name;
   bool isReadablePresent = false;
   size_t isReadableFileOffset = 0;
   bool isReadable = false;
+  uint8_t compression = 0;   // m_MeshCompression; a compressed mesh keeps its data in m_CompressedMesh
+  uint32_t vertexCount = 0;  // m_VertexData.m_VertexCount
+  bool vertexDataRead = false;
+  uint32_t vertexDataSize = 0;  // m_VertexData.m_DataSize: bytes stored inline
+  // m_StreamData, read field by field. streamDataRead is true only when every
+  // one of its fields was read in full, which a walk that ran out of bytes
+  // earlier cannot fake.
+  bool streamDataRead = false;
+  uint32_t streamSize = 0;
+  uint32_t streamPathLength = 0;
 };
+
+// Whether Unity keeps a CPU copy of this mesh once it is flagged readable: it
+// was read cleanly to its last field, nothing of it is streamed (path and size
+// both empty), and an uncompressed mesh with vertices carries them inline.
+bool MeshDataStaysInMemoryWhenReadable(MeshObject const& mesh);
+// Whether the mesh's vertex data is streamed from a .resS node (by either of
+// m_StreamData's fields, as Unity branches on the path).
+bool MeshIsStreamed(MeshObject const& mesh);
 
 // True for the block-compressed formats no Quest GPU can sample, which are the
 // only ones worth making readable: an ETC2 or RGBA32 texture already works.

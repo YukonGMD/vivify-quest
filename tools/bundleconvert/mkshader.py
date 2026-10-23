@@ -20,15 +20,31 @@ DX11_VERTEX_SM50 = 16
 DX11_PIXEL_SM50 = 18
 
 
-class TypeTree:
-    """Flat, depth-ordered type tree with a local string buffer."""
+# Where Unity's common string table (CommonString.h) holds the strings a Mesh
+# type tree uses. Unity names a node through this table, with the offset's top
+# bit set, whenever the string is in it; these are the offsets real 2019.4.28f1
+# and 2021.3.16f1 Mesh trees carry, the same as the converter's kCommonStrings.
+UNITY_COMMON_STRINGS = {
+    "AABB": 0, "Array": 49, "Base": 55, "bool": 76, "char": 81, "data": 106, "float": 161, "int": 222,
+    "Matrix4x4f": 245, "m_Name": 427, "size": 795, "string": 840, "TypelessData": 894, "UInt64": 921,
+    "UInt8": 928, "unsigned int": 934, "vector": 981, "Vector3f": 997,
+}
 
-    def __init__(self):
+
+class TypeTree:
+    """Flat, depth-ordered type tree with a local string buffer. With common
+    given ({string: offset}), a string found there is named through Unity's
+    common table instead, as Unity writes it."""
+
+    def __init__(self, common=None):
         self.nodes = []          # (version, level, typeFlags, typeStr, nameStr, byteSize, index, metaFlag)
         self.strings = bytearray()
         self._offsets = {}
+        self._common = common or {}
 
     def _str(self, text: str) -> int:
+        if text in self._common:
+            return 0x80000000 | self._common[text]
         if text in self._offsets:
             return self._offsets[text]
         offset = len(self.strings)
@@ -318,18 +334,219 @@ def texture_object(name="tex", *, width=4, height=4, texture_format=10, mip_coun
     return bytes(body)
 
 
+def mesh_type_tree(offset64=False, stream_data=True) -> TypeTree:
+    """UnityEngine.Mesh's type tree as a real 743 Aether bundle has it (Unity
+    2019.4.28f1): every node in order, with the real types, byte sizes and ALIGN
+    flags, nested structures included, so the converter walks what it walks in
+    a real bundle and UnityPy reads the fixture to its last byte. offset64
+    gives StreamingInfo the UInt64 offset it has from 2020.1 (a real
+    2021.3.16f1 tree differs from this one only there). Strings come from
+    Unity's common table where Unity takes them from it. stream_data=False
+    leaves m_StreamData out, as Unity did before 2018.3."""
+    t = TypeTree(common=UNITY_COMMON_STRINGS)
+
+    def string(level, name):
+        t.add(level, "string", name, -1)
+        t.add(level + 1, "Array", "Array", -1, is_array=True, align=True)
+        t.add(level + 2, "int", "size", 4)
+        t.add(level + 2, "char", "data", 1)
+
+    def vector(level, name, element, element_size, element_fields=None):
+        t.add(level, "vector", name, -1)
+        t.add(level + 1, "Array", "Array", -1, is_array=True, align=True)
+        t.add(level + 2, "int", "size", 4)
+        t.add(level + 2, element, "data", element_size)
+        if element_fields:
+            element_fields(level + 3)
+
+    def vector3f(level, name):
+        t.add(level, "Vector3f", name, 12)
+        for axis in "xyz":
+            t.add(level + 1, "float", axis, 4)
+
+    def aabb(level, name):
+        t.add(level, "AABB", name, 24)
+        vector3f(level + 1, "m_Center")
+        vector3f(level + 1, "m_Extent")
+
+    def sub_mesh(level):
+        for field, kind in (("firstByte", "unsigned int"), ("indexCount", "unsigned int"), ("topology", "int"),
+                            ("baseVertex", "unsigned int"), ("firstVertex", "unsigned int"),
+                            ("vertexCount", "unsigned int")):
+            t.add(level, kind, field, 4)
+        aabb(level, "localAABB")
+
+    def blend_shape_vertex(level):
+        for field in ("vertex", "normal", "tangent"):
+            vector3f(level, field)
+        t.add(level, "unsigned int", "index", 4)
+
+    def mesh_blend_shape(level):
+        t.add(level, "unsigned int", "firstVertex", 4)
+        t.add(level, "unsigned int", "vertexCount", 4)
+        t.add(level, "bool", "hasNormals", 1)
+        t.add(level, "bool", "hasTangents", 1, align=True)
+
+    def mesh_blend_shape_channel(level):
+        string(level, "name")
+        t.add(level, "unsigned int", "nameHash", 4)
+        t.add(level, "int", "frameIndex", 4)
+        t.add(level, "int", "frameCount", 4)
+
+    def matrix(level):
+        for row in range(4):
+            for column in range(4):
+                t.add(level, "float", f"e{row}{column}", 4)
+
+    def min_max_aabb(level):
+        vector3f(level, "m_Min")
+        vector3f(level, "m_Max")
+
+    def channel_info(level):
+        for field in ("stream", "offset", "format", "dimension"):
+            t.add(level, "UInt8", field, 1)
+
+    def packed_bit_vector(level, name, with_range):
+        t.add(level, "PackedBitVector", name, -1)
+        t.add(level + 1, "unsigned int", "m_NumItems", 4)
+        if with_range:
+            t.add(level + 1, "float", "m_Range", 4)
+            t.add(level + 1, "float", "m_Start", 4)
+        vector(level + 1, "m_Data", "UInt8", 1)
+        t.add(level + 1, "UInt8", "m_BitSize", 1, align=True)
+
+    t.add(0, "Mesh", "Base", -1)
+    string(1, "m_Name")
+    vector(1, "m_SubMeshes", "SubMesh", 48, sub_mesh)
+    t.add(1, "BlendShapeData", "m_Shapes", -1)
+    vector(2, "vertices", "BlendShapeVertex", 40, blend_shape_vertex)
+    vector(2, "shapes", "MeshBlendShape", 10, mesh_blend_shape)
+    vector(2, "channels", "MeshBlendShapeChannel", -1, mesh_blend_shape_channel)
+    vector(2, "fullWeights", "float", 4)
+    vector(1, "m_BindPose", "Matrix4x4f", 64, matrix)
+    vector(1, "m_BoneNameHashes", "unsigned int", 4)
+    t.add(1, "unsigned int", "m_RootBoneNameHash", 4)
+    vector(1, "m_BonesAABB", "MinMaxAABB", 24, min_max_aabb)
+    t.add(1, "VariableBoneCountWeights", "m_VariableBoneCountWeights", -1)
+    vector(2, "m_Data", "unsigned int", 4)
+    t.add(1, "UInt8", "m_MeshCompression", 1)
+    t.add(1, "bool", "m_IsReadable", 1)
+    t.add(1, "bool", "m_KeepVertices", 1)
+    t.add(1, "bool", "m_KeepIndices", 1, align=True)
+    t.add(1, "int", "m_IndexFormat", 4)
+    vector(1, "m_IndexBuffer", "UInt8", 1)
+    t.add(1, "VertexData", "m_VertexData", -1, align=True)
+    t.add(2, "unsigned int", "m_VertexCount", 4)
+    vector(2, "m_Channels", "ChannelInfo", 4, channel_info)
+    t.add(2, "TypelessData", "m_DataSize", -1, is_array=True, align=True)
+    t.add(3, "int", "size", 4)
+    t.add(3, "UInt8", "data", 1)
+    t.add(1, "CompressedMesh", "m_CompressedMesh", -1)
+    for name, with_range in MESH_PACKED_VECTORS:
+        packed_bit_vector(2, name, with_range)
+    t.add(2, "unsigned int", "m_UVInfo", 4)
+    aabb(1, "m_LocalAABB")
+    t.add(1, "int", "m_MeshUsageFlags", 4)
+    vector(1, "m_BakedConvexCollisionMesh", "UInt8", 1)
+    vector(1, "m_BakedTriangleCollisionMesh", "UInt8", 1)
+    t.add(1, "float", "m_MeshMetrics[0]", 4)
+    t.add(1, "float", "m_MeshMetrics[1]", 4, align=True)
+    if stream_data:
+        t.add(1, "StreamingInfo", "m_StreamData", -1)
+        t.add(2, "UInt64" if offset64 else "unsigned int", "offset", 8 if offset64 else 4)
+        t.add(2, "unsigned int", "size", 4)
+        string(2, "path")
+    return t
+
+
+# CompressedMesh's PackedBitVectors, in order, and whether each carries
+# m_Range and m_Start.
+MESH_PACKED_VECTORS = (("m_Vertices", True), ("m_UV", True), ("m_Normals", True), ("m_Tangents", True),
+                       ("m_Weights", False), ("m_NormalSigns", False), ("m_TangentSigns", False),
+                       ("m_FloatColors", True), ("m_BoneIndices", False), ("m_Triangles", False))
+
+
+def mesh_object(name="mesh", *, is_readable=False, keep_vertices=False, keep_indices=False, compression=0,
+                vertex_count=3, inline_data=None, stream_offset=0, stream_size=0, stream_path="",
+                offset64=False, truncate_before_stream=False, readable_byte=None, path_length=None):
+    """One serialized Mesh body, laid out to match mesh_type_tree: one submesh,
+    no blend shapes or bones, one position channel, an empty compressed mesh.
+    A streamed mesh is what Unity writes for one it uploads asynchronously: no
+    inline vertex bytes, and m_StreamData naming the .resS range. For corrupt
+    bodies: readable_byte is written as m_IsReadable instead of the bool, and
+    path_length as the stream path's length field instead of its real length."""
+    body = bytearray()
+
+    def put_string(text: bytes):
+        body.extend(struct.pack('<i', len(text)))
+        body.extend(text)
+        _align4(body)
+
+    put_string(name.encode())
+    body.extend(struct.pack('<i', 1))                 # m_SubMeshes: one SubMesh (48 bytes)
+    body.extend(struct.pack('<IIiIII', 0, 3, 0, 0, 0, vertex_count))  # firstByte .. vertexCount
+    body.extend(bytes(24))                            # its localAABB
+    body.extend(struct.pack('<iiii', 0, 0, 0, 0))     # m_Shapes' four empty vectors
+    body.extend(struct.pack('<iiIii', 0, 0, 0, 0, 0))  # bind poses, bone hashes, root hash, bone AABBs, weights
+    readable = (1 if is_readable else 0) if readable_byte is None else readable_byte
+    body.extend(bytes([compression, readable, 1 if keep_vertices else 0, 1 if keep_indices else 0]))
+    _align4(body)
+    body.extend(struct.pack('<i', 0))                 # m_IndexFormat: UInt16
+    indices = struct.pack('<HHH', 0, 1, 2)
+    body.extend(struct.pack('<i', len(indices)))
+    body.extend(indices)
+    _align4(body)
+    if inline_data is None:
+        inline_data = b"" if (stream_size or stream_path) else bytes(12 * vertex_count)
+    body.extend(struct.pack('<I', vertex_count))      # m_VertexCount
+    body.extend(struct.pack('<iBBBB', 1, 0, 0, 0, 3))  # m_Channels: position, stream 0, float, 3 wide
+    body.extend(struct.pack('<i', len(inline_data)))  # m_DataSize
+    body.extend(inline_data)
+    _align4(body)
+    for _name, with_range in MESH_PACKED_VECTORS:     # m_CompressedMesh, empty
+        body.extend(struct.pack('<I', 0))             # m_NumItems
+        if with_range:
+            body.extend(struct.pack('<ff', 0.0, 0.0))  # m_Range, m_Start
+        body.extend(struct.pack('<i', 0))             # m_Data
+        body.extend(b"\0")                            # m_BitSize
+        _align4(body)
+    body.extend(struct.pack('<I', 0))                 # m_UVInfo
+    body.extend(bytes(24))                            # m_LocalAABB
+    body.extend(struct.pack('<iii', 0, 0, 0))         # usage flags, two empty collision meshes
+    body.extend(struct.pack('<ff', 0.0, 0.0))         # m_MeshMetrics
+    if truncate_before_stream:
+        return bytes(body)
+    body.extend(struct.pack('<Q' if offset64 else '<I', stream_offset))
+    body.extend(struct.pack('<I', stream_size))
+    at = len(body)
+    put_string(stream_path.encode())
+    if path_length is not None:
+        body[at:at + 4] = struct.pack('<I', path_length)
+    return bytes(body)
+
+
+def mesh_readable_offset(name: str) -> int:
+    """Where mesh_object(name)'s m_IsReadable byte sits, counted from the start
+    of its m_Name length field."""
+    name_field = 4 + len(name.encode())
+    name_field += (-name_field) % 4
+    return name_field + 4 + 48 + 16 + 20 + 1
+
+
 def serialized_file_with_shaders(shaders, *, sf_version=21, target=19,
                                  unity="2021.3.16f1", enable_type_tree=True,
-                                 extra_class_id=None, textures=None, shader_tree=None):
+                                 extra_class_id=None, textures=None, shader_tree=None, meshes=None,
+                                 mesh_offset64=False, mesh_stream_data=True):
     """shaders: list of (name, [platform, ...]), or of already-serialized Shader
     bodies when shader_tree gives the type tree they were written against (see
     mkshader2021). textures: list of kwargs for texture_object. Returns the
     SerializedFile bytes."""
     textures = list(textures or [])
+    meshes = list(meshes or [])
     tree = shader_tree if shader_tree is not None else shader_type_tree(sf_version)
 
     types = bytearray()
-    type_count = 1 + (1 if textures else 0) + (1 if extra_class_id is not None else 0)
+    type_count = 1 + (1 if textures else 0) + (1 if extra_class_id is not None else 0) + (1 if meshes else 0)
     types += struct.pack('<i', type_count)
 
     def emit_type(class_id, with_tree):
@@ -354,9 +571,13 @@ def serialized_file_with_shaders(shaders, *, sf_version=21, target=19,
     if textures:
         texture_type_index = 1
         types += emit_type(28, texture_type_tree(sf_version))
+    mesh_type_index = None
+    if meshes:
+        mesh_type_index = 1 + (1 if textures else 0)
+        types += emit_type(43, mesh_type_tree(offset64=mesh_offset64, stream_data=mesh_stream_data))
     extra_type_index = None
     if extra_class_id is not None:
-        extra_type_index = 1 + (1 if textures else 0)
+        extra_type_index = 1 + (1 if textures else 0) + (1 if meshes else 0)
         other = TypeTree()
         other.add(0, "Mesh", "Base", -1)
         other.add(1, "unsigned int", "m_Dummy", 4)
@@ -370,6 +591,11 @@ def serialized_file_with_shaders(shaders, *, sf_version=21, target=19,
     for spec in textures:
         bodies.append(texture_object(**spec))
         type_indices.append(texture_type_index)
+    for spec in meshes:
+        if not mesh_stream_data:
+            spec = dict(spec, truncate_before_stream=True)
+        bodies.append(mesh_object(offset64=mesh_offset64, **spec))
+        type_indices.append(mesh_type_index)
     if extra_class_id is not None:
         bodies.append(struct.pack('<I', 0xDEADBEEF))
         type_indices.append(extra_type_index)

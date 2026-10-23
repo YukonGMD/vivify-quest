@@ -43,6 +43,19 @@ payloads spanning many storage blocks.
 Negative cases: non-bundle input, truncated archives, and the guarantee that no
 output file is left behind when conversion fails.
 
+Geometry-shader emulation's mesh flags (`--shaders` with
+`VIVIFY_EMULATE_GEOMETRY=1`) are tested on Mesh objects whose type tree is a
+real 2019.4.28f1 one node for node, common strings included (2021.3.16f1 with
+the 64-bit stream offset): inline, streamed, compressed, already readable, cut
+short or corrupt meshes, each read back out of the converted bundle.
+
 `fuzz.py` mutates valid archives at random byte offsets (600 archives across
-all four compression modes) and requires the converter to either succeed or
-fail cleanly — never crash, and never trip a sanitizer.
+all four compression modes), a 2021.3 PC shader's serialized file (300 runs of
+`--shaders`, when `run_tests.py` has left its seed), and the Mesh objects of a
+file holding a known geometry shader (400 runs with geometry emulation on, in
+both stream-offset widths). It requires the converter to either succeed or
+fail cleanly — never crash, and never print a sanitizer report (AddressSanitizer
+exits 1, the same as a handled failure, so its output is looked for).
+
+`run_tests.py` sets `UBSAN_OPTIONS=halt_on_error=1` unless it is already set,
+so undefined behaviour fails the case that reaches it.

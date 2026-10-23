@@ -27,6 +27,9 @@ def _build_default_binary() -> str:
     return out
 
 
+# UBSan reports and carries on by default, which would let undefined
+# behaviour pass every case here; halting turns a report into a failed case.
+os.environ.setdefault("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1")
 CONV = os.environ.get("VIVIFY_CONV") or _build_default_binary()
 TMP  = os.path.join(HERE, "work")
 os.makedirs(TMP, exist_ok=True)
@@ -450,6 +453,201 @@ texture_case("the texture pass works on SerializedFile v22",
              [dict(name="brick", texture_format=10, image_data=bytes(8))],
              expect_textures(1, 1), sf_version=22)
 
+
+# Geometry-shader emulation makes meshes readable so it can rebuild them at
+# load -- but only meshes Unity keeps in memory (naomi.6). A streamed mesh
+# (vertex data in the .resS, m_StreamData set) goes through Unity's async
+# upload, which keeps no CPU copy whatever m_IsReadable says; naomi.5 flagged
+# every mesh, and rebuilding 743 Aether's streamed NurbsPath read a null index
+# buffer and crashed the game on every start. Run against naomi.5's converter,
+# every case here in which naomi.5 would have flagged a mesh reads a 1 back out
+# of its output. The fixture's Mesh type tree is the real one node for node
+# (mkshader).
+AETHER_STREAM = dict(stream_offset=934508, stream_size=12684,
+                     stream_path="archive:/CAB-f40007757a783ba38cefa6f303c169aa/CAB-f40007757a783ba38cefa6f303c169aa.resS")
+
+
+def mesh_flags_in(dst, specs):
+    """Each mesh's m_IsReadable byte, read back out of the converted bundle."""
+    _, _, _, _, data = read_converted(dst)
+    flags = {}
+    for spec in specs:
+        name = spec["name"].encode()
+        at = data.find(struct.pack('<i', len(name)) + name)
+        flags[spec["name"]] = data[at + mkshader.mesh_readable_offset(spec["name"])] if at >= 0 else None
+    return flags
+
+
+def mesh_case(name, specs, check, shader_name="Swifter/TriangleExplosion", offset64=False, emulate=True,
+              unity="2019.4.28f1", sf_version=21, target=19, platforms=(4,), program=None, stream_data=True,
+              more_shaders=()):
+    """Defaults to a 2019.4 bundle (SerializedFile v21, 32-bit stream offset), as
+    743 Aether is; a 2021.3 one is offset64 with sf_version 22."""
+    global fails, cases
+    cases += 1
+    src = os.path.join(TMP, "mesh_src.vivify")
+    dst = os.path.join(TMP, "mesh_dst.vivify")
+    shaders = [(shader_name, list(platforms), program or one_program)]
+    shaders += [(more, list(platforms), program or one_program) for more in more_shaders]
+    sf = mkshader.serialized_file_with_shaders(shaders, meshes=specs, mesh_offset64=offset64,
+                                               mesh_stream_data=stream_data, unity=unity, sf_version=sf_version,
+                                               target=target)
+    build(src, sf_bytes=[sf], with_resource=False)
+    if emulate:
+        os.environ["VIVIFY_EMULATE_GEOMETRY"] = "1"
+    try:
+        proc, fields, refusals = run_shaders(src, dst)
+    finally:
+        os.environ.pop("VIVIFY_EMULATE_GEOMETRY", None)
+    try:
+        problem = check(proc, fields, dst, specs)
+    except Exception as e:  # noqa: BLE001 - a crash in a check is a failure, with its reason
+        problem = f"check raised {type(e).__name__}: {e}"
+    if problem:
+        print(f"FAIL {name}: {problem}\n{proc.stdout}{proc.stderr}")
+        fails += 1
+    else:
+        print(f"ok   {name}")
+
+
+def expect_meshes(readable, streamed_left=0, cleared=0, unread=0, flags=None):
+    def check(proc, fields, dst, specs):
+        if fields.get("status") != "converted":
+            return f"status '{fields.get('status')}'"
+        got = tuple(fields.get(k) for k in ("meshesReadable", "meshesStreamedLeft", "meshesCleared", "meshesUnread"))
+        want = tuple(str(v) for v in (readable, streamed_left, cleared, unread))
+        if got != want:
+            return f"readable/streamedLeft/cleared/unread {got}, wanted {want}"
+        actual = mesh_flags_in(dst, specs)
+        for mesh, value in (flags or {}).items():
+            if actual.get(mesh) != value:
+                return f"mesh '{mesh}' has m_IsReadable {actual.get(mesh)} in the output, wanted {value}"
+        return None
+    return check
+
+
+# An Android-targeted file whose only shader has nothing to translate (a GLES
+# program alone), so only a mesh flag can make the conversion write anything.
+ANDROID_ONLY_SHADER = dict(target=ANDROID, platforms=(9,), program=[[b"x"]])
+
+
+def expect_untouched(streamed_left=0, unread=0):
+    """Meshes seen but none changed: an Android file is left alone."""
+    def check(proc, fields, dst, specs):
+        if fields.get("status") != "already an Android bundle":
+            return f"status '{fields.get('status')}', wanted 'already an Android bundle'"
+        got = tuple(fields.get(k) for k in ("meshesReadable", "meshesStreamedLeft", "meshesCleared", "meshesUnread"))
+        want = tuple(str(v) for v in (0, streamed_left, 0, unread))
+        if got != want:
+            return f"readable/streamedLeft/cleared/unread {got}, wanted {want}"
+        if os.path.exists(dst):
+            return "an output file was written"
+        return None
+    return check
+
+
+mesh_case("emulation: an inline mesh Unity keeps for colliders is made readable",
+          [dict(name="CubeKept", keep_vertices=True, keep_indices=True)],
+          expect_meshes(1, flags={"CubeKept": 1}))
+mesh_case("emulation: an inline mesh without keep flags is made readable too (readable alone keeps it)",
+          [dict(name="CubeBare")],
+          expect_meshes(1, flags={"CubeBare": 1}))
+mesh_case("emulation: an inline mesh already readable is neither counted nor rewritten",
+          [dict(name="AlreadyReadable", is_readable=True, keep_vertices=True, keep_indices=True)],
+          expect_meshes(0, flags={"AlreadyReadable": 1}))
+mesh_case("emulation: the geometry shader need not be the file's last shader",
+          [dict(name="CubeKept", keep_vertices=True, keep_indices=True)],
+          expect_meshes(1, flags={"CubeKept": 1}), more_shaders=("Custom/Plain",))
+mesh_case("emulation: a streamed mesh stays unreadable beside an inline one (the naomi.5 Aether crash)",
+          [dict(name="NurbsPath", vertex_count=453, **AETHER_STREAM),
+           dict(name="CubeKept", keep_vertices=True, keep_indices=True)],
+          expect_meshes(1, streamed_left=1, flags={"NurbsPath": 0, "CubeKept": 1}))
+mesh_case("emulation: a stream path with size 0 still counts as streamed",
+          [dict(name="PathOnly", stream_path="archive:/x/x.resS")],
+          expect_meshes(0, streamed_left=1, flags={"PathOnly": 0}))
+mesh_case("emulation: a stream size with no path still counts as streamed",
+          [dict(name="SizeOnly", stream_size=4096)],
+          expect_meshes(0, streamed_left=1, flags={"SizeOnly": 0}))
+# With inline bytes as well, only the stream reference keeps these unreadable.
+mesh_case("emulation: a stream path counts as streamed even beside inline vertex bytes",
+          [dict(name="PathPlusInline", stream_path="archive:/x/x.resS", inline_data=bytes(36))],
+          expect_meshes(0, streamed_left=1, flags={"PathPlusInline": 0}))
+mesh_case("emulation: a stream size counts as streamed even beside inline vertex bytes",
+          [dict(name="SizePlusInline", stream_size=4096, inline_data=bytes(36))],
+          expect_meshes(0, streamed_left=1, flags={"SizePlusInline": 0}))
+mesh_case("emulation: a one-byte stream counts as streamed",
+          [dict(name="SizeOne", stream_size=1, inline_data=bytes(36))],
+          expect_meshes(0, streamed_left=1, flags={"SizeOne": 0}))
+mesh_case("emulation: a one-character stream path counts as streamed",
+          [dict(name="PathOne", stream_path="p", inline_data=bytes(36))],
+          expect_meshes(0, streamed_left=1, flags={"PathOne": 0}))
+mesh_case("emulation: a mesh flag that is not a bool is left alone",
+          [dict(name="OddFlag", readable_byte=2, **AETHER_STREAM)],
+          expect_meshes(0, flags={"OddFlag": 2}))
+mesh_case("emulation: a streamed mesh already flagged readable is cleared",
+          [dict(name="StreamedFlagged", is_readable=True, **AETHER_STREAM)],
+          expect_meshes(0, streamed_left=1, cleared=1, flags={"StreamedFlagged": 0}))
+# Compressed meshes keep their data in m_CompressedMesh, inline: a 2021.3
+# Android build has 21 of them, all with a vertex count of 0.
+mesh_case("emulation: a compressed mesh (vertex count 0, no inline bytes) is made readable",
+          [dict(name="Compressed", compression=3, vertex_count=0, inline_data=b"")],
+          expect_meshes(1, flags={"Compressed": 1}))
+mesh_case("emulation: a compressed mesh with a vertex count and no inline bytes is made readable",
+          [dict(name="Compressed2", compression=1, vertex_count=36, inline_data=b"")],
+          expect_meshes(1, flags={"Compressed2": 1}))
+mesh_case("emulation: an inline mesh with no vertices at all is made readable",
+          [dict(name="Empty", vertex_count=0, inline_data=b"")],
+          expect_meshes(1, flags={"Empty": 1}))
+mesh_case("emulation: an uncompressed mesh with one vertex and no vertex bytes is left as it was",
+          [dict(name="OneVertex", vertex_count=1, inline_data=b"")],
+          expect_meshes(0, unread=1, flags={"OneVertex": 0}))
+# Left as it was means neither marked nor cleared, so each comes both ways.
+for flagged in (False, True):
+    mesh_case(f"emulation: a mesh cut off before m_StreamData is left as it was (readable {int(flagged)})",
+              [dict(name="Truncated", is_readable=flagged, truncate_before_stream=True)],
+              expect_meshes(0, unread=1, flags={"Truncated": int(flagged)}))
+    mesh_case(f"emulation: an uncompressed mesh with no vertex bytes anywhere is left as it was "
+              f"(readable {int(flagged)})",
+              [dict(name="NoVertexData", is_readable=flagged, inline_data=b"")],
+              expect_meshes(0, unread=1, flags={"NoVertexData": int(flagged)}))
+    mesh_case(f"emulation: a tree with no m_StreamData (Unity before 2018.3) is left as it was "
+              f"(readable {int(flagged)})",
+              [dict(name="OldMesh", is_readable=flagged, keep_vertices=True, keep_indices=True)],
+              expect_meshes(0, unread=1, flags={"OldMesh": int(flagged)}), stream_data=False)
+    # A stream path whose length runs past the object: m_StreamData is not
+    # read to its end, so the mesh counts as neither inline nor streamed.
+    for size in (0, 4096):
+        mesh_case(f"emulation: a stream path running past the object is left as it was "
+                  f"(size {size}, readable {int(flagged)})",
+                  [dict(name="PathOverrun", is_readable=flagged, stream_path="abc", stream_size=size,
+                        inline_data=bytes(36), path_length=0x10000)],
+                  expect_meshes(0, unread=1, flags={"PathOverrun": int(flagged)}))
+mesh_case("emulation: the same rules in a 2021.3 bundle (SerializedFile v22, 64-bit stream offset)",
+          [dict(name="Streamed64", vertex_count=453, **AETHER_STREAM),
+           dict(name="Inline64", keep_vertices=True, keep_indices=True)],
+          expect_meshes(1, streamed_left=1, flags={"Streamed64": 0, "Inline64": 1}),
+          offset64=True, sf_version=22, unity="2021.3.16f1")
+mesh_case("emulation: a mesh flag alone still gets an Android bundle written",
+          [dict(name="OnlyMesh", keep_vertices=True, keep_indices=True)],
+          expect_meshes(1, flags={"OnlyMesh": 1}), **ANDROID_ONLY_SHADER)
+mesh_case("emulation: a cleared mesh flag alone still gets an Android bundle written",
+          [dict(name="OnlyClear", is_readable=True, **AETHER_STREAM)],
+          expect_meshes(0, streamed_left=1, cleared=1, flags={"OnlyClear": 0}), **ANDROID_ONLY_SHADER)
+mesh_case("emulation: an Android bundle whose inline mesh is already readable is left alone",
+          [dict(name="AlreadyReadable", is_readable=True, keep_vertices=True, keep_indices=True)],
+          expect_untouched(), **ANDROID_ONLY_SHADER)
+mesh_case("emulation: an Android bundle with a streamed mesh left as it is is left alone",
+          [dict(name="NurbsPath", vertex_count=453, **AETHER_STREAM)],
+          expect_untouched(streamed_left=1), **ANDROID_ONLY_SHADER)
+mesh_case("emulation: an Android bundle with a mesh it could not read is left alone",
+          [dict(name="Truncated", truncate_before_stream=True)],
+          expect_untouched(unread=1), **ANDROID_ONLY_SHADER)
+mesh_case("emulation: a file with no known geometry shader has no mesh marked",
+          [dict(name="CubeKept", keep_vertices=True, keep_indices=True)],
+          expect_meshes(0, flags={"CubeKept": 0}), shader_name="Custom/Plain")
+mesh_case("emulation off: no mesh is marked",
+          [dict(name="CubeKept", keep_vertices=True, keep_indices=True)],
+          expect_meshes(0, flags={"CubeKept": 0}), emulate=False)
 
 # The flag has to survive the rebuild that resizes the shader beside it: the
 # byte is written into the data before RewriteSerializedFile relays the file

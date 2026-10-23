@@ -27,7 +27,12 @@ constexpr uint32_t kOpEmitThenCutStream = 119;
 constexpr uint32_t kOpDclStream = 143;
 constexpr uint32_t kOpGsInstanceCount = 206;
 
-constexpr uint32_t kMaxRebuiltVertices = 4u * 1024u * 1024u;
+// A rebuilt mesh larger than this is refused (its object keeps the stand-in):
+// each vertex carries several attributes, so a quarter of a million already
+// costs tens of megabytes while it is built (naomi.5 allowed 4M). The largest
+// mesh 743 Aether rebuilds has 1,164 vertices; CubeNoteSmooth_0 would have
+// 6,084, but it is streamed and keeps the stand-in.
+constexpr uint32_t kMaxRebuiltVertices = 256u * 1024u;
 
 bool IsEmit(uint32_t opcode) {
   return opcode == kOpEmit || opcode == kOpEmitStream || opcode == kOpEmitThenCut ||
@@ -410,6 +415,46 @@ bool ExpandPoints(std::vector<std::vector<uint32_t>> const& submeshes, uint32_t 
     out.submeshes.push_back(std::move(rebuilt));
   }
   return true;
+}
+
+std::string FormatEmulationList(std::vector<std::string> const& shaderLines) {
+  std::string text = std::string(kEmulationListHeader) + "\n";
+  for (auto const& line : shaderLines) text += line + "\n";
+  return text;
+}
+
+EmulationList ParseEmulationList(std::string_view text) {
+  EmulationList list;
+  bool first = true;
+  for (auto const& raw : Lines(std::string(text))) {
+    std::string line = raw;
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    if (line.empty()) continue;
+    if (first) {
+      first = false;
+      if (line == kEmulationListHeader) {
+        list.current = true;
+        continue;
+      }
+    }
+    if (line[0] == '#') continue;
+    // The shader name may hold spaces; the mode and count are the last two words.
+    size_t const countAt = line.rfind(' ');
+    if (countAt == std::string::npos || countAt == 0) continue;
+    size_t const modeAt = line.rfind(' ', countAt - 1);
+    if (modeAt == std::string::npos) continue;
+    std::string const name = line.substr(0, modeAt);
+    std::string const mode = line.substr(modeAt + 1, countAt - modeAt - 1);
+    if (mode != "triangle" && mode != "point") continue;
+    if (!IsKnownShader(name)) continue;
+    Plan plan;
+    plan.mode = mode == "point" ? Mode::Point : Mode::Triangle;
+    plan.outputVertices = std::atoi(line.c_str() + countAt + 1);
+    if (plan.mode == Mode::Triangle && plan.outputVertices != 3) continue;
+    if (plan.mode == Mode::Point && (plan.outputVertices < 3 || plan.outputVertices > kMaxStripVertices)) continue;
+    list.plans[name] = plan;
+  }
+  return list;
 }
 
 }  // namespace Vivify::GeometryEmulation

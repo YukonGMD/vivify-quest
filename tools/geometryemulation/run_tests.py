@@ -194,6 +194,79 @@ check("points: strip triangles alternate winding",
       out[-1] == "s 0 1 2 2 1 3 2 3 4 5 6 7 7 6 8 7 8 9", out[-1])
 check("points: strips longer than the limit refused",
       call("expand-points", 1, 40, "0").startswith("refused="), "")
+# At most 256k rebuilt vertices (naomi.6; naomi.5 allowed 4M), counted over
+# every submesh. Triangle lists go in several arguments, since one argument is
+# limited to 128 KiB.
+out = call("expand-points", 1, 16, ",".join(["0"] * 16384))
+check("points: exactly 262,144 rebuilt vertices are allowed", not out.startswith("refused="), out[:200])
+out = call("expand-points", 1, 5, ",".join(["0"] * 52429))
+check("points: 262,145 rebuilt vertices are refused", out.startswith("refused=the rebuilt mesh would have 262145"),
+      out[:200])
+out = call("expand-points", 1, 30, ",".join(["0"] * 4369), ",".join(["0"] * 4369))
+check("points: 262,140 over two submeshes are allowed", not out.startswith("refused="), out[:200])
+out = call("expand-points", 1, 30, ",".join(["0"] * 4370), ",".join(["0"] * 4369))
+check("points: the limit counts every submesh", out.startswith("refused=the rebuilt mesh would have 262170"),
+      out[:200])
+
+
+def triangle_lists(triangles, parts=6):
+    sizes = [triangles // parts + (1 if i < triangles % parts else 0) for i in range(parts)]
+    return [",".join(["0"] * (3 * n)) for n in sizes]
+
+
+out = call("expand-triangles", 1, *triangle_lists(87381))
+check("triangles: 262,143 rebuilt vertices are allowed", not out.startswith("refused="), out[:200])
+out = call("expand-triangles", 1, *triangle_lists(87382))
+check("triangles: 262,146 rebuilt vertices are refused",
+      out.startswith("refused=the rebuilt mesh would have 262146"), out[:200])
+
+# The list beside a converted bundle (naomi.6): a format line marks a
+# conversion whose readable flags can be trusted; without it (a naomi.5
+# conversion, which flagged streamed meshes readable) every object on an
+# emulated shader keeps the stand-in.
+TE, WF, GR = "Swifter/TriangleExplosion", "Mawntee/Beat Saber Wireframe 3D-Noise", "Bytesized/Grass"
+text = call("format-list", TE + " triangle 3", WF + " triangle 3")
+check("list: starts with the format line", text.splitlines()[0] == "# vivify-geometry 2", text)
+check("list: one line per shader after it", text.splitlines()[1:] == [TE + " triangle 3", WF + " triangle 3"], text)
+
+
+def parse_list(content):
+    path = write("list.txt", content.encode())
+    lines = call("parse-list", path).splitlines()
+    return lines[0] == "current=1", sorted(l[5:] for l in lines if l.startswith("plan="))
+
+
+current, plans = parse_list(text)
+check("list: this build's list is current", current, plans)
+check("list: names with spaces survive", plans == sorted([TE + "|triangle|3", WF + "|triangle|3"]), plans)
+current, plans = parse_list(TE + " triangle 3\n" + WF + " triangle 3\n")
+check("list: a naomi.5 list (no format line) is not current", not current, plans)
+check("list: its shaders are still known, so their objects can be given the stand-in", len(plans) == 2, plans)
+current, plans = parse_list("# vivify-geometry 2\r\n" + GR + " point 7\r\n\r\n# a comment\r\n")
+check("list: CRLF, blank and comment lines", current and plans == [GR + "|point|7"], (current, plans))
+current, plans = parse_list("# vivify-geometry 2\nCustom/Unknown triangle 3\n" + TE + " sideways 3\n" +
+                            TE + " triangle 4\n" + GR + " point 40\n" + GR + " point 2\n")
+check("list: unknown shaders, modes and impossible counts are ignored", current and plans == [], plans)
+current, plans = parse_list("")
+check("list: an empty list is not current and has no plans", not current and plans == [], (current, plans))
+current, plans = parse_list("\n\n# vivify-geometry 2\n" + TE + " triangle 3\n")
+check("list: blank lines before the format line are skipped", current and plans == [TE + "|triangle|3"],
+      (current, plans))
+current, plans = parse_list(TE + " triangle 3\n# vivify-geometry 2\n")
+check("list: a format line after the first entry does not count", not current and plans == [TE + "|triangle|3"],
+      (current, plans))
+for other in ("# vivify-geometry 1", "# vivify-geometry 3", "# vivify-geometry", "# vivify-geometry 20",
+              "# vivify-geometry 2 x"):
+    current, plans = parse_list(other + "\n" + TE + " triangle 3\n")
+    check(f"list: '{other}' is not this build's format line", not current and plans == [TE + "|triangle|3"],
+          (current, plans))
+current, plans = parse_list("# vivify-geometry 2  \n" + GR + " point 3\n" + TE + " triangle 3   \n")
+check("list: trailing spaces are ignored", current and plans == sorted([GR + "|point|3", TE + "|triangle|3"]),
+      (current, plans))
+current, plans = parse_list("# vivify-geometry 2\n" + GR + " point 32\n")
+check("list: a 32-vertex strip is kept", current and plans == [GR + "|point|32"], (current, plans))
+current, plans = parse_list("# vivify-geometry 2\n" + GR + " point 5\n" + GR + " point 7\n")
+check("list: a repeated shader takes its last line", current and plans == [GR + "|point|7"], (current, plans))
 
 print("\n%d failure(s)" % failures)
 sys.exit(1 if failures else 0)
