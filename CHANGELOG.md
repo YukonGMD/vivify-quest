@@ -72,6 +72,14 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **Crash guard: three corrections** (naomi.7). A load that an older
+  converter's bundle left unfinished no longer counts as a strike against
+  the current version (that bundle is converted again anyway); naomi.6
+  counted naomi.5's crashed Aether load once. Force Reconvert All now clears
+  an unfinished load along with the strikes, instead of booking it again as
+  a fresh strike right after. And the grey-fallback warning no longer says
+  that turning Crash Guard off brings the translated shaders back: only
+  Force Reconvert All does. Nothing else about the crash guard changes.
 - **743 Aether crashed on every start with Emulate Geometry-Shader Effects
   on** (naomi.6). Conversion flagged every mesh of the bundle readable, but
   Unity keeps no copy in memory of a mesh it streams from the bundle's

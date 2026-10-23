@@ -276,8 +276,24 @@ bool TranslationCrashedBefore(std::string const& destPath) {
 // is retarget-only. Returns true when that happened.
 bool RecordInterruptedLoad(std::string const& destPath) {
   if (destPath.empty() || !FileExists(LoadingMarkerPath(destPath))) return false;
+  // ArmLoadGuard writes the converter version whose bundle was loading. One
+  // without a number counts as this version's, as before naomi.7.
+  int loadingVersion = kBundleConversionVersion;
+  {
+    std::ifstream loading(LoadingMarkerPath(destPath));
+    int version = 0;
+    if (loading >> version) loadingVersion = version;
+  }
   std::error_code ec;
   std::filesystem::remove(LoadingMarkerPath(destPath), ec);
+  // A load an older converter's bundle left unfinished (naomi.7): that bundle
+  // is converted again anyway, so it says nothing about this version's.
+  if (loadingVersion != kBundleConversionVersion) {
+    PaperLogger.info("Vivify: a load of converted bundle '{}' made by converter version {} never finished; it is "
+                     "converted again by this version, so that does not count against it",
+                     destPath, loadingVersion);
+    return false;
+  }
   // Crash Guard off (0.14.24): an interrupted load is not held against the
   // bundle, and it is never reconverted without translation.
   if (!GetCrashGuard()) return false;
@@ -2058,8 +2074,8 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
   _preloadedBundlePath = bundlePath;
   if (TranslationCrashedBefore(bundlePath)) {
     PaperLogger.warn("Vivify: '{}' is in the crash guard's grey fallback (converted without shader "
-                     "translation after two loads that never finished). Force Reconvert All, or turning Crash "
-                     "Guard off, gives it its translated shaders back", bundlePath);
+                     "translation after two loads that never finished). Force Reconvert All gives it its "
+                     "translated shaders back", bundlePath);
   }
   ArmLoadGuard(bundlePath);
   auto const preloadStart = std::chrono::steady_clock::now();
@@ -3808,10 +3824,13 @@ void StartBulkPcBundleConversion(std::function<void(BulkConversionProgress const
         if (source.empty()) continue;
 
         std::string const dest = ConvertedBundlePath(source);
-        // An explicit reconvert gives translation another go.
+        // An explicit reconvert gives translation another go: its strikes and
+        // an unfinished load are both forgotten (before naomi.7 the unfinished
+        // load was booked again as a fresh strike just after).
         if (force) {
           std::error_code ec;
           std::filesystem::remove(CrashedMarkerPath(dest), ec);
+          std::filesystem::remove(LoadingMarkerPath(dest), ec);
         }
         RecordInterruptedLoad(dest);
         if (std::filesystem::exists(dest)) {
