@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <set>
 
 namespace Vivify::Dxbc {
@@ -1221,6 +1222,20 @@ class GlslEmitter {
   bool EmitBody();
   bool EmitInstruction(Instruction const& instruction);
 
+  // Counted loops, found before the body is emitted and written as for loops
+  // (GlslOptions::countedLoops, naomi.7).
+  struct CountedLoop {
+    std::string counter;    // "r0.w"
+    std::string condition;  // the compare's destination, "r1.w"
+    int64_t first = 0;
+    int64_t bound = 0;
+    bool inclusive = true;  // counter <= bound; else counter < bound
+    int64_t exitValue = 0;  // the counter's value once the loop has ended
+    int64_t exitCondition = 0;  // the compare's result then
+    int id = 0;
+  };
+  void FindCountedLoops();
+
   std::string SrcBase(Operand const& operand, uint8_t mask);
   std::string SrcFloat(Operand const& operand, uint8_t mask);
   std::string SrcInt(Operand const& operand, uint8_t mask);
@@ -1260,6 +1275,9 @@ class GlslEmitter {
   std::string _subroutineBody;
   std::string* _target = &_body;
   int _indent = 1;
+  std::map<Instruction const*, CountedLoop> _countedLoops;            // by their loop instruction
+  std::map<Instruction const*, Instruction const*> _countedLoopEnds;  // endloop -> loop
+  std::set<Instruction const*> _countedLoopSkips;                     // each one's break and +1
   bool _failed = false;
   std::string _error;
   int _version = 300;
@@ -2566,7 +2584,11 @@ std::string GlslEmitter::ResourceSwizzle(Operand const& resource, uint8_t mask) 
   return swizzle;
 }
 
+std::string IntLiteral(int64_t value);  // below, with FindCountedLoops
+
 bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
+  // A counted loop's break and +1 are the for statement's own.
+  if (_countedLoopSkips.count(&instruction) != 0) return true;
   auto const& operands = instruction.operands;
   uint32_t const opcode = instruction.opcode;
 
@@ -3682,12 +3704,31 @@ bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
       _indent++;
       break;
     case OP_ENDIF:
-    case OP_ENDLOOP:
     case OP_ENDSWITCH:
       _indent = std::max(1, _indent - 1);
       Line("}");
       break;
+    case OP_ENDLOOP:
+      _indent = std::max(1, _indent - 1);
+      Line("}");
+      if (auto end = _countedLoopEnds.find(&instruction); end != _countedLoopEnds.end()) {
+        // What the while (true) form leaves: the value that ended the loop, and
+        // the compare's result for it.
+        CountedLoop const& loop = _countedLoops.at(end->second);
+        Line(loop.counter + " = " + IntLiteral(loop.exitValue) + ";");
+        Line(loop.condition + " = " + IntLiteral(loop.exitCondition) + ";");
+      }
+      break;
     case OP_LOOP:
+      if (auto counted = _countedLoops.find(&instruction); counted != _countedLoops.end()) {
+        CountedLoop const& loop = counted->second;
+        std::string const index = "vivify_loop" + std::to_string(loop.id);
+        Line("for (int " + index + " = " + IntLiteral(loop.first) + "; " + index +
+             (loop.inclusive ? " <= " : " < ") + IntLiteral(loop.bound) + "; " + index + "++) {");
+        _indent++;
+        Line(loop.counter + " = " + index + ";");
+        break;
+      }
       Line("while (true) {");
       _indent++;
       break;
@@ -3810,6 +3851,201 @@ bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
 
 namespace {
 
+// A temp register component an operand names as one scalar: a destination
+// with one mask bit, or a source selecting one component (for an instruction
+// writing one component, the swizzle entry at that position).
+bool ScalarTemp(Operand const& operand, int destComponent, uint64_t& reg, int& component) {
+  if (operand.type != kOperandTemp || operand.indices.size() != 1 || !operand.indices[0].hasImmediate ||
+      operand.indices[0].hasRelative || operand.modifier != Modifier::None) {
+    return false;
+  }
+  reg = operand.indices[0].immediate;
+  if (operand.selectionMode == 0) {
+    if (operand.mask == 0 || (operand.mask & (operand.mask - 1)) != 0) return false;
+    component = operand.mask == 1 ? 0 : operand.mask == 2 ? 1 : operand.mask == 4 ? 2 : 3;
+    return true;
+  }
+  if (operand.selectionMode == 2) {
+    component = operand.swizzle[0] & 3;
+    return true;
+  }
+  if (operand.selectionMode == 1 && destComponent >= 0) {
+    component = operand.swizzle[destComponent] & 3;
+    return true;
+  }
+  return false;
+}
+
+bool ScalarLiteral(Operand const& operand, int destComponent, int32_t& value) {
+  if (operand.type != kOperandImmediate32 || operand.modifier != Modifier::None) return false;
+  if (operand.immediates.size() == 1) {
+    value = static_cast<int32_t>(operand.immediates[0]);
+    return true;
+  }
+  if (operand.immediates.size() == 4 && destComponent >= 0) {
+    value = static_cast<int32_t>(operand.immediates[destComponent]);
+    return true;
+  }
+  return false;
+}
+
+bool IsControlFlow(uint32_t opcode) {
+  switch (opcode) {
+    case OP_IF: case OP_ELSE: case OP_ENDIF: case OP_LOOP: case OP_ENDLOOP: case OP_SWITCH: case OP_CASE:
+    case OP_DEFAULT: case OP_ENDSWITCH: case OP_BREAK: case OP_BREAKC: case OP_CONTINUE: case OP_CONTINUEC:
+    case OP_RET: case OP_RETC: case OP_LABEL: case OP_CALL: case OP_CALLC:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Whether any operand of the instruction could write that component: any
+// mask-mode operand of the register covering it. Sources use swizzles, so this
+// errs only on the side of leaving a loop as it was.
+bool MayWriteComponent(Instruction const& instruction, uint64_t reg, int component) {
+  for (auto const& operand : instruction.operands) {
+    if (operand.type != kOperandTemp || operand.selectionMode != 0 || operand.indices.empty()) continue;
+    if (operand.indices[0].hasRelative || operand.indices[0].immediate != reg) continue;
+    if ((operand.mask >> component) & 1u) return true;
+  }
+  return false;
+}
+
+std::string IntLiteral(int64_t value) {
+  // -2147483648 is unary minus on a literal that does not fit an int.
+  if (value == INT32_MIN) return "(-2147483647 - 1)";
+  return std::to_string(value);
+}
+
+}  // namespace
+
+void GlslEmitter::FindCountedLoops() {
+  auto const& instructions = _program.instructions;
+  int nextId = 0;
+  for (size_t start = 0; start < instructions.size(); start++) {
+    if (instructions[start].opcode != OP_LOOP) continue;
+    size_t end = start + 1;
+    for (int depth = 0; end < instructions.size(); end++) {
+      uint32_t const opcode = instructions[end].opcode;
+      if (opcode == OP_LABEL) {
+        end = instructions.size();
+        break;
+      }
+      if (opcode == OP_LOOP) depth++;
+      if (opcode == OP_ENDLOOP && depth-- == 0) break;
+    }
+    if (end >= instructions.size() || end < start + 4) continue;
+    Instruction const& compare = instructions[start + 1];
+    Instruction const& exit = instructions[start + 2];
+    Instruction const& step = instructions[end - 1];
+    if ((compare.opcode != OP_ILT && compare.opcode != OP_IGE) || compare.saturate || compare.operands.size() != 3) {
+      continue;
+    }
+    if (exit.opcode != OP_BREAKC || exit.operands.size() != 1) continue;
+    if (step.opcode != OP_IADD || step.saturate || step.operands.size() != 3) continue;
+
+    uint64_t conditionReg = 0, reg = 0, counterReg = 0;
+    int conditionComponent = 0, component = 0, counterComponent = 0;
+    int32_t bound = 0, one = 0, first = 0;
+    if (compare.operands[0].selectionMode != 0 ||
+        !ScalarTemp(compare.operands[0], -1, conditionReg, conditionComponent)) {
+      continue;
+    }
+    if (!ScalarTemp(exit.operands[0], conditionComponent, reg, component) || reg != conditionReg ||
+        component != conditionComponent) {
+      continue;
+    }
+    bool counterFirst = false;
+    if (ScalarTemp(compare.operands[1], conditionComponent, counterReg, counterComponent) &&
+        ScalarLiteral(compare.operands[2], conditionComponent, bound)) {
+      counterFirst = true;
+    } else if (!ScalarLiteral(compare.operands[1], conditionComponent, bound) ||
+               !ScalarTemp(compare.operands[2], conditionComponent, counterReg, counterComponent)) {
+      continue;
+    }
+    if (counterReg == conditionReg && counterComponent == conditionComponent) continue;
+    // The +1 at the bottom.
+    if (step.operands[0].selectionMode != 0 || !ScalarTemp(step.operands[0], -1, reg, component) ||
+        reg != counterReg || component != counterComponent) {
+      continue;
+    }
+    auto isCounter = [&](Operand const& operand) {
+      uint64_t r = 0;
+      int c = 0;
+      return ScalarTemp(operand, counterComponent, r, c) && r == counterReg && c == counterComponent;
+    };
+    if (!((isCounter(step.operands[1]) && ScalarLiteral(step.operands[2], counterComponent, one) && one == 1) ||
+          (ScalarLiteral(step.operands[1], counterComponent, one) && one == 1 && isCounter(step.operands[2])))) {
+      continue;
+    }
+    // Nothing else may leave this loop, skip its +1, call out, or write the counter.
+    bool plain = true;
+    for (size_t k = start + 3, loops = 0, switches = 0; k + 1 < end && plain; k++) {
+      Instruction const& inner = instructions[k];
+      switch (inner.opcode) {
+        case OP_LOOP: loops++; break;
+        case OP_ENDLOOP: loops--; break;
+        case OP_SWITCH: if (loops == 0) switches++; break;
+        case OP_ENDSWITCH: if (loops == 0) switches--; break;
+        case OP_BREAK: case OP_BREAKC: if (loops == 0 && switches == 0) plain = false; break;
+        case OP_CONTINUE: case OP_CONTINUEC: if (loops == 0) plain = false; break;
+        case OP_CALL: case OP_CALLC: plain = false; break;
+        default: break;
+      }
+      if (MayWriteComponent(inner, counterReg, counterComponent)) plain = false;
+    }
+    if (!plain) continue;
+    // The start: the counter's last write before the loop, in straight-line
+    // code, a mov of a literal.
+    bool started = false;
+    for (size_t k = start; k-- > 0;) {
+      Instruction const& before = instructions[k];
+      if (IsControlFlow(before.opcode)) break;
+      if (!MayWriteComponent(before, counterReg, counterComponent)) continue;
+      started = before.opcode == OP_MOV && !before.saturate && before.operands.size() == 2 &&
+                before.operands[0].type == kOperandTemp && before.operands[0].selectionMode == 0 &&
+                !before.operands[0].indices.empty() && before.operands[0].indices[0].immediate == counterReg &&
+                ScalarLiteral(before.operands[1], counterComponent, first);
+      break;
+    }
+    if (!started) continue;
+    // Which way it ends. ilt is a < b and ige a >= b; breakc_nz leaves when the
+    // result is true, breakc_z when it is false. Only an upward count fits a +1.
+    bool const breakOnTrue = ((exit.controls >> 7) & 0x1u) != 0;
+    bool const less = compare.opcode == OP_ILT;
+    bool inclusive = false;
+    if (breakOnTrue && less && !counterFirst) {
+      inclusive = true;  // leaves when bound < counter
+    } else if (breakOnTrue && !less && counterFirst) {
+      inclusive = false;  // leaves when counter >= bound
+    } else if (!breakOnTrue && less && counterFirst) {
+      inclusive = false;  // leaves when !(counter < bound)
+    } else if (!breakOnTrue && !less && !counterFirst) {
+      inclusive = true;  // leaves when !(bound >= counter)
+    } else {
+      continue;
+    }
+    if (inclusive && bound == INT32_MAX) continue;  // never leaves
+    CountedLoop loop;
+    char const* const components = "xyzw";
+    loop.counter = "r" + std::to_string(counterReg) + "." + components[counterComponent];
+    loop.condition = "r" + std::to_string(conditionReg) + "." + components[conditionComponent];
+    loop.first = first;
+    loop.bound = bound;
+    loop.inclusive = inclusive;
+    loop.exitValue = inclusive ? (first <= bound ? int64_t{bound} + 1 : first) : (first < bound ? bound : first);
+    loop.exitCondition = breakOnTrue ? -1 : 0;
+    loop.id = nextId++;
+    _countedLoops[&instructions[start]] = loop;
+    _countedLoopEnds[&instructions[end]] = &instructions[start];
+    _countedLoopSkips.insert(&exit);
+    _countedLoopSkips.insert(&step);
+  }
+}
+
+namespace {
+
 // Splits the instruction stream into main() and one function per label, then
 // emits each.
 //
@@ -3820,6 +4056,7 @@ namespace {
 // any of it means.
 bool GlslEmitter::EmitBody() {
   auto const& instructions = _program.instructions;
+  if (_options.countedLoops) FindCountedLoops();
 
   // Forward declarations first: a subroutine can call one declared after it.
   std::vector<uint64_t> labels;

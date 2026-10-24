@@ -13,6 +13,19 @@ conversion cache version, and cached conversions are redone automatically.
 
 Test builds report themselves as 0.14.25-naomi.N.
 
+### Changed
+- **Translated shaders write counted loops as `for` loops** (naomi.7, all
+  converted maps). DirectX bytecode spells a loop such as "for i = -1 to 1"
+  as an endless loop that tests and breaks at the top and adds one at the
+  bottom, and that is how it was translated, so the headset's shader
+  compiler could not see how often it runs. Such loops are now written as
+  ordinary `for` loops, which it can unroll; the results are the same, to
+  the bit. 743 Aether's procedural skies, gems and triangle effects are
+  built on these loops (304 of its 314 loops; each sky pixel runs two 27-step
+  voronoi loops). The conversion version goes to 22, so converted maps are
+  converted again once, by themselves. The gain has to be measured on the
+  headset.
+
 ### Added
 - **Render-state dump** (naomi.7, Debug logging only). Lines starting
   `Vivify render state (...)` after the time-0 catch-up, after each

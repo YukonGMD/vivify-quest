@@ -368,6 +368,11 @@ struct GlslOptions {
   // no longer varyings, so a semantic passed straight through is no clash.
   enum class FunctionMode { None, VertexFunction, GeometryFunction };
   FunctionMode functionMode = FunctionMode::None;
+  // Emit a counted loop -- a literal start, a compare against a literal and
+  // its break at the top, and +1 at the bottom -- as a for loop (naomi.7), so
+  // the GPU compiler can see its trip count and unroll it; the state after the
+  // loop is written exactly as the while (true) form leaves it.
+  bool countedLoops = true;
 };
 
 // Translates a parsed program to GLSL ES source.

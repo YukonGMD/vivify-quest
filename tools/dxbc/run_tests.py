@@ -320,7 +320,7 @@ body += m.insn(BREAKC, m.src(TEMP, 0, (Y, Y, Y, Y)), controls=(1 << 7))
 body += m.insn(IADD, m.dest(TEMP, 0, 0x1), m.src(TEMP, 0, (X, X, X, X)), m.imm_int(1))
 body += m.insn(ENDLOOP)
 body += m.insn(ITOF, m.dest(OUTPUT, 0), m.src(TEMP, 0))
-proc, fields, _, source = run("glsl", pixel_shader(body))
+proc, fields, _, source = run("glsl-while", pixel_shader(body))
 check("integer loop translates", fields.get("ok") == "1", fields.get("error", ""))
 check("temps are integer bit registers", "ivec4 r0;" in source and "vec4 r0;" not in source.replace("ivec4 r0;", ""),
       source)
@@ -330,6 +330,82 @@ check("the loop exit compares integers", "r0.y = (1 < r0.x) ? -1 : 0;" in source
       "if (r0.y != 0) break;" in source, source)
 check("no integer round-trips through a float", "intBitsToFloat(floatBitsToInt(" not in source and
       "floatBitsToInt(intBitsToFloat(" not in source, source)
+
+# The same loop by default (naomi.7): a for loop the GPU compiler can unroll,
+# its counter copied in from an int, the compare kept, the break and the +1
+# gone, and after it the state the while (true) form leaves: the counter at
+# the value that ended it and the compare's result (-1, true) for that value.
+COUNTED = body
+proc, fields, _, source = run("glsl", pixel_shader(COUNTED))
+check("a counted loop becomes a for loop",
+      "for (int vivify_loop0 = -1; vivify_loop0 <= 1; vivify_loop0++) {" in source and
+      "r0.x = vivify_loop0;" in source, source)
+check("the counted loop keeps its compare and drops the break and the +1",
+      "r0.y = (1 < r0.x) ? -1 : 0;" in source and "break;" not in source and "r0.x = r0.x + 1;" not in source,
+      source)
+check("after the counted loop the counter and compare are as the while form leaves them",
+      source.index("r0.x = 2;") > source.index("for (") and "r0.y = -1;" in source, source)
+
+
+def loop_body(first, compare, compare_operands, breakc_controls, inner=b"", step=None):
+    """mov r0.x, first; loop; <compare> r0.y, ...; breakc r0.y; <inner>; iadd r0.x, r0.x, 1; endloop."""
+    b = m.insn(MOV, m.dest(TEMP, 0, 0x1), first)
+    b += m.insn(LOOP)
+    b += m.insn(compare, m.dest(TEMP, 0, 0x2), *compare_operands)
+    b += m.insn(BREAKC, m.src(TEMP, 0, (Y, Y, Y, Y)), controls=breakc_controls)
+    b += inner
+    b += step if step is not None else m.insn(IADD, m.dest(TEMP, 0, 0x1), m.src(TEMP, 0, (X, X, X, X)), m.imm_int(1))
+    b += m.insn(ENDLOOP)
+    b += m.insn(ITOF, m.dest(OUTPUT, 0), m.src(TEMP, 0))
+    return b
+
+
+IGE, BREAK, CONTINUE, CONTINUEC = 33, 2, 7, 8
+CTR = m.src(TEMP, 0, (X, X, X, X))
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(0), IGE, (CTR, m.imm_int(4)), 1 << 7)))
+check("ige counter >= bound with breakc_nz counts to bound exclusive",
+      "for (int vivify_loop0 = 0; vivify_loop0 < 4; vivify_loop0++) {" in source and "r0.x = 4;" in source and
+      "r0.y = -1;" in source, source)
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(0), ILT, (CTR, m.imm_int(3)), 0)))
+check("ilt counter < bound with breakc_z counts to bound exclusive, the compare false at the end",
+      "vivify_loop0 < 3;" in source and "r0.x = 3;" in source and "r0.y = 0;" in source, source)
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(5), ILT, (m.imm_int(1), CTR), 1 << 7)))
+check("a loop that never runs ends with its counter at the start value",
+      "vivify_loop0 = 5; vivify_loop0 <= 1;" in source and "r0.x = 5;" in source, source)
+extra_break = m.insn(BREAKC, m.src(TEMP, 0, (Z, Z, Z, Z)), controls=1 << 7)
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(-1), ILT, (m.imm_int(1), CTR), 1 << 7,
+                                                             inner=extra_break)))
+check("a loop with another way out stays while (true)", "while (true)" in source and "for (" not in source, source)
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(-1), ILT, (m.imm_int(1), CTR), 1 << 7,
+                                                             inner=m.insn(CONTINUE))))
+check("a loop with a continue stays while (true)", "while (true)" in source and "for (" not in source, source)
+writes_counter = m.insn(MOV, m.dest(TEMP, 0, 0x1), m.imm_int(0))
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(-1), ILT, (m.imm_int(1), CTR), 1 << 7,
+                                                             inner=writes_counter)))
+check("a loop whose body writes the counter stays while (true)", "while (true)" in source, source)
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.src(TEMP, 1, (X, X, X, X)), ILT, (m.imm_int(1), CTR),
+                                                             1 << 7), temps=2))
+check("a loop whose start is not a literal stays while (true)", "while (true)" in source, source)
+step_two = m.insn(IADD, m.dest(TEMP, 0, 0x1), m.src(TEMP, 0, (X, X, X, X)), m.imm_int(2))
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(-1), ILT, (m.imm_int(1), CTR), 1 << 7,
+                                                             step=step_two)))
+check("a loop stepping by 2 stays while (true)", "while (true)" in source, source)
+proc, fields, _, source = run("glsl", pixel_shader(loop_body(m.imm_int(9), ILT, (CTR, m.imm_int(1)), 1 << 7)))
+check("a loop that would count down stays while (true)", "while (true)" in source, source)
+# Nested, as the voronoi loops are: both become for loops, each with its own index.
+nest = m.insn(MOV, m.dest(TEMP, 1, 0x1), m.imm_int(-1))
+nest += m.insn(LOOP)
+nest += m.insn(ILT, m.dest(TEMP, 1, 0x2), m.imm_int(1), m.src(TEMP, 1, (X, X, X, X)))
+nest += m.insn(BREAKC, m.src(TEMP, 1, (Y, Y, Y, Y)), controls=1 << 7)
+nest += m.insn(IADD, m.dest(TEMP, 0, 0x4), m.src(TEMP, 0, (Z, Z, Z, Z)), m.src(TEMP, 1, (X, X, X, X)))
+nest += m.insn(IADD, m.dest(TEMP, 1, 0x1), m.src(TEMP, 1, (X, X, X, X)), m.imm_int(1))
+nest += m.insn(ENDLOOP)
+proc, fields, _, source = run("glsl", pixel_shader(m.insn(MOV, m.dest(TEMP, 0, 0x4), m.imm_int(0)) +
+                                                   loop_body(m.imm_int(-1), ILT, (m.imm_int(1), CTR), 1 << 7,
+                                                             inner=nest), temps=2))
+check("nested counted loops both become for loops",
+      "for (int vivify_loop0 = -1;" in source and "for (int vivify_loop1 = -1;" in source and
+      "while (true)" not in source, source)
 
 body = m.insn(MOV, m.dest(TEMP, 0, 0x3), m.imm_int(1, -1))
 body += m.insn(MOV, m.dest(OUTPUT, 0, 0x1), m.imm_int(-1))

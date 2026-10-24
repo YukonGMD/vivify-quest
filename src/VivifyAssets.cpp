@@ -139,7 +139,9 @@ namespace {
 //  21  geometry-shader emulation (setting) copies a streamed mesh's vertex
 //      data in from the bundle's .resS, so it is stored inline and can be
 //      rebuilt: 743 Aether's cracked paths, tower and note wireframes
-constexpr int kBundleConversionVersion = 21;
+//  22  counted loops are emitted as for loops, so the GPU compiler can unroll
+//      them (Aether's voronoi skies: 304 of 314 loops); same results
+constexpr int kBundleConversionVersion = 22;
 
 // Whether Beat Saber's own shaders use STEREO_MULTIVIEW_ON: -1 not looked yet,
 // 0 no, 1 yes. Unity registers every keyword a loaded shader declares, so the
