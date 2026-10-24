@@ -27,6 +27,17 @@ Test builds report themselves as 0.14.25-naomi.N.
   headset.
 
 ### Added
+- **Performance by section** (naomi.7). The `[PERF]` summary at the end of
+  each level now also splits the song into sections -- from one set of live
+  prefabs to the next, which in 743 Aether are its intro, drop, ambient,
+  bridge, buildup and outro -- and gives each its song time range, median
+  and 95th-percentile frame time, the share of frames that held 60 fps (16.7
+  ms), the share that missed a refresh, what Vivify's own work took per
+  frame (its per-frame update, blits, and note and debris replacements),
+  and what was live: active renderers and how many were in view, particle
+  systems with particles alive, and Unity's draw-call, batch and triangle
+  counts where this game build keeps them (the summary says when it does
+  not). Measured every two seconds of song, after the frame's own work.
 - **Render-state dump** (naomi.7, Debug logging only). Lines starting
   `Vivify render state (...)` after the time-0 catch-up, after each
   `SetRenderingSettings` event, and at level end before the settings are

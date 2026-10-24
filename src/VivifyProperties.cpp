@@ -765,18 +765,6 @@ bool IsLiteralColorArray(rapidjson::Value const& value) {
   return true;
 }
 
-// An engine function bs-cordl has no binding for, by its internal-call name
-// ("UnityEngine.Light::get_shadowStrength"). Null, said once, when this game
-// build does not register it. The symbol must be a string literal.
-void* ResolveEngineIcall(char const* symbol) {
-  static std::unordered_map<std::string_view, void*> resolved;
-  if (auto it = resolved.find(symbol); it != resolved.end()) return it->second;
-  auto* fn = reinterpret_cast<void*>(il2cpp_functions::resolve_icall(symbol));
-  resolved.emplace(symbol, fn);
-  if (fn == nullptr) PaperLogger.warn("Vivify: '{}' is not present in this game build", symbol);
-  return fn;
-}
-
 // PC calls DynamicGI.UpdateEnvironment() after every setting it sets to a
 // plain value (SetRenderingSettings.cs: StructSettingHandler and
 // ClassSettingHandler), so ambient light and reflections are recomputed from
@@ -787,6 +775,15 @@ void UpdateEnvironmentLikePc() {
   static auto* fn = reinterpret_cast<void (*)()>(ResolveEngineIcall("UnityEngine.DynamicGI::UpdateEnvironment"));
   if (fn != nullptr) fn();
 }
+}
+
+void* ResolveEngineIcall(char const* symbol) {
+  static std::unordered_map<std::string_view, void*> resolved;
+  if (auto it = resolved.find(symbol); it != resolved.end()) return it->second;
+  auto* fn = reinterpret_cast<void*>(il2cpp_functions::resolve_icall(symbol));
+  resolved.emplace(symbol, fn);
+  if (fn == nullptr) PaperLogger.warn("Vivify: '{}' is not present in this game build", symbol);
+  return fn;
 }
 
 void Runtime::HandleSetRenderingSettings(CustomJSONData::CustomEventData* customEventData,

@@ -71,5 +71,34 @@ check("NaN and negative frames refused", "1 frames measured" in find(lines, "son
 lines = run(90, ["11.1 %.3f 0 %s" % (i, "x" * 400) for i in range(3)])
 check("long labels are cut, not overrun", all(len(l) < 300 for l in lines), max(map(len, lines)))
 
+# Sections (naomi.7): a heavy intro, a light drop, then a section with live
+# samples, at 120 Hz.
+frames = ["S 0 intro"] + ["F 100.0 0.5 %.2f" % (i / 10) for i in range(250)]
+frames += ["S 25 drop"] + ["F 8.3 0.2 %.3f" % (25 + i / 120) for i in range(1200)]
+frames += ["S 35 drop"] + ["F 8.3 0.2 35"]  # the same section again: no new one
+frames += ["S 36 ambient", "L 1147 300 111 5000 410 380 210000", "L 1000 200 90 6000 -1 -1 -1"]
+frames += ["F 16.0 1.5 %d" % (36 + i) for i in range(30)] + ["F 40.0 3.0 70"]
+lines = run(120, frames)
+by = find(lines, "by section")
+check("sections listed", by.startswith("by section (3)"), by)
+intro = find(lines, "  'intro'")
+check("a heavy section's numbers", "song 0.0-24.9s" in intro and "250 frames" in intro and "median 100 ms (10 fps)" in
+      intro and "60 fps in 0%" in intro and "missed a refresh in 100%" in intro, intro)
+check("Vivify's own work averaged", "Vivify's own work 0.50 ms a frame on average (max 0.5)" in intro, intro)
+drop = find(lines, "  'drop'")
+check("a light section holds 60 fps", "1201 frames" in drop and "60 fps in 100%" in drop and
+      "missed a refresh in 0%" in drop, drop)
+amb = find(lines, "  'ambient'")
+check("live samples averaged, peaks kept", "live: 1074 renderers (250 in view, peak 300), peak 111 particle systems "
+      "with 6000 particles" in amb, amb)
+check("draw calls only from samples that had them", "draw calls 410 (peak 410), batches 380, triangles 210000" in amb,
+      amb)
+check("the share at 60 fps counts frames of 16 ms", "60 fps in 97%" in amb, amb)
+lines = run(90, ["S %d s%d" % (i, i) for i in range(40)] + ["F 10 0 1"])
+check("sections past the limit fold into the last", find(lines, "by section").startswith("by section (32)") and
+      find(lines, "  'later sections'"), [l for l in lines if "section" in l][:3])
+lines = run(90, ["F 10 0 1", "L 1 1 1 1 1 1 1"])
+check("frames before any section are ignored", not find(lines, "by section"), lines)
+
 print("\n%d failure(s)" % failures)
 sys.exit(1 if failures else 0)

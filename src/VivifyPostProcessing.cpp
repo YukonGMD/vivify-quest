@@ -25,6 +25,7 @@ UnityEngine::Rendering::RenderTargetIdentifier CameraTargetId() {
 
 void Runtime::ApplyBlits(UnityEngine::RenderTexture* src, UnityEngine::RenderTexture* dest,
                          std::string const& cameraName, int phase) {
+  PerfScope const perfScope{*this};  // counted as Vivify's own work (naomi.7)
   if (!IsAlive(src) || (dest != nullptr && !IsAlive(dest))) return;
   bool const passthroughOnly = GetDisableAllBlits() || _isResetting || _pauseMenuActive ||
                                _currentBeatmapData == nullptr ||

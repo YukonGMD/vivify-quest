@@ -116,4 +116,56 @@ class PerfStats {
   int _worstCount = 0;
 };
 
+// The same song split into sections (naomi.7): from one set of live prefabs to
+// the next (in 743 Aether, its intro, drop, ambient, bridge, buildup and
+// outro), each with its own frame times, the share of frames that held 60 fps,
+// what Vivify's own per-frame work cost, and what was live and drawn, so a
+// summary can say how close each part of a map gets.
+//
+// AddFrame is on the hot path and never allocates; Begin allocates the new
+// section's label, which happens a few times a song.
+class PerfSections {
+ public:
+  static constexpr int kMaxSections = 32;  // later sections are counted in the last
+  static constexpr int kBins = 300;        // 1 ms each; longer frames share the last
+  // What was live and drawn, sampled every couple of seconds. -1: unknown.
+  struct Live {
+    int renderers = -1;         // active renderers under the live prefabs
+    int visibleRenderers = -1;  // of them, inside a camera's view last frame
+    int particleSystems = -1;
+    int particles = -1;         // alive particles
+    int64_t drawCalls = -1, batches = -1, setPassCalls = -1, triangles = -1, vertices = -1;
+  };
+
+  void Reset();
+  // From now on, a section called `label`; nothing happens when it is the
+  // current one.
+  void Begin(std::string const& label, float songTime);
+  // One frame (its duration and Vivify's own share of it) at that song time.
+  void AddFrame(float frameMs, float vivifyMs, float songTime);
+  void AddLive(Live const& live);
+  int Count() const { return static_cast<int>(_sections.size()); }
+  // One line per section, without prefixes. budgetMs: one refresh.
+  std::vector<std::string> Summary(float budgetMs) const;
+
+ private:
+  struct Section {
+    std::string label;
+    float startSong = 0.0f;
+    float endSong = 0.0f;
+    int frames = 0;
+    double sumMs = 0.0;
+    double sumVivifyMs = 0.0;
+    float maxMs = 0.0f;
+    float maxVivifyMs = 0.0f;
+    uint32_t bins[kBins] = {};
+    int liveSamples = 0;
+    Live peak;
+    double sumRenderers = 0.0, sumVisible = 0.0, sumDrawCalls = 0.0, sumBatches = 0.0, sumTriangles = 0.0;
+    int drawCallSamples = 0;
+  };
+  float PercentileMs(Section const& section, double fraction) const;
+  std::vector<Section> _sections;
+};
+
 }  // namespace Vivify

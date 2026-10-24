@@ -109,4 +109,111 @@ std::vector<std::string> PerfStats::Summary(Context const& c) const {
   return lines;
 }
 
+void PerfSections::Reset() {
+  _sections.clear();
+  _sections.reserve(kMaxSections);
+}
+
+void PerfSections::Begin(std::string const& label, float songTime) {
+  if (!_sections.empty() && _sections.back().label == label) return;
+  if (static_cast<int>(_sections.size()) >= kMaxSections) {
+    // Out of room: the last section takes the rest of the song.
+    _sections.back().label = "later sections";
+    return;
+  }
+  _sections.emplace_back();
+  _sections.back().label = label;
+  _sections.back().startSong = _sections.back().endSong = songTime;
+}
+
+void PerfSections::AddFrame(float frameMs, float vivifyMs, float songTime) {
+  if (_sections.empty() || !(frameMs >= 0.0f)) return;
+  Section& section = _sections.back();
+  if (section.frames == 0) section.startSong = songTime;
+  section.endSong = songTime;
+  section.frames++;
+  section.sumMs += frameMs;
+  section.maxMs = std::max(section.maxMs, frameMs);
+  if (vivifyMs >= 0.0f) {
+    section.sumVivifyMs += vivifyMs;
+    section.maxVivifyMs = std::max(section.maxVivifyMs, vivifyMs);
+  }
+  int bin = static_cast<int>(frameMs);
+  if (bin >= kBins) bin = kBins - 1;
+  section.bins[bin]++;
+}
+
+void PerfSections::AddLive(Live const& live) {
+  if (_sections.empty()) return;
+  Section& section = _sections.back();
+  section.liveSamples++;
+  auto peak = [](auto& to, auto value) {
+    if (value > to) to = value;
+  };
+  peak(section.peak.renderers, live.renderers);
+  peak(section.peak.visibleRenderers, live.visibleRenderers);
+  peak(section.peak.particleSystems, live.particleSystems);
+  peak(section.peak.particles, live.particles);
+  peak(section.peak.drawCalls, live.drawCalls);
+  peak(section.peak.batches, live.batches);
+  peak(section.peak.setPassCalls, live.setPassCalls);
+  peak(section.peak.triangles, live.triangles);
+  peak(section.peak.vertices, live.vertices);
+  section.sumRenderers += std::max(live.renderers, 0);
+  section.sumVisible += std::max(live.visibleRenderers, 0);
+  if (live.drawCalls >= 0) {
+    section.drawCallSamples++;
+    section.sumDrawCalls += static_cast<double>(live.drawCalls);
+    section.sumBatches += static_cast<double>(std::max<int64_t>(live.batches, 0));
+    section.sumTriangles += static_cast<double>(std::max<int64_t>(live.triangles, 0));
+  }
+}
+
+float PerfSections::PercentileMs(Section const& section, double fraction) const {
+  if (section.frames == 0) return 0.0f;
+  uint64_t const wanted = std::max<uint64_t>(static_cast<uint64_t>(std::ceil(fraction * section.frames)), 1);
+  uint64_t seen = 0;
+  for (int bin = 0; bin < kBins; bin++) {
+    seen += section.bins[bin];
+    if (seen >= wanted) return bin == kBins - 1 ? section.maxMs : std::min(static_cast<float>(bin + 1), section.maxMs);
+  }
+  return section.maxMs;
+}
+
+std::vector<std::string> PerfSections::Summary(float budgetMs) const {
+  std::vector<std::string> lines;
+  if (_sections.empty()) return lines;
+  lines.push_back(Format("by section (%d), with the share of frames that held 60 fps (16.7 ms or less):",
+                         static_cast<int>(_sections.size())));
+  for (Section const& section : _sections) {
+    if (section.frames == 0) continue;
+    // Frames of 16.7 ms or less, counted by whole bins below 17 ms.
+    uint64_t held60 = 0, missed = 0;
+    for (int bin = 0; bin < kBins; bin++) {
+      if (bin < 17) held60 += section.bins[bin];
+      if (static_cast<float>(bin) >= budgetMs * 1.2f) missed += section.bins[bin];
+    }
+    float const median = PercentileMs(section, 0.5);
+    std::string line = Format(
+        "  '%s' song %.1f-%.1fs: %d frames, median %.0f ms (%.0f fps), 95th %.0f, max %.0f; 60 fps in %.0f%% of "
+        "frames; missed a refresh in %.0f%%; Vivify's own work %.2f ms a frame on average (max %.1f)",
+        section.label.c_str(), section.startSong, section.endSong, section.frames, median,
+        median > 0.0f ? 1000.0f / median : 0.0f, PercentileMs(section, 0.95), section.maxMs,
+        100.0 * held60 / section.frames, 100.0 * missed / section.frames, section.sumVivifyMs / section.frames,
+        section.maxVivifyMs);
+    if (section.liveSamples > 0) {
+      line += Format("; live: %.0f renderers (%.0f in view, peak %d), peak %d particle systems with %d particles",
+                     section.sumRenderers / section.liveSamples, section.sumVisible / section.liveSamples,
+                     section.peak.visibleRenderers, section.peak.particleSystems, section.peak.particles);
+      if (section.drawCallSamples > 0) {
+        line += Format("; draw calls %.0f (peak %lld), batches %.0f, triangles %.0f",
+                       section.sumDrawCalls / section.drawCallSamples, static_cast<long long>(section.peak.drawCalls),
+                       section.sumBatches / section.drawCallSamples, section.sumTriangles / section.drawCallSamples);
+      }
+    }
+    lines.push_back(line);
+  }
+  return lines;
+}
+
 }  // namespace Vivify

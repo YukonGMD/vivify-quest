@@ -12,6 +12,9 @@
 #include "GlobalNamespace/MultiplayerController.hpp"
 #include "GlobalNamespace/OVRDisplay.hpp"
 #include "GlobalNamespace/OVRManager.hpp"
+#include "Unity/Profiling/ProfilerCategory.hpp"
+#include "Unity/Profiling/ProfilerRecorder.hpp"
+#include "Unity/Profiling/ProfilerRecorderOptions.hpp"
 
 namespace Vivify {
 
@@ -193,6 +196,14 @@ void Runtime::Update() {
   double const frameMs =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
   _worstFrameMs = std::max(_worstFrameMs, frameMs);
+  if (_perfActive) {
+    _perfVivifyMs += frameMs;
+    // After the frame's own work, so its cost is not counted as Vivify's.
+    if (!_pauseMenuActive && CurrentSongTime() >= _perfLiveDue) {
+      _perfLiveDue = CurrentSongTime() + 2.0f;
+      SamplePerfLive();
+    }
+  }
   if (frameMs > kSlowFrameMs) {
     _slowFrameStreak++;
     if (_slowFrameStreak == 1) {
@@ -652,6 +663,72 @@ void Runtime::ResetRuntime(std::string_view reason) {
 // one clock read, the garbage collection count, the song time (already cached
 // for the frame) and PerfStats::AddFrame, none of which allocates.
 
+namespace {
+
+// Unity's render counters (naomi.7), read with ProfilerRecorder where this
+// build keeps them; a counter that never reads above zero counts as missing.
+struct PerfRecorders {
+  Unity::Profiling::ProfilerRecorder recorders[5];
+  bool valid[5] = {};
+  bool started = false;
+  bool sawValue = false;
+};
+PerfRecorders gPerfRecorders;
+
+void StartPerfRecorders() {
+  if (gPerfRecorders.started) return;
+  gPerfRecorders.started = true;
+  gPerfRecorders.sawValue = false;
+  static char16_t const* const names[5] = {u"Draw Calls Count", u"Batches Count", u"SetPass Calls Count",
+                                           u"Triangles Count", u"Vertices Count"};
+  for (int i = 0; i < 5; i++) {
+    try {
+      gPerfRecorders.recorders[i] = Unity::Profiling::ProfilerRecorder::StartNew(
+          Unity::Profiling::ProfilerCategory::get_Render(), StringW(names[i]), 1,
+          Unity::Profiling::ProfilerRecorderOptions(0x18 | 0x1));  // Default | StartImmediately
+      gPerfRecorders.valid[i] = gPerfRecorders.recorders[i].get_Valid();
+    } catch (...) {
+      gPerfRecorders.valid[i] = false;
+    }
+  }
+}
+
+void ReadPerfRecorders(int64_t& drawCalls, int64_t& batches, int64_t& setPassCalls, int64_t& triangles,
+                       int64_t& vertices) {
+  int64_t* const out[5] = {&drawCalls, &batches, &setPassCalls, &triangles, &vertices};
+  for (int i = 0; i < 5; i++) {
+    *out[i] = -1;
+    if (!gPerfRecorders.valid[i]) continue;
+    try {
+      int64_t const value = gPerfRecorders.recorders[i].get_LastValue();
+      if (value > 0) {
+        *out[i] = value;
+        gPerfRecorders.sawValue = true;
+      }
+    } catch (...) {
+      gPerfRecorders.valid[i] = false;
+    }
+  }
+}
+
+bool PerfRecordersValid() {
+  return gPerfRecorders.sawValue;
+}
+
+void StopPerfRecorders() {
+  for (int i = 0; i < 5; i++) {
+    if (!gPerfRecorders.valid[i]) continue;
+    try {
+      gPerfRecorders.recorders[i].Dispose();
+    } catch (...) {
+    }
+    gPerfRecorders.valid[i] = false;
+  }
+  gPerfRecorders.started = false;
+}
+
+}  // namespace
+
 void Runtime::BeginPerfSummary() {
   float refreshHz = 0.0f;
   try {
@@ -659,6 +736,10 @@ void Runtime::BeginPerfSummary() {
   } catch (...) {
   }
   _perf.Reset(refreshHz);
+  _perfSections.Reset();
+  _perfVivifyMs = 0.0;
+  _perfLiveDue = 0.0f;
+  StartPerfRecorders();
   _perfActive = true;
   _perfSkipNext = true;  // the first frame's gap is level loading, not play
   _perfStartWall = std::chrono::steady_clock::now();
@@ -683,7 +764,9 @@ void Runtime::RecordPerfFrame(std::chrono::steady_clock::time_point frameStart) 
     int const gcDelta = gc >= 0 && _perfGcLast >= 0 ? gc - _perfGcLast : -1;
     _perf.AddFrame(frameMs, CurrentSongTime(), gcDelta,
                    [this](char* buffer, size_t size) { WritePerfLabel(buffer, size); });
+    _perfSections.AddFrame(frameMs, static_cast<float>(_perfVivifyMs), CurrentSongTime());
   }
+  _perfVivifyMs = 0.0;
   _perfGcLast = gc;
   _perfLastFrame = frameStart;
   _perfEventsSinceFrame = 0;
@@ -705,6 +788,23 @@ void Runtime::WritePerfLabel(char* buffer, size_t size) const {
 }
 
 void Runtime::UpdatePerfPrefabCounts() {
+  // The section is the set of live prefabs, by id (743 Aether: one section
+  // prefab at a time).
+  if (_perfActive) {
+    std::vector<std::string_view> ids;
+    for (auto const& [id, prefab] : _livePrefabs) ids.push_back(id);
+    std::sort(ids.begin(), ids.end());
+    std::string label;
+    for (auto id : ids) {
+      if (label.size() > 80) {
+        label += "+...";
+        break;
+      }
+      if (!label.empty()) label += "+";
+      label += id;
+    }
+    _perfSections.Begin(label.empty() ? std::string("no prefab") : label, CurrentSongTime());
+  }
   _perfPrefabsNow = static_cast<int>(_livePrefabs.size());
   _perfRenderersNow = _perfParticlesNow = _perfLightsNow = 0;
   for (auto const& [id, prefab] : _livePrefabs) {
@@ -716,6 +816,36 @@ void Runtime::UpdatePerfPrefabCounts() {
   _perfRenderersPeak = std::max(_perfRenderersPeak, _perfRenderersNow);
   _perfParticlesPeak = std::max(_perfParticlesPeak, _perfParticlesNow);
   _perfLightsPeak = std::max(_perfLightsPeak, _perfLightsNow);
+}
+
+// What was live and drawn, every two seconds of song (naomi.7): active
+// renderers under the live prefabs and how many were in a camera's view last
+// frame, particle systems with particles alive, and Unity's own render
+// counters where this build keeps them.
+void Runtime::SamplePerfLive() {
+  PerfSections::Live live;
+  live.renderers = live.visibleRenderers = live.particleSystems = live.particles = 0;
+  // Renderer.isVisible has no binding in this game build.
+  static auto* isVisible =
+      reinterpret_cast<bool (*)(UnityEngine::Object*)>(ResolveEngineIcall("UnityEngine.Renderer::get_isVisible"));
+  if (isVisible == nullptr) live.visibleRenderers = -1;
+  for (auto const& [id, prefab] : _livePrefabs) {
+    if (!IsAlive(prefab.gameObject) || !prefab.gameObject->get_activeInHierarchy()) continue;
+    for (auto* renderer : prefab.gameObject->GetComponentsInChildren<UnityEngine::Renderer*>(false)) {
+      if (!IsAlive(renderer) || !renderer->get_enabled()) continue;
+      live.renderers++;
+      if (isVisible != nullptr && isVisible(renderer)) live.visibleRenderers++;
+    }
+    for (auto* system : prefab.particleSystems) {
+      if (!IsAlive(system)) continue;
+      int const count = system->get_particleCount();
+      if (count <= 0) continue;
+      live.particleSystems++;
+      live.particles += count;
+    }
+  }
+  ReadPerfRecorders(live.drawCalls, live.batches, live.setPassCalls, live.triangles, live.vertices);
+  _perfSections.AddLive(live);
 }
 
 void Runtime::WritePerfSummary() {
@@ -738,6 +868,11 @@ void Runtime::WritePerfSummary() {
   context.lightsEnd = _perfLightsNow;
   context.lightsPeak = _perfLightsPeak;
   for (auto const& line : _perf.Summary(context)) VivifyWriteFlushedLine("[PERF] " + line);
+  for (auto const& line : _perfSections.Summary(_perf.BudgetMs())) VivifyWriteFlushedLine("[PERF] " + line);
+  if (!PerfRecordersValid()) {
+    VivifyWriteFlushedLine("[PERF] draw call counts: not available in this game build");
+  }
+  StopPerfRecorders();
   _perfLastEventType = {};
   _perfEventsSinceFrame = 0;
   _perfPrefabsPeak = _perfRenderersPeak = _perfParticlesPeak = _perfLightsPeak = 0;

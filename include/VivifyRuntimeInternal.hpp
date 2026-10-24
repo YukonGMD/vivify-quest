@@ -651,6 +651,22 @@ private:
   int _perfEventsSinceFrame = 0;
   int _perfPrefabsPeak = 0, _perfRenderersPeak = 0, _perfParticlesPeak = 0, _perfLightsPeak = 0;
   int _perfPrefabsNow = 0, _perfRenderersNow = 0, _perfParticlesNow = 0, _perfLightsNow = 0;
+  // Per section (naomi.7): frame times, Vivify's own share of each frame and
+  // what was live and drawn (PerfSections). _perfVivifyMs gathers the frame
+  // being measured: Update, blits, note and debris replacements.
+  PerfSections _perfSections;
+  double _perfVivifyMs = 0.0;
+  float _perfLiveDue = 0.0f;
+  void SamplePerfLive();
+  // Adds the time it lives to _perfVivifyMs.
+  struct PerfScope {
+    Runtime& runtime;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~PerfScope() {
+      runtime._perfVivifyMs +=
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    }
+  };
   // The breadcrumb for the first frame after PrepareBeatmap (naomi.2).
   bool _firstFrameCrumbPending = false;
   int _levelStartFrame = -1;
@@ -704,6 +720,11 @@ private:
   std::string _pendingDownloadLevelPath;
   std::string _pendingDownloadPcFallback;
 };
+
+// An engine function bs-cordl has no binding for, by its internal-call name
+// ("UnityEngine.Light::get_shadowStrength"). Null, said once, when this game
+// build does not register it. The symbol must be a string literal (naomi.7).
+void* ResolveEngineIcall(char const* symbol);
 
 // The shaders a converted bundle's geometry programs were emulated for, kept
 // beside the bundle (VivifyGeometryRuntime.cpp). False, logged, when the list

@@ -485,6 +485,7 @@ void Runtime::ReassertNoteReplacement(GlobalNamespace::NoteController* noteContr
 }
 
 void Runtime::ApplyNotePrefabFor(GlobalNamespace::NoteController* noteController, bool isFreshInit) {
+  PerfScope const perfScope{*this};  // counted as Vivify's own work (naomi.7)
   if (!IsAlive(noteController) || _currentBeatmapData == nullptr || _isResetting) return;
   auto* noteData = noteController->get_noteData();
   if (noteData == nullptr) {
@@ -1449,6 +1450,7 @@ void Runtime::ApplySaberTrailVisuals(GlobalNamespace::SaberModelController* smc,
 }
 
 void Runtime::ReplaceDebrisVisuals(GlobalNamespace::NoteDebris* debris) {
+  PerfScope const perfScope{*this};  // counted as Vivify's own work (naomi.7)
   if (GetDisableCustomNoteVisuals() || ShouldDisableVisualsForMultiplayer()) return;
   RestoreDebrisVisuals(debris);
   if (!IsAlive(debris)) return;
