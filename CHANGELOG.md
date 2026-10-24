@@ -72,6 +72,16 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **A map played while Force Reconvert All was redoing it could not be
+  loaded again until the game restarted** (naomi.7). Force Reconvert
+  deleted the map's converted bundle before converting it again; starting
+  or restarting that map in the meantime made Vivify fall back to the PC
+  bundle, whose load failed beside the converted one still in memory, and
+  the converted one stayed loaded with nothing referring to it. Force
+  Reconvert (and Convert All, for bundles an older converter made) now only
+  drops the bundle's marker and leaves the file until the new one replaces
+  it; a level start uses the preloaded bundle even if its file is gone; and
+  a bundle still loaded from another path is unloaded before a new load.
 - **The room offset was not applied in Vivify maps** (naomi.7). Beat
   Saber's VRCenterAdjust applies the player's room centre and rotation when
   it starts and follows later changes. Vivify skips its calls while the

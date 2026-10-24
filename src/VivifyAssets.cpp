@@ -2342,7 +2342,11 @@ void Runtime::LoadMainBundle() {
   // downloaded one, or one converted on device), so that choice wins over
   // re-scanning the folder.
   std::string bundlePath = _selectedBundlePath;
-  if (bundlePath.empty() || !std::filesystem::exists(bundlePath)) {
+  // The preloaded bundle is used even if its file has been replaced or removed
+  // since: Unity reads the one it opened (naomi.7).
+  bool const selectedIsPreloaded = !bundlePath.empty() && bundlePath == _preloadedBundlePath &&
+                                   _mainBundle != nullptr && UnityEngine::Object::op_Implicit_bool(_mainBundle);
+  if (bundlePath.empty() || (!selectedIsPreloaded && !std::filesystem::exists(bundlePath))) {
     bundlePath = ResolveBundlePath(_selectedLevelPath);
   }
   if (bundlePath.empty()) {
@@ -2375,8 +2379,11 @@ void Runtime::LoadMainBundle() {
   if (GetVivifyDebugLogging()) {
     PaperLogger.info("Vivify loading asset bundle: path='{}'", bundlePath);
   }
+  // A bundle still loaded from another path goes first: the two may share
+  // their internal names, and the load beside it would fail and lose the only
+  // reference to it, leaving it loaded for the rest of the session (naomi.7).
   // One something else unloaded leaves what was made for it behind.
-  if (_mainBundle != nullptr && !UnityEngine::Object::op_Implicit_bool(_mainBundle)) ReleaseMainBundle();
+  ReleaseMainBundle();
   _emulationList = ReadGeometryEmulationList(bundlePath);
   _mainBundle = UnityEngine::AssetBundle::LoadFromFile(StringW(bundlePath));
   if (_mainBundle == nullptr) {
@@ -3843,21 +3850,22 @@ void StartBulkPcBundleConversion(std::function<void(BulkConversionProgress const
             PaperLogger.info("Vivify bulk convert: cached '{}' predates this converter, redoing it",
                              dest);
           }
-          // Forced, or cached by an older converter: drop the file so the
-          // conversion actually re-runs.
-          // ConvertToAndroid writes through a .part file and renames, so a
-          // failure after this point leaves no cached bundle rather than a
-          // truncated one -- the level falls back to being unconverted, which
-          // is the state it would have been in anyway.
+          // Forced, or cached by an older converter: its marker goes, so the
+          // conversion actually re-runs. The file itself stays until the new
+          // one is renamed over it (conversion writes a .part file): a map
+          // preloaded from it can still be played meanwhile, and one that
+          // fails to convert is left without a marker, so it is never used.
+          // naomi.7: deleting it first left a map that was played meanwhile
+          // unloadable for the rest of the session.
           std::error_code ec;
-          std::filesystem::remove(dest, ec);
+          std::filesystem::remove(ConversionMarkerPath(dest), ec);
           if (ec) {
             progress.failed++;
-            PaperLogger.warn("Vivify bulk convert: could not remove cached '{}' to reconvert: {}",
+            PaperLogger.warn("Vivify bulk convert: could not drop the marker of cached '{}' to reconvert: {}",
                              dest, ec.message());
             continue;
           }
-          PaperLogger.info("Vivify bulk convert: discarded cached '{}' to reconvert", dest);
+          PaperLogger.info("Vivify bulk convert: cached '{}' will be reconverted", dest);
         }
 
         if (gSongPlaying.load()) {
