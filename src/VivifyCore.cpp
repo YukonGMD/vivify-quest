@@ -12,6 +12,7 @@
 #include "GlobalNamespace/MultiplayerController.hpp"
 #include "GlobalNamespace/OVRDisplay.hpp"
 #include "GlobalNamespace/OVRManager.hpp"
+#include "GlobalNamespace/OVRPlugin.hpp"
 #include "UnityEngine/XR/XRSettings.hpp"
 #include "Unity/Profiling/ProfilerCategory.hpp"
 #include "Unity/Profiling/ProfilerRecorder.hpp"
@@ -736,6 +737,16 @@ void Runtime::BeginPerfSummary() {
   try {
     if (auto* display = GlobalNamespace::OVRManager::get_display()) refreshHz = display->get_displayFrequency();
   } catch (...) {
+  }
+  // OVRManager has no display in some sessions (naomi.6's first Aether play
+  // guessed 90 Hz from its frames on a 120 Hz display, and counted missed
+  // refreshes against that); the plugin itself always knows.
+  if (!(refreshHz > 1.0f)) {
+    try {
+      refreshHz = GlobalNamespace::OVRPlugin::get_systemDisplayFrequency();
+    } catch (...) {
+      refreshHz = 0.0f;
+    }
   }
   _perf.Reset(refreshHz);
   _perfSections.Reset();

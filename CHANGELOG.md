@@ -137,6 +137,10 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **The `[PERF]` summary could count missed refreshes against the wrong
+  refresh rate** (naomi.7). When OVRManager had no display to ask, it
+  guessed from the median frame: naomi.6's first Aether play guessed 90 Hz
+  on a 120 Hz display. It now asks the OVR plugin before guessing.
 - **Geometry-shader effects on streamed meshes** (naomi.7). Objects whose
   mesh Unity streams from the bundle's `.resS` file kept their grey
   stand-in in naomi.6, because Unity keeps no copy of such a mesh to
