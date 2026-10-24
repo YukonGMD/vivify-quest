@@ -60,6 +60,15 @@ int main(int argc, char** argv) {
                     code.c_str());
       }
     }
+    // Each mesh as the converter reads it; dataAt is the file offset of its
+    // inline vertex bytes, so a test can compare them byte for byte.
+    for (auto const& mesh : report.meshes) {
+      std::printf("mesh=%s readable=%d vertexCount=%u dataRead=%d dataSize=%u dataAt=%zu streamRead=%d "
+                  "streamOffset=%llu streamSize=%u streamPath=%s\n",
+                  mesh.name.c_str(), mesh.isReadable ? 1 : 0, mesh.vertexCount, mesh.vertexDataRead ? 1 : 0,
+                  mesh.vertexDataSize, mesh.objectOffset + mesh.dataSizeAt + 4, mesh.streamDataRead ? 1 : 0,
+                  (unsigned long long)mesh.streamOffset, mesh.streamSize, mesh.streamPath.c_str());
+    }
     return 0;
   }
   // --scan <bundle> prints what ScanShaders reports, one key=value per line.
@@ -130,9 +139,10 @@ int main(int argc, char** argv) {
                 c.stereoVariantsRemapped, c.stereoVariantsSplit, c.geometryStagesDropped, c.variantsSkipped);
     for (auto const& refusal : c.refusals) std::printf("refusal=%s\n", refusal.c_str());
     for (auto const& refusal : c.variantRefusals) std::printf("variantRefusal=%s\n", refusal.c_str());
-    std::printf("geometryEmulated=%d meshesReadable=%d meshesStreamedLeft=%d meshesCleared=%d meshesUnread=%d\n",
+    std::printf("geometryEmulated=%d meshesReadable=%d meshesStreamedLeft=%d meshesCleared=%d meshesUnread=%d "
+                "meshesInlined=%d\n",
                 c.geometryStagesEmulated, c.meshesMarkedReadable, c.meshesLeftStreamed, c.meshesReadableCleared,
-                c.meshesUnread);
+                c.meshesUnread, c.meshesInlined);
     std::printf("instancingVariants=%d\n", c.instancingVariantsLinked);
     for (auto const& shader : c.shadersWithoutInstancing) std::printf("noInstancing=%s\n", shader.c_str());
     for (auto const& shader : c.geometryEmulated) std::printf("emulatedShader=%s\n", shader.c_str());

@@ -47,7 +47,9 @@ Geometry-shader emulation's mesh flags (`--shaders` with
 `VIVIFY_EMULATE_GEOMETRY=1`) are tested on Mesh objects whose type tree is a
 real 2019.4.28f1 one node for node, common strings included (2021.3.16f1 with
 the 64-bit stream offset): inline, streamed, compressed, already readable, cut
-short or corrupt meshes, each read back out of the converted bundle.
+short or corrupt meshes, each read back out of the converted bundle; and
+streamed meshes whose vertex data is copied inline from the bundle's .resS,
+compared byte for byte (`--inspect` prints each mesh's fields).
 
 `fuzz.py` mutates valid archives at random byte offsets (600 archives across
 all four compression modes), a 2021.3 PC shader's serialized file (300 runs of

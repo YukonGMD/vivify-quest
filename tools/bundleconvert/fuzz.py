@@ -53,15 +53,20 @@ else:
 # marked readable. The mutations are kept inside the mesh bodies, the last
 # objects in the file, in both stream-offset widths.
 import mkshader
-stream = dict(stream_offset=934508, stream_size=12684, stream_path="archive:/CAB-0/CAB-0.resS")
-meshes = [dict(name="CubeKept", keep_vertices=True, keep_indices=True), dict(name="NurbsPath", vertex_count=453, **stream),
-          dict(name="StreamedFlagged", is_readable=True, **stream),
+# Two meshes stream from the bundle's own .resS, so their vertex data is copied
+# in (naomi.7); one names a range far past it and stays streamed.
+inres = dict(stream_size=5436, stream_path="archive:/CAB-0/CAB-deadbeef.resS")
+meshes = [dict(name="CubeKept", keep_vertices=True, keep_indices=True),
+          dict(name="NurbsPath", vertex_count=453, stream_offset=0, **inres),
+          dict(name="StreamedFlagged", is_readable=True, vertex_count=453, stream_offset=5436, **inres),
+          dict(name="FarAway", vertex_count=453, stream_offset=934508, **inres),
           dict(name="Compressed", compression=3, vertex_count=0, inline_data=b"")]
+resource = bytes(rnd.randrange(256) for _ in range(2 * 5436))
 emulate = dict(os.environ, VIVIFY_EMULATE_GEOMETRY="1")
 for offset64, sf_version in ((False, 21), (True, 22)):
     sf = mkshader.serialized_file_with_shaders([("Swifter/TriangleExplosion", [4])], meshes=meshes,
                                                mesh_offset64=offset64, sf_version=sf_version)
-    build(src, sf_bytes=[sf], with_resource=False, compression=0, block_compression=0)
+    build(src, sf_bytes=[sf], with_resource=False, compression=0, block_compression=0, resource=resource)
     base = bytearray(open(src, 'rb').read())
     lo = base.find(b"CubeKept") - 4
     for trial in range(200):

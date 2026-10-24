@@ -2083,6 +2083,23 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
   return out;
 }
 
+// A streamed mesh's body with its vertex data copied in from the .resS node
+// its m_StreamData names, in this archive; empty when that node is not here
+// or the range does not fit in it (naomi.7).
+std::vector<uint8_t> InlineFromStream(std::vector<DirectoryNode> const& nodes, std::vector<uint8_t> const& data,
+                                      uint8_t const* fileData, SerializedFileParse::MeshObject const& mesh) {
+  std::string_view const wanted = SerializedFileParse::StreamNodeName(mesh.streamPath);
+  if (wanted.empty()) return {};
+  for (auto const& node : nodes) {
+    if (std::string_view(node.path) != wanted) continue;
+    if (node.offset > data.size() || node.size > data.size() - node.offset) return {};
+    if (mesh.streamOffset > node.size || mesh.streamSize > node.size - mesh.streamOffset) return {};
+    return SerializedFileParse::InlineStreamedMesh(fileData + mesh.objectOffset, mesh,
+                                                   data.data() + node.offset + mesh.streamOffset, mesh.streamSize);
+  }
+  return {};
+}
+
 }  // namespace
 
 ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
@@ -2153,10 +2170,14 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
     // copy: the same one-byte flag, for the meshes of a file that holds a
     // shader it may emulate -- but only those Unity will actually keep in
     // memory (naomi.6). A streamed mesh keeps no CPU copy whatever the flag
-    // says, so it stays unreadable and its objects keep the stand-in; one that
-    // is somehow flagged readable already is cleared. A mesh this cannot read
-    // to its end, or one with vertices stored nowhere, is left exactly as it
-    // was (the rebuild at load checks for the data itself).
+    // says, so its vertex data is copied in from the bundle's .resS node and
+    // it is stored inline instead (naomi.7; a mesh is tens of kilobytes, the
+    // .resS is left as it was). One that cannot be copied stays streamed and
+    // unreadable, and its objects keep the stand-in; one that is somehow
+    // flagged readable already is cleared. A mesh this cannot read to its end,
+    // or one with vertices stored nowhere, is left exactly as it was (the
+    // rebuild at load checks for the data itself).
+    std::vector<SerializedFileParse::ObjectEdit> edits;
     if (options.emulateGeometry) {
       bool known = false;
       for (auto const& shader : file.shaders) known |= Vivify::GeometryEmulation::IsKnownShader(shader.name);
@@ -2171,6 +2192,11 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
               conversion.meshesMarkedReadable++;
             }
           } else if (mesh.streamDataRead && SerializedFileParse::MeshIsStreamed(mesh)) {
+            if (auto body = InlineFromStream(nodes, data, nodeData, mesh); !body.empty()) {
+              edits.push_back({mesh.pathID, std::move(body)});
+              conversion.meshesInlined++;
+              continue;
+            }
             conversion.meshesLeftStreamed++;
             if (mesh.isReadable) {
               data[at] = 0;
@@ -2185,7 +2211,6 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
 
     if (file.shaders.empty()) continue;
 
-    std::vector<SerializedFileParse::ObjectEdit> edits;
     for (auto const& shader : file.shaders) {
       conversion.shadersSeen++;
       bool alreadyRuns = false;
@@ -2311,7 +2336,7 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
   // here; writing a byte-for-byte copy of it would only cost storage on the
   // headset and hide that fact from the caller.
   if (retargeted == 0 && conversion.shadersTranslated == 0 && conversion.texturesMarkedReadable == 0 &&
-      conversion.meshesMarkedReadable == 0 && conversion.meshesReadableCleared == 0) {
+      conversion.meshesMarkedReadable == 0 && conversion.meshesReadableCleared == 0 && conversion.meshesInlined == 0) {
     conversion.status = Status::AlreadyAndroid;
     conversion.message =
         conversion.shadersRefused > 0

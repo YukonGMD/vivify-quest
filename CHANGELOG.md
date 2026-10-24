@@ -81,6 +81,18 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **Geometry-shader effects on streamed meshes** (naomi.7). Objects whose
+  mesh Unity streams from the bundle's `.resS` file kept their grey
+  stand-in in naomi.6, because Unity keeps no copy of such a mesh to
+  rebuild. Conversion now copies those meshes' vertex data into the bundle
+  itself (with Emulate Geometry-Shader Effects on), so they are rebuilt and
+  drawn with their effect like the others: in 743 Aether the cracked paths
+  (45 objects), the tower and the custom-note wireframes. That is at most a
+  few hundred kilobytes per map (Aether 654 KB, Lifelike 1.3 MB). Lifelike's
+  grass object still keeps the stand-in: its point-input grass shader is
+  drawn on a triangle mesh, which the emulation does not cover. The
+  conversion version goes to 21, so converted maps are converted again
+  once, by themselves.
 - **Ambient light did not follow a map's lighting changes** (naomi.7). On
   PC, every rendering setting a map sets to a plain value (fog, ambient
   colours and mode, skybox, sun, quality settings) is followed by

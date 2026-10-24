@@ -400,6 +400,18 @@ struct MeshObject {
   bool streamDataRead = false;
   uint32_t streamSize = 0;
   uint32_t streamPathLength = 0;
+  // For copying a streamed mesh's vertex data in (naomi.7): the stream's
+  // offset and path, and where the fields that copy rewrites sit, counted
+  // from the start of the object (left 0 where the walk did not read them).
+  uint64_t streamOffset = 0;
+  uint32_t streamOffsetBytes = 0;  // 4 up to 2019, 8 from 2020.1
+  std::string streamPath;
+  size_t objectOffset = 0;  // the object's start in the file
+  size_t objectSize = 0;
+  size_t dataSizeAt = 0;  // m_VertexData.m_DataSize's count
+  size_t dataSizeEnd = 0;  // past its bytes and padding
+  size_t streamDataAt = 0;
+  size_t streamDataEnd = 0;
 };
 
 // Whether Unity keeps a CPU copy of this mesh once it is flagged readable: it
@@ -409,6 +421,16 @@ bool MeshDataStaysInMemoryWhenReadable(MeshObject const& mesh);
 // Whether the mesh's vertex data is streamed from a .resS node (by either of
 // m_StreamData's fields, as Unity branches on the path).
 bool MeshIsStreamed(MeshObject const& mesh);
+// A streamed mesh's body with its vertex data copied in (naomi.7): m_DataSize
+// holds the stream's bytes, m_StreamData is emptied and m_IsReadable set, so
+// Unity keeps the mesh in memory like one stored inline. `object` is the
+// mesh object's bytes and `stream` the streamSize bytes m_StreamData names.
+// Empty when the mesh was not read cleanly to its last field.
+std::vector<uint8_t> InlineStreamedMesh(uint8_t const* object, MeshObject const& mesh, uint8_t const* stream,
+                                        size_t streamSize);
+// The .resS node m_StreamData's path names ("archive:/CAB-x/CAB-x.resS"):
+// its last component, which is how a bundle names the node.
+std::string_view StreamNodeName(std::string_view streamPath);
 
 // True for the block-compressed formats no Quest GPU can sample, which are the
 // only ones worth making readable: an ETC2 or RGBA32 texture already works.

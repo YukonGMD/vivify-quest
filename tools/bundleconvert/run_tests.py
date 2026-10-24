@@ -480,7 +480,7 @@ def mesh_flags_in(dst, specs):
 
 def mesh_case(name, specs, check, shader_name="Swifter/TriangleExplosion", offset64=False, emulate=True,
               unity="2019.4.28f1", sf_version=21, target=19, platforms=(4,), program=None, stream_data=True,
-              more_shaders=()):
+              more_shaders=(), resource=None):
     """Defaults to a 2019.4 bundle (SerializedFile v21, 32-bit stream offset), as
     743 Aether is; a 2021.3 one is offset64 with sf_version 22."""
     global fails, cases
@@ -492,7 +492,7 @@ def mesh_case(name, specs, check, shader_name="Swifter/TriangleExplosion", offse
     sf = mkshader.serialized_file_with_shaders(shaders, meshes=specs, mesh_offset64=offset64,
                                                mesh_stream_data=stream_data, unity=unity, sf_version=sf_version,
                                                target=target)
-    build(src, sf_bytes=[sf], with_resource=False)
+    build(src, sf_bytes=[sf], with_resource=False, resource=resource)
     if emulate:
         os.environ["VIVIFY_EMULATE_GEOMETRY"] = "1"
     try:
@@ -510,14 +510,17 @@ def mesh_case(name, specs, check, shader_name="Swifter/TriangleExplosion", offse
         print(f"ok   {name}")
 
 
-def expect_meshes(readable, streamed_left=0, cleared=0, unread=0, flags=None):
+MESH_COUNTERS = ("meshesReadable", "meshesStreamedLeft", "meshesCleared", "meshesUnread", "meshesInlined")
+
+
+def expect_meshes(readable, streamed_left=0, cleared=0, unread=0, flags=None, inlined=0):
     def check(proc, fields, dst, specs):
         if fields.get("status") != "converted":
             return f"status '{fields.get('status')}'"
-        got = tuple(fields.get(k) for k in ("meshesReadable", "meshesStreamedLeft", "meshesCleared", "meshesUnread"))
-        want = tuple(str(v) for v in (readable, streamed_left, cleared, unread))
+        got = tuple(fields.get(k) for k in MESH_COUNTERS)
+        want = tuple(str(v) for v in (readable, streamed_left, cleared, unread, inlined))
         if got != want:
-            return f"readable/streamedLeft/cleared/unread {got}, wanted {want}"
+            return f"readable/streamedLeft/cleared/unread/inlined {got}, wanted {want}"
         actual = mesh_flags_in(dst, specs)
         for mesh, value in (flags or {}).items():
             if actual.get(mesh) != value:
@@ -536,10 +539,10 @@ def expect_untouched(streamed_left=0, unread=0):
     def check(proc, fields, dst, specs):
         if fields.get("status") != "already an Android bundle":
             return f"status '{fields.get('status')}', wanted 'already an Android bundle'"
-        got = tuple(fields.get(k) for k in ("meshesReadable", "meshesStreamedLeft", "meshesCleared", "meshesUnread"))
-        want = tuple(str(v) for v in (0, streamed_left, 0, unread))
+        got = tuple(fields.get(k) for k in MESH_COUNTERS)
+        want = tuple(str(v) for v in (0, streamed_left, 0, unread, 0))
         if got != want:
-            return f"readable/streamedLeft/cleared/unread {got}, wanted {want}"
+            return f"readable/streamedLeft/cleared/unread/inlined {got}, wanted {want}"
         if os.path.exists(dst):
             return "an output file was written"
         return None
@@ -642,6 +645,110 @@ mesh_case("emulation: an Android bundle with a streamed mesh left as it is is le
 mesh_case("emulation: an Android bundle with a mesh it could not read is left alone",
           [dict(name="Truncated", truncate_before_stream=True)],
           expect_untouched(unread=1), **ANDROID_ONLY_SHADER)
+
+
+# A streamed mesh's vertex data is copied in from the bundle's own .resS node
+# (naomi.7), so it is stored inline, flagged readable and can be rebuilt like
+# any other. The stream names the node by its last path component, as Unity
+# does ("archive:/CAB-<file>/CAB-<file>.resS").
+RES_PATH = "archive:/CAB-00000000000000000000000000000000/CAB-deadbeef.resS"
+VERTEX_BYTES = bytes(range(1, 37))  # 3 vertices x 12 bytes, recognisable
+
+
+def resource_with(chunks, size=128):
+    """A .resS of `size` filler bytes with each (offset, bytes) chunk written in."""
+    res = bytearray(b"\xee" * size)
+    for offset, chunk in chunks:
+        res[offset:offset + len(chunk)] = chunk
+    return bytes(res)
+
+
+def inspect_meshes(dst):
+    """--inspect's mesh lines for the converted bundle's serialized file, and
+    the file's bytes, so a check can read the inline vertex bytes back."""
+    _, _, _, nodes, data = read_converted(dst)
+    off, size, _, _ = next(n for n in nodes if not n[3].endswith(".resS"))
+    sf = data[off:off + size]
+    path = os.path.join(TMP, "inspect_sf.bin")
+    with open(path, "wb") as f:
+        f.write(sf)
+    out = subprocess.run([CONV, "--inspect", path], capture_output=True, text=True).stdout
+    meshes = {}
+    for line in out.splitlines():
+        if not line.startswith("mesh="):
+            continue
+        name, _, rest = line[len("mesh="):].partition(" ")
+        meshes[name] = dict(part.split("=", 1) for part in rest.split(" ") if "=" in part)
+    resource = next((data[o:o + n] for o, n, _, nm in nodes if nm.endswith(".resS")), None)
+    return meshes, sf, resource
+
+
+def expect_inlined(names, resource, **counts):
+    """The named meshes inline, holding VERTEX_BYTES, their stream emptied, the
+    .resS left byte for byte as it was, plus expect_meshes' counters."""
+    base = expect_meshes(**counts)
+
+    def check(proc, fields, dst, specs):
+        problem = base(proc, fields, dst, specs)
+        if problem:
+            return problem
+        meshes, sf, res_out = inspect_meshes(dst)
+        if res_out != resource:
+            return "the .resS node changed"
+        for name in names:
+            m = meshes.get(name)
+            if m is None:
+                return f"mesh '{name}' not found by --inspect"
+            if (m.get("dataRead"), m.get("dataSize"), m.get("streamRead"), m.get("streamSize"),
+                    m.get("streamPath")) != ("1", str(len(VERTEX_BYTES)), "1", "0", ""):
+                return f"mesh '{name}' reads back as {m}"
+            at = int(m["dataAt"])
+            if sf[at:at + len(VERTEX_BYTES)] != VERTEX_BYTES:
+                return f"mesh '{name}' holds {sf[at:at + len(VERTEX_BYTES)].hex()} inline"
+            if m.get("readable") != "1":
+                return f"mesh '{name}' is not readable"
+        return None
+    return check
+
+
+STREAM_AT_16 = resource_with([(16, VERTEX_BYTES)])
+mesh_case("emulation: a streamed mesh is inlined from the bundle's .resS",
+          [dict(name="Streamed", stream_offset=16, stream_size=36, stream_path=RES_PATH)],
+          expect_inlined(["Streamed"], STREAM_AT_16, readable=0, inlined=1, flags={"Streamed": 1}),
+          resource=STREAM_AT_16)
+mesh_case("emulation: a streamed mesh already flagged readable is inlined, not cleared",
+          [dict(name="StreamedFlagged", is_readable=True, stream_offset=16, stream_size=36, stream_path=RES_PATH)],
+          expect_inlined(["StreamedFlagged"], STREAM_AT_16, readable=0, inlined=1, flags={"StreamedFlagged": 1}),
+          resource=STREAM_AT_16)
+mesh_case("emulation: inlining in a 2021.3 bundle (SerializedFile v22, 64-bit stream offset)",
+          [dict(name="Streamed22", stream_offset=16, stream_size=36, stream_path=RES_PATH),
+           dict(name="Inline22", keep_vertices=True, keep_indices=True)],
+          expect_inlined(["Streamed22"], STREAM_AT_16, readable=1, inlined=1,
+                         flags={"Streamed22": 1, "Inline22": 1}),
+          resource=STREAM_AT_16, offset64=True, sf_version=22, unity="2021.3.16f1")
+TWO_STREAMS = resource_with([(0, VERTEX_BYTES), (64, VERTEX_BYTES)])
+mesh_case("emulation: two streamed meshes, odd name lengths, are both inlined",
+          [dict(name="Abc", stream_offset=0, stream_size=36, stream_path=RES_PATH),
+           dict(name="Defgh", stream_offset=64, stream_size=36, stream_path=RES_PATH)],
+          expect_inlined(["Abc", "Defgh"], TWO_STREAMS, readable=0, inlined=2, flags={"Abc": 1, "Defgh": 1}),
+          resource=TWO_STREAMS)
+mesh_case("emulation: a stream running past the .resS stays streamed",
+          [dict(name="PastEnd", is_readable=True, stream_offset=100, stream_size=36, stream_path=RES_PATH)],
+          expect_meshes(0, streamed_left=1, cleared=1, flags={"PastEnd": 0}), resource=STREAM_AT_16)
+mesh_case("emulation: a stream naming a node this bundle lacks stays streamed",
+          [dict(name="Elsewhere", stream_offset=16, stream_size=36,
+                stream_path="archive:/CAB-0/CAB-0123456789abcdef.resS")],
+          expect_meshes(0, streamed_left=1, flags={"Elsewhere": 0}), resource=STREAM_AT_16)
+mesh_case("emulation: a stream whose size the mesh's inline bytes contradict stays streamed",
+          [dict(name="Both", stream_offset=16, stream_size=36, stream_path=RES_PATH, inline_data=bytes(36))],
+          expect_meshes(0, streamed_left=1, flags={"Both": 0}), resource=STREAM_AT_16)
+mesh_case("emulation off: a streamed mesh is not inlined",
+          [dict(name="Streamed", stream_offset=16, stream_size=36, stream_path=RES_PATH)],
+          expect_meshes(0, flags={"Streamed": 0}), resource=STREAM_AT_16, emulate=False)
+mesh_case("emulation: an inlined mesh alone still gets an Android bundle written",
+          [dict(name="OnlyInline", stream_offset=16, stream_size=36, stream_path=RES_PATH)],
+          expect_inlined(["OnlyInline"], STREAM_AT_16, readable=0, inlined=1, flags={"OnlyInline": 1}),
+          resource=STREAM_AT_16, **ANDROID_ONLY_SHADER)
 mesh_case("emulation: a file with no known geometry shader has no mesh marked",
           [dict(name="CubeKept", keep_vertices=True, keep_indices=True)],
           expect_meshes(0, flags={"CubeKept": 0}), shader_name="Custom/Plain")

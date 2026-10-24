@@ -1356,6 +1356,8 @@ TextureObject ReadTextureObject(uint8_t const* data, size_t size, size_t fileOff
 // top-level fields by the file's own type tree like ReadTextureObject.
 MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, SerializedTypeInfo const& type) {
   MeshObject mesh;
+  mesh.objectOffset = fileOffset;
+  mesh.objectSize = size;
   if (type.nodes.empty()) return mesh;
   auto u32At = [&](size_t at) -> uint32_t {
     uint32_t value = 0;
@@ -1386,6 +1388,8 @@ MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, S
           if (consumed >= 4 + static_cast<size_t>(count)) {
             mesh.vertexDataSize = count;
             mesh.vertexDataRead = true;
+            mesh.dataSizeAt = subBefore;
+            mesh.dataSizeEnd = reader.position();
           }
         }
       }
@@ -1394,6 +1398,7 @@ MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, S
     }
 
     if (name == "m_StreamData") {
+      mesh.streamDataAt = before;
       bool offsetRead = false;
       bool sizeRead = false;
       bool pathRead = false;
@@ -1406,8 +1411,17 @@ MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, S
         if (!reader.ok()) break;
         size_t const consumed = reader.position() - subBefore;
         if (subName == "offset") {
-          // 4 bytes in 2019, 8 from 2020.1. Only whether it was read matters.
-          offsetRead = (subNode.byteSize == 4 && consumed == 4) || (subNode.byteSize == 8 && consumed == 8);
+          // 4 bytes in 2019, 8 from 2020.1.
+          if (subNode.byteSize == 4 && consumed == 4) {
+            mesh.streamOffset = u32At(subBefore);
+            mesh.streamOffsetBytes = 4;
+            offsetRead = true;
+          } else if (subNode.byteSize == 8 && consumed == 8) {
+            mesh.streamOffset = static_cast<uint64_t>(u32At(subBefore)) |
+                                (static_cast<uint64_t>(u32At(subBefore + 4)) << 32);
+            mesh.streamOffsetBytes = 8;
+            offsetRead = true;
+          }
         } else if (subName == "size" && consumed == 4) {
           mesh.streamSize = u32At(subBefore);
           sizeRead = true;
@@ -1415,12 +1429,14 @@ MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, S
           uint32_t const length = u32At(subBefore);
           if (consumed >= 4 + static_cast<size_t>(length)) {
             mesh.streamPathLength = length;
+            mesh.streamPath.assign(reinterpret_cast<char const*>(data + subBefore + 4), length);
             pathRead = true;
           }
         }
       }
       if ((node.metaFlag & kMetaFlagAlignBytes) != 0) reader.align4();
       mesh.streamDataRead = reader.ok() && offsetRead && sizeRead && pathRead;
+      mesh.streamDataEnd = reader.position();
       continue;
     }
 
@@ -1446,6 +1462,46 @@ MeshObject ReadMeshObject(uint8_t const* data, size_t size, size_t fileOffset, S
 
 bool MeshIsStreamed(MeshObject const& mesh) {
   return mesh.streamSize != 0 || mesh.streamPathLength != 0;
+}
+
+std::string_view StreamNodeName(std::string_view streamPath) {
+  size_t const slash = streamPath.rfind('/');
+  return slash == std::string_view::npos ? streamPath : streamPath.substr(slash + 1);
+}
+
+std::vector<uint8_t> InlineStreamedMesh(uint8_t const* object, MeshObject const& mesh, uint8_t const* stream,
+                                        size_t streamSize) {
+  std::vector<uint8_t> body;
+  // Read cleanly, streamed with nothing inline, and every position in order.
+  if (!mesh.isReadablePresent || !mesh.streamDataRead || !mesh.vertexDataRead || mesh.vertexDataSize != 0 ||
+      streamSize == 0 || streamSize != mesh.streamSize) {
+    return body;
+  }
+  if (mesh.isReadableFileOffset < mesh.objectOffset) return body;
+  size_t const readableAt = mesh.isReadableFileOffset - mesh.objectOffset;
+  if (!(readableAt < mesh.dataSizeAt && mesh.dataSizeAt % 4 == 0 && mesh.dataSizeAt + 4 <= mesh.dataSizeEnd &&
+        mesh.dataSizeEnd <= mesh.streamDataAt && mesh.streamDataAt < mesh.streamDataEnd &&
+        mesh.streamDataEnd <= mesh.objectSize && (mesh.streamOffsetBytes == 4 || mesh.streamOffsetBytes == 8))) {
+    return body;
+  }
+  auto u32 = [&](uint32_t value) {
+    for (int i = 0; i < 4; i++) body.push_back(static_cast<uint8_t>(value >> (8 * i)));
+  };
+  body.reserve(mesh.objectSize + streamSize + 4);
+  body.insert(body.end(), object, object + mesh.dataSizeAt);
+  // m_DataSize: the stream's bytes, padded to 4 as the array is aligned. The
+  // fields after it move by a multiple of 4, so their own alignment holds.
+  u32(static_cast<uint32_t>(streamSize));
+  body.insert(body.end(), stream, stream + streamSize);
+  while (body.size() % 4 != 0) body.push_back(0);
+  body.insert(body.end(), object + mesh.dataSizeEnd, object + mesh.streamDataAt);
+  // m_StreamData: offset 0 (in its own width), size 0, path "".
+  body.insert(body.end(), mesh.streamOffsetBytes, 0);
+  u32(0);
+  u32(0);
+  body.insert(body.end(), object + mesh.streamDataEnd, object + mesh.objectSize);
+  body[readableAt] = 1;
+  return body;
 }
 
 bool MeshDataStaysInMemoryWhenReadable(MeshObject const& mesh) {

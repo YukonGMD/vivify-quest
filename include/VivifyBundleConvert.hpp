@@ -183,6 +183,9 @@ struct ShaderConversion {
   int meshesLeftStreamed = 0;
   int meshesReadableCleared = 0;
   int meshesUnread = 0;
+  // naomi.7: streamed meshes whose vertex data was copied in from the .resS,
+  // so they are stored inline (and flagged readable) like the others.
+  int meshesInlined = 0;
   // keepInstancingVariants: instanced variants linked, and shaders that have
   // none (their objects are drawn one at a time even with instancing on).
   int instancingVariantsLinked = 0;

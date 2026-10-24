@@ -136,7 +136,10 @@ namespace {
 //      naomi.5. Strikes 19 recorded no longer count; a load 19 left
 //      unfinished counts once against 20, and its first finished load
 //      forgives it
-constexpr int kBundleConversionVersion = 20;
+//  21  geometry-shader emulation (setting) copies a streamed mesh's vertex
+//      data in from the bundle's .resS, so it is stored inline and can be
+//      rebuilt: 743 Aether's cracked paths, tower and note wireframes
+constexpr int kBundleConversionVersion = 21;
 
 // Whether Beat Saber's own shaders use STEREO_MULTIVIEW_ON: -1 not looked yet,
 // 0 no, 1 yes. Unity registers every keyword a loaded shader declares, so the
@@ -501,11 +504,12 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
     }
   }
   if (conversion.geometryStagesEmulated > 0 || conversion.meshesMarkedReadable > 0 ||
-      conversion.meshesLeftStreamed > 0) {
+      conversion.meshesLeftStreamed > 0 || conversion.meshesInlined > 0) {
     PaperLogger.info("Vivify geometry emulation: {} variant(s) emulated, {} mesh(es) marked readable, {} streamed "
-                     "mesh(es) left unreadable (Unity keeps no copy of them to rebuild from, so an object drawn "
-                     "with an emulated shader on one keeps the stand-in){}{}",
-                     conversion.geometryStagesEmulated, conversion.meshesMarkedReadable, conversion.meshesLeftStreamed,
+                     "mesh(es) copied inline, {} streamed mesh(es) left unreadable (Unity keeps no copy of them to "
+                     "rebuild from, so an object drawn with an emulated shader on one keeps the stand-in){}{}",
+                     conversion.geometryStagesEmulated, conversion.meshesMarkedReadable, conversion.meshesInlined,
+                     conversion.meshesLeftStreamed,
                      conversion.meshesReadableCleared > 0
                          ? fmt::format(", {} wrongly flagged readable and cleared", conversion.meshesReadableCleared)
                          : std::string(),
