@@ -79,6 +79,7 @@ void Runtime::PrepareBeatmap(CustomJSONData::CustomBeatmapData* beatmapData, flo
   LoadMainBundle();
   PreloadInstantiatePrefabs();
   ApplyMissedVivifyEvents(triggerTime);
+  if (GetVivifyDebugLogging()) DumpRenderingState("after the time-0 catch-up");
   _lastSongTime = CurrentSongTime();
   _firstFrameCrumbPending = true;
   _levelStartFrame = UnityEngine::Time::get_frameCount();

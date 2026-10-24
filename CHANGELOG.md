@@ -14,6 +14,15 @@ conversion cache version, and cached conversions are redone automatically.
 Test builds report themselves as 0.14.25-naomi.N.
 
 ### Added
+- **Render-state dump** (naomi.7, Debug logging only). Lines starting
+  `Vivify render state (...)` after the time-0 catch-up, after each
+  `SetRenderingSettings` event, and at level end before the settings are
+  put back: the ambient mode, colours and the ambient probe's average
+  colour, skybox, sun and fog; the quality level and every shadow, light
+  and texture quality setting; each light's type, colour, intensity, shadow
+  type, strength, resolution, bias and render mode; and the 40 largest
+  textures on the live prefabs with their size, mip count, filter,
+  anisotropy and mip bias. Nothing changes with Debug logging off.
 - **Diagnostics for maps that freeze at song start** (naomi.2). Logging
   only; no setting or behaviour changes.
   - Breadcrumb lines, marked `[CRUMB +Nms]`, at each phase of level start:
@@ -72,6 +81,16 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **Ambient light did not follow a map's lighting changes** (naomi.7). On
+  PC, every rendering setting a map sets to a plain value (fog, ambient
+  colours and mode, skybox, sun, quality settings) is followed by
+  `DynamicGI.UpdateEnvironment()`, which recomputes the ambient light and
+  reflections from the skybox and ambient settings then in force. Quest
+  never did, so surfaces lit only by ambient light (the shadowed sides of
+  things) could stay at the old or black ambient. Quest now does the same,
+  after the same settings; animated settings and the reset at level end do
+  not call it, as on PC. Lost in Data's pure-black shadows are the case to
+  check.
 - **A map played while Force Reconvert All was redoing it could not be
   loaded again until the game restarted** (naomi.7). Force Reconvert
   deleted the map's converted bundle before converting it again; starting

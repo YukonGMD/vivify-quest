@@ -613,6 +613,8 @@ void Runtime::ResetRuntime(std::string_view reason) {
   _lastGameplayFrame = {};
   _stallsLogged = 0;
   ReleaseCachedBlitTextures();
+  // What the level ran with, before it is put back (Debug logging only).
+  if (_currentBeatmapData != nullptr && GetVivifyDebugLogging()) DumpRenderingState("level end");
   RestoreRenderSettings();
   _renderSettingAnimations.clear();
   _savedRenderSettings.clear();

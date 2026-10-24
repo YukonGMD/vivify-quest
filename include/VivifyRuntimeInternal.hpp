@@ -260,6 +260,9 @@ private:
                                       float startTime, float duration, Functions easing);
 
   void HandleSetRenderingSettings(CustomJSONData::CustomEventData* customEventData, rapidjson::Value const& json);
+  // Debug logging only (naomi.7): lighting, quality, lights and textures as
+  // the engine has them now.
+  void DumpRenderingState(std::string_view reason);
   void SaveRenderSetting(std::string const& name, RenderSettingKind kind);
   void ApplyRenderSettingFloat(std::string const& name, float val);
   void ApplyRenderSettingColor(std::string const& name, UnityEngine::Color val);

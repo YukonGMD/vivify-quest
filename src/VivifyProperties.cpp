@@ -764,6 +764,29 @@ bool IsLiteralColorArray(rapidjson::Value const& value) {
   }
   return true;
 }
+
+// An engine function bs-cordl has no binding for, by its internal-call name
+// ("UnityEngine.Light::get_shadowStrength"). Null, said once, when this game
+// build does not register it. The symbol must be a string literal.
+void* ResolveEngineIcall(char const* symbol) {
+  static std::unordered_map<std::string_view, void*> resolved;
+  if (auto it = resolved.find(symbol); it != resolved.end()) return it->second;
+  auto* fn = reinterpret_cast<void*>(il2cpp_functions::resolve_icall(symbol));
+  resolved.emplace(symbol, fn);
+  if (fn == nullptr) PaperLogger.warn("Vivify: '{}' is not present in this game build", symbol);
+  return fn;
+}
+
+// PC calls DynamicGI.UpdateEnvironment() after every setting it sets to a
+// plain value (SetRenderingSettings.cs: StructSettingHandler and
+// ClassSettingHandler), so ambient light and reflections are recomputed from
+// the skybox and ambient settings now in force; not after an animated value,
+// nor when the settings are restored. The game strips the managed DynamicGI
+// class, so this is its internal call (naomi.7).
+void UpdateEnvironmentLikePc() {
+  static auto* fn = reinterpret_cast<void (*)()>(ResolveEngineIcall("UnityEngine.DynamicGI::UpdateEnvironment"));
+  if (fn != nullptr) fn();
+}
 }
 
 void Runtime::HandleSetRenderingSettings(CustomJSONData::CustomEventData* customEventData,
@@ -806,6 +829,7 @@ void Runtime::HandleSetRenderingSettings(CustomJSONData::CustomEventData* custom
   if (GetVivifyDebugLogging()) {
     PaperLogger.info("Vivify SetRenderingSettings: time={} durationSeconds={} immediate={}",
                      customEventData->time, duration, BoolText(noDuration));
+    DumpRenderingState(fmt::format("after SetRenderingSettings at beat {}", customEventData->time));
   }
 }
 
@@ -833,6 +857,7 @@ void Runtime::ParseAndApplyRenderSetting(std::string const& key, rapidjson::Valu
       if (IsLiteralColorArray(val)) {
         if (auto color = ReadColorArray(val); color.has_value()) {
           ApplyRenderSettingColor(key, *color);
+          UpdateEnvironmentLikePc();
         }
         return;
       }
@@ -845,6 +870,7 @@ void Runtime::ParseAndApplyRenderSetting(std::string const& key, rapidjson::Valu
     case SettingType::Float: {
       if (val.IsNumber()) {
         ApplyRenderSettingFloat(key, val.GetFloat());
+        UpdateEnvironmentLikePc();
         return;
       }
       if (auto point = MakePointDefinition(parent, key, Tracks::ffi::WrapBaseValueType::Float); point.has_value()) {
@@ -856,12 +882,14 @@ void Runtime::ParseAndApplyRenderSetting(std::string const& key, rapidjson::Valu
     case SettingType::Int: {
       if (val.IsNumber()) {
         ApplyRenderSettingInt(key, static_cast<int>(val.GetFloat()));
+        UpdateEnvironmentLikePc();
         return;
       }
       if (val.IsString()) {
         std::string_view const name(val.GetString(), val.GetStringLength());
         if (auto named = ParseNamedSettingValue(key, name); named.has_value()) {
           ApplyRenderSettingInt(key, *named);
+          UpdateEnvironmentLikePc();
         } else if (GetVivifyDebugLogging()) {
           PaperLogger.warn("Vivify SetRenderingSettings: '{}' has no value named '{}'", key, std::string(name));
         }
@@ -877,6 +905,7 @@ void Runtime::ParseAndApplyRenderSetting(std::string const& key, rapidjson::Valu
       if (val.IsBool() || val.IsNumber()) {
         bool b = val.IsBool() ? val.GetBool() : val.GetFloat() != 0.0f;
         ApplyRenderSettingBool(key, b);
+        UpdateEnvironmentLikePc();
         return;
       }
       if (auto point = MakePointDefinition(parent, key, Tracks::ffi::WrapBaseValueType::Float); point.has_value()) {
@@ -889,6 +918,7 @@ void Runtime::ParseAndApplyRenderSetting(std::string const& key, rapidjson::Valu
     case SettingType::LightPrefab: {
       if (val.IsString()) {
         ApplyRenderSettingObject(key, val.GetString());
+        UpdateEnvironmentLikePc();
       }
       return;
     }
@@ -1192,6 +1222,174 @@ void Runtime::RestoreRenderSettings() {
 void Runtime::ReapplyCurrentRenderSettings() {
   for (auto const& s : _currentRenderSettings) {
     RawApplySavedRenderSetting(s);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Render state dump (naomi.7, Debug logging only)
+//
+// What the scene is actually lit and shadowed with, read back from the
+// engine: for comparing with PC when a map's lighting differs (Lost in Data's
+// pure-black shadows). Written after the time-0 catch-up, after each
+// SetRenderingSettings event, and at level end before the settings are put
+// back, by which time an environment update has settled.
+
+namespace {
+
+std::string ColorText(UnityEngine::Color c) {
+  return fmt::format("({:.3f},{:.3f},{:.3f},{:.3f})", c.r, c.g, c.b, c.a);
+}
+
+std::string ObjectPath(UnityEngine::Transform* transform) {
+  std::vector<std::string> parts;
+  for (int depth = 0; IsManagedAlive(transform) && depth < 12; depth++) {
+    parts.push_back(ToStdString(transform->get_name()));
+    transform = transform->get_parent();
+  }
+  std::string path;
+  for (auto it = parts.rbegin(); it != parts.rend(); ++it) path += (path.empty() ? "" : "/") + *it;
+  return path;
+}
+
+template <typename T>
+std::string StaticIcallText(char const* symbol) {
+  auto* fn = reinterpret_cast<T (*)()>(ResolveEngineIcall(symbol));
+  if (fn == nullptr) return "?";
+  return fmt::format("{}", fn());
+}
+
+template <typename T>
+std::string InstanceIcallText(char const* symbol, UnityEngine::Object* self) {
+  auto* fn = reinterpret_cast<T (*)(UnityEngine::Object*)>(ResolveEngineIcall(symbol));
+  if (fn == nullptr || !IsManagedAlive(self)) return "?";
+  return fmt::format("{}", fn(self));
+}
+
+}  // namespace
+
+void Runtime::DumpRenderingState(std::string_view reason) {
+  try {
+    using UnityEngine::RenderSettings;
+    auto const probe = RenderSettings::get_ambientProbe();
+    auto* skybox = RenderSettings::get_skybox().unsafePtr();
+    auto* sun = RenderSettings::get_sun().unsafePtr();
+    // The probe's L0 (constant) coefficients, and the average ambient colour
+    // they make (times the basis constant 0.2821): near black there means the
+    // shadowed side of everything gets no ambient light at all.
+    float constexpr kY00 = 0.282095f;
+    PaperLogger.info(
+        "Vivify render state ({}): RenderSettings ambientMode={} ambientSky={} ambientEquator={} ambientGround={} "
+        "ambientLight={} ambientIntensity={:.3f} ambientSkyboxAmount={:.3f} ambientProbe L0=({:.4f},{:.4f},{:.4f}) "
+        "average=({:.4f},{:.4f},{:.4f}) skybox='{}' shader '{}' sun='{}' fog={} fogMode={} fogColor={} fogDensity={:.4f} "
+        "fogStart={:.2f} fogEnd={:.2f} defaultReflectionMode={} defaultReflectionResolution={} "
+        "reflectionIntensity={:.3f} reflectionBounces={} subtractiveShadowColor={} haloStrength={:.3f} "
+        "flareStrength={:.3f}",
+        reason, static_cast<int>(RenderSettings::get_ambientMode().value__), ColorText(RenderSettings::get_ambientSkyColor()),
+        ColorText(RenderSettings::get_ambientEquatorColor()), ColorText(RenderSettings::get_ambientGroundColor()),
+        ColorText(RenderSettings::get_ambientLight()), RenderSettings::get_ambientIntensity(),
+        RenderSettings::get_ambientSkyboxAmount(), probe.shr0, probe.shg0, probe.shb0, probe.shr0 * kY00,
+        probe.shg0 * kY00, probe.shb0 * kY00, IsAlive(skybox) ? ToStdString(skybox->get_name()) : std::string("none"),
+        IsAlive(skybox) ? ShaderNameForLog(skybox->get_shader().unsafePtr()) : std::string("-"),
+        IsAlive(sun) ? ObjectPath(sun->get_transform()) : std::string("none"), BoolText(RenderSettings::get_fog()),
+        static_cast<int>(RenderSettings::get_fogMode().value__), ColorText(RenderSettings::get_fogColor()),
+        RenderSettings::get_fogDensity(), RenderSettings::get_fogStartDistance(), RenderSettings::get_fogEndDistance(),
+        static_cast<int>(RenderSettings::get_defaultReflectionMode().value__),
+        RenderSettings::get_defaultReflectionResolution(), RenderSettings::get_reflectionIntensity(),
+        RenderSettings::get_reflectionBounces(), ColorText(RenderSettings::get_subtractiveShadowColor()),
+        RenderSettings::get_haloStrength(), RenderSettings::get_flareStrength());
+
+    std::string levelName = "?";
+    int level = -1;
+    if (auto* getLevel = reinterpret_cast<int (*)()>(ResolveEngineIcall("UnityEngine.QualitySettings::GetQualityLevel"))) {
+      level = getLevel();
+      if (auto* getNames = reinterpret_cast<Array<StringW>* (*)()>(
+              ResolveEngineIcall("UnityEngine.QualitySettings::get_names"))) {
+        ArrayW<StringW> names(getNames());
+        if (names && level >= 0 && level < static_cast<int>(names.size())) levelName = ToStdString(names[level]);
+      }
+    }
+    PaperLogger.info(
+        "Vivify render state ({}): QualitySettings level={} '{}' shadows={} shadowResolution={} shadowProjection={} "
+        "shadowCascades={} shadowCascade2Split={} shadowDistance={} shadowNearPlaneOffset={} shadowmaskMode={} "
+        "pixelLightCount={} antiAliasing={} anisotropicFiltering={} lodBias={} globalTextureMipmapLimit={} "
+        "realtimeReflectionProbes={} softParticles={} eyeTextureResolutionScale={}",
+        reason, level, levelName, StaticIcallText<int>("UnityEngine.QualitySettings::get_shadows"),
+        StaticIcallText<int>("UnityEngine.QualitySettings::get_shadowResolution"),
+        StaticIcallText<int>("UnityEngine.QualitySettings::get_shadowProjection"),
+        StaticIcallText<int>("UnityEngine.QualitySettings::get_shadowCascades"),
+        StaticIcallText<float>("UnityEngine.QualitySettings::get_shadowCascade2Split"),
+        StaticIcallText<float>("UnityEngine.QualitySettings::get_shadowDistance"),
+        StaticIcallText<float>("UnityEngine.QualitySettings::get_shadowNearPlaneOffset"),
+        StaticIcallText<int>("UnityEngine.QualitySettings::get_shadowmaskMode"),
+        StaticIcallText<int>("UnityEngine.QualitySettings::get_pixelLightCount"),
+        UnityEngine::QualitySettings::get_antiAliasing(),
+        StaticIcallText<int>("UnityEngine.QualitySettings::get_anisotropicFiltering"),
+        StaticIcallText<float>("UnityEngine.QualitySettings::get_lodBias"),
+        StaticIcallText<int>("UnityEngine.QualitySettings::get_globalTextureMipmapLimit"),
+        StaticIcallText<bool>("UnityEngine.QualitySettings::get_realtimeReflectionProbes"),
+        StaticIcallText<bool>("UnityEngine.QualitySettings::get_softParticles"),
+        StaticIcallText<float>("UnityEngine.XR.XRSettings::get_eyeTextureResolutionScale"));
+
+    auto lights = UnityEngine::Object::FindObjectsOfType<UnityEngine::Light*>(true);
+    PaperLogger.info("Vivify render state ({}): {} light(s)", reason, lights.size());
+    for (auto* light : lights) {
+      if (!IsAlive(light)) continue;
+      auto const baking = light->get_bakingOutput();
+      PaperLogger.info(
+          "Vivify render state ({}): light '{}' enabled={} active={} type={} color={} intensity={:.3f} shadows={} "
+          "shadowStrength={} shadowResolution={} shadowCustomResolution={} shadowBias={} shadowNormalBias={} "
+          "shadowNearPlane={} renderMode={} cullingMask=0x{:x} baked={} bakeType={}",
+          reason, ObjectPath(light->get_transform()), BoolText(light->get_enabled()),
+          BoolText(light->get_gameObject()->get_activeInHierarchy()), static_cast<int>(light->get_type().value__),
+          ColorText(light->get_color()), light->get_intensity(), static_cast<int>(light->get_shadows().value__),
+          InstanceIcallText<float>("UnityEngine.Light::get_shadowStrength", light),
+          InstanceIcallText<int>("UnityEngine.Light::get_shadowResolution", light),
+          InstanceIcallText<int>("UnityEngine.Light::get_shadowCustomResolution", light),
+          InstanceIcallText<float>("UnityEngine.Light::get_shadowBias", light),
+          InstanceIcallText<float>("UnityEngine.Light::get_shadowNormalBias", light),
+          InstanceIcallText<float>("UnityEngine.Light::get_shadowNearPlane", light),
+          InstanceIcallText<int>("UnityEngine.Light::get_renderMode", light),
+          static_cast<uint32_t>([&] {
+            auto* fn = reinterpret_cast<int (*)(UnityEngine::Object*)>(
+                ResolveEngineIcall("UnityEngine.Light::get_cullingMask"));
+            return fn != nullptr ? fn(light) : 0;
+          }()),
+          BoolText(baking.isBaked), static_cast<int>(baking.lightmapBakeType.value__));
+    }
+
+    // Textures on the live prefabs' materials, largest first: a ground texture
+    // with one mip level, or a low anisoLevel, is what grain comes from.
+    std::unordered_map<UnityEngine::Texture*, int64_t> textures;
+    for (auto const& [id, prefab] : _livePrefabs) {
+      if (!IsAlive(prefab.gameObject)) continue;
+      for (auto* renderer : prefab.gameObject->GetComponentsInChildren<UnityEngine::Renderer*>(true)) {
+        if (!IsAlive(renderer)) continue;
+        for (auto material : renderer->get_sharedMaterials()) {
+          if (!IsAlive(material.unsafePtr())) continue;
+          for (int32_t nameId : material->GetTexturePropertyNameIDs()) {
+            auto* texture = material->GetTexture(nameId).unsafePtr();
+            if (!IsAlive(texture)) continue;
+            textures.emplace(texture, static_cast<int64_t>(texture->get_width()) * texture->get_height());
+          }
+        }
+      }
+    }
+    std::vector<std::pair<UnityEngine::Texture*, int64_t>> byArea(textures.begin(), textures.end());
+    std::sort(byArea.begin(), byArea.end(), [](auto const& a, auto const& b) { return a.second > b.second; });
+    PaperLogger.info("Vivify render state ({}): {} texture(s) on live prefabs' materials{}", reason, byArea.size(),
+                     byArea.size() > 40 ? ", the 40 largest follow" : "");
+    for (size_t i = 0; i < byArea.size() && i < 40; i++) {
+      auto* texture = byArea[i].first;
+      PaperLogger.info("Vivify render state ({}): texture '{}' {}x{} mips={} filter={} aniso={} mipMapBias={} wrap={}",
+                       reason, ToStdString(texture->get_name()), texture->get_width(), texture->get_height(),
+                       texture->get_mipmapCount(), static_cast<int>(texture->get_filterMode().value__),
+                       texture->get_anisoLevel(), InstanceIcallText<float>("UnityEngine.Texture::get_mipMapBias", texture),
+                       static_cast<int>(texture->get_wrapMode().value__));
+    }
+  } catch (std::exception const& ex) {
+    PaperLogger.warn("Vivify render state ({}): the dump stopped: {}", reason, ex.what());
+  } catch (...) {
+    PaperLogger.warn("Vivify render state ({}): the dump stopped on a non-std exception", reason);
   }
 }
 
