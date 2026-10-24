@@ -430,6 +430,7 @@ void Runtime::SetPauseMenuActive(bool active) {
   }
   if (_pauseMenuActive == active) return;
   _pauseMenuActive = active;
+  UpdateSlowFrameSection();
   VIVIFY_DEBUG("Vivify pause menu {}: syncedObjects={} secondaryCameras={}",
                active ? "opened" : "closed", _syncedObjects.size(), _secondaryCameras.size());
   if (active) {
@@ -745,7 +746,15 @@ void Runtime::BeginPerfSummary() {
   _perfStartWall = std::chrono::steady_clock::now();
   _perfGcStart = _perfGcLast = VivifyGcCount();
   if (!VivifyHeapMB(_perfHeapUsedStartMB, _perfHeapSizeStartMB)) _perfHeapUsedStartMB = _perfHeapSizeStartMB = -1.0;
+  VivifySlowFrameReset();
   UpdatePerfPrefabCounts();
+}
+
+// Slow-frame samples count toward the current section while the song plays
+// (naomi.7); none are taken in the pause menu or between songs.
+void Runtime::UpdateSlowFrameSection() {
+  bool const sampling = _perfActive && !_pauseMenuActive && GetSlowFrameSampler() && _perfSections.Count() > 0;
+  VivifySlowFrameSection(sampling ? _perfSections.Count() - 1 : -1);
 }
 
 void Runtime::RecordPerfFrame(std::chrono::steady_clock::time_point frameStart) {
@@ -804,6 +813,7 @@ void Runtime::UpdatePerfPrefabCounts() {
       label += id;
     }
     _perfSections.Begin(label.empty() ? std::string("no prefab") : label, CurrentSongTime());
+    UpdateSlowFrameSection();
   }
   _perfPrefabsNow = static_cast<int>(_livePrefabs.size());
   _perfRenderersNow = _perfParticlesNow = _perfLightsNow = 0;
@@ -850,6 +860,7 @@ void Runtime::SamplePerfLive() {
 
 void Runtime::WritePerfSummary() {
   _perfActive = false;
+  UpdateSlowFrameSection();
   PerfStats::Context context;
   std::filesystem::path const level(_selectedLevelPath);
   context.map = level.filename().string().empty() ? std::string("(unknown map)") : level.filename().string();
@@ -869,6 +880,11 @@ void Runtime::WritePerfSummary() {
   context.lightsPeak = _perfLightsPeak;
   for (auto const& line : _perf.Summary(context)) VivifyWriteFlushedLine("[PERF] " + line);
   for (auto const& line : _perfSections.Summary(_perf.BudgetMs())) VivifyWriteFlushedLine("[PERF] " + line);
+  if (GetSlowFrameSampler()) {
+    for (auto const& line : VivifySlowFrameSummary([this](int section) { return _perfSections.Describe(section); })) {
+      VivifyWriteFlushedLine("[PERF] " + line);
+    }
+  }
   if (!PerfRecordersValid()) {
     VivifyWriteFlushedLine("[PERF] draw call counts: not available in this game build");
   }

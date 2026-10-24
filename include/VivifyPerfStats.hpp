@@ -145,6 +145,8 @@ class PerfSections {
   void AddFrame(float frameMs, float vivifyMs, float songTime);
   void AddLive(Live const& live);
   int Count() const { return static_cast<int>(_sections.size()); }
+  // "'label' (song 5.0-30.2s)", for other summaries of the same section.
+  std::string Describe(int index) const;
   // One line per section, without prefixes. budgetMs: one refresh.
   std::vector<std::string> Summary(float budgetMs) const;
 

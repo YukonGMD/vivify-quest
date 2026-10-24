@@ -131,6 +131,172 @@ bool Watchdog::OnMainThread() const {
   return mainTid != 0 && mainTid == static_cast<int>(syscall(SYS_gettid));
 }
 
+void Watchdog::SetSlowFrameSection(int section) {
+  _slowSection.store(section, std::memory_order_relaxed);
+}
+
+void Watchdog::ResetSlowFrames() {
+  std::lock_guard lock(_slowMutex);
+  _slowProfile.Reset();
+  _slowNotes.clear();
+  _slowGeneration.fetch_add(1, std::memory_order_acq_rel);
+}
+
+std::vector<std::string> Watchdog::TakeSlowFrameSummary(std::function<std::string(int)> const& label) {
+  std::lock_guard lock(_slowMutex);
+  char head[256];
+  std::snprintf(head, sizeof(head),
+                "slow frames (over %lld ms): stacks of the main and render threads every %lld ms, at most %d a "
+                "frame; functions are library+start address, which tools/symbolize names",
+                static_cast<long long>(_options.slowFrameAfter.count()),
+                static_cast<long long>(_options.slowSampleEvery.count()), _options.slowSamplesPerFrame);
+  std::vector<std::string> lines{std::string(head) + (_slowProfile.Empty() ? "; no frame ran that long" : "")};
+  for (auto const& note : _slowNotes) lines.push_back("  " + note);
+  for (auto& line : _slowProfile.Summary(label, _slowNames, _options.slowTopFunctions)) {
+    lines.push_back(std::move(line));
+  }
+  _slowProfile.Reset();
+  _slowNotes.clear();
+  _slowGeneration.fetch_add(1, std::memory_order_acq_rel);
+  return lines;
+}
+
+void Watchdog::SlowFrameNote(std::string const& note) {
+  std::lock_guard lock(_slowMutex);
+  if (_slowNotes.size() < 8 && std::find(_slowNotes.begin(), _slowNotes.end(), note) == _slowNotes.end()) {
+    _slowNotes.push_back(note);
+  }
+}
+
+std::chrono::milliseconds Watchdog::SlowFrameTick(int64_t lastBeat, int64_t now) {
+  int const section = _slowSection.load(std::memory_order_relaxed);
+  if (section < 0 || _options.slowSamplesPerFrame <= 0) return _options.poll;
+  int64_t const age = now - lastBeat;
+  int64_t const after =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(_options.slowFrameAfter).count();
+  if (age < after) {
+    // Back when this frame would turn slow.
+    return std::min(std::chrono::milliseconds((after - age) / 1000000 + 1), _options.poll);
+  }
+  bool const newFrame = lastBeat != _slowFrameBeat;
+  if (newFrame) {
+    _slowFrameBeat = lastBeat;
+    _slowFrameSamples = 0;
+  }
+  if (_slowFrameSamples < _options.slowSamplesPerFrame) {
+    _slowFrameSamples++;
+    TakeSlowFrameSamples(section, newFrame);
+  }
+  return std::min(_options.slowSampleEvery, _options.poll);
+}
+
+void Watchdog::TakeSlowFrameSamples(int section, bool newFrame) {
+  uint64_t const generation = _slowGeneration.load(std::memory_order_acquire);
+  if (generation != _slowSeenGeneration) {
+    // A new song: look the render thread and the libraries up again.
+    _slowSeenGeneration = generation;
+    _slowSongSamples = 0;
+    _renderTid = 0;
+    _renderStack.reset();
+    _renderLookups = 0;
+    _renderNoted = false;
+    _modulesBuiltNs = 0;
+  }
+  if (newFrame) {
+    std::lock_guard lock(_slowMutex);
+    if (_slowGeneration.load(std::memory_order_acquire) == generation) _slowProfile.CountSlowFrame(section);
+  }
+  if (_slowUnavailable) return;
+  if (_slowSongSamples >= _options.slowSamplesPerSong) {
+    SlowFrameNote("stopped sampling after " + std::to_string(_options.slowSamplesPerSong) +
+                  " samples; later slow frames are counted only in the frame times");
+    return;
+  }
+  _slowSongSamples++;
+
+  bool const needModules = _modulesBuiltNs == 0;
+  bool const needRender = !_renderStack && _renderLookups < 5;
+  std::vector<MapEntry> maps;
+  if (needModules || needRender) maps = ParseProcMaps(ReadSmallFile("/proc/self/maps"));
+  if (needRender) {
+    _renderLookups++;
+    if (_renderTid == 0) _renderTid = FindThreadByName(_options.renderThreadName);
+    if (_renderTid != 0) {
+      _renderStack = FindNamedThreadStack(maps, _renderTid);
+      if (!_renderStack) {
+        // Only while it is blocked in a system call; the next slow frame tries again.
+        if (auto const sp = ParseSyscallStackPointer(ReadSmallFile(TaskPath(_renderTid, "syscall")))) {
+          _renderStack = FindStackHolding(maps, *sp);
+        }
+      }
+    }
+    if (!_renderStack && _renderLookups == 5 && !_renderNoted) {
+      _renderNoted = true;
+      SlowFrameNote(_renderTid == 0 ? "no thread called " + _options.renderThreadName + "; main thread only"
+                                    : "render thread tid=" + std::to_string(_renderTid) +
+                                          ": its stack was not found; main thread only");
+    }
+  }
+  if (needModules) {
+    _modules.Build(maps, &ReadOwnMemory);
+    _modulesBuiltNs = NowNs();
+  }
+
+  struct Taken {
+    int thread;
+    bool running;
+    StackSample sample;
+  };
+  std::vector<Taken> taken;
+  auto take = [&](int thread, int tid, std::optional<StackBounds> const& bounds) {
+    std::optional<TaskStat> const stat = ReadTaskStat(tid);
+    Taken result{thread, stat && stat->state == 'R', {}};
+    StackSampler::Result const outcome =
+        bounds ? StackSampler::SampleThread(tid, static_cast<uintptr_t>(bounds->lo),
+                                            static_cast<uintptr_t>(bounds->hi), _options.slowSampleTimeout,
+                                            result.sample)
+               : StackSampler::Sample(_options.slowSampleTimeout, result.sample);
+    if (outcome == StackSampler::Result::Ok) {
+      taken.push_back(result);
+      return;
+    }
+    bool const permanent = outcome == StackSampler::Result::HandlerTaken ||
+                           outcome == StackSampler::Result::InstallFailed ||
+                           outcome == StackSampler::Result::Unsupported;
+    if (permanent) _slowUnavailable = true;
+    if (thread == SlowFrameProfile::kRender && outcome == StackSampler::Result::SendFailed) {
+      _renderTid = 0;  // gone: look for it again
+      _renderStack.reset();
+      _renderLookups = 0;
+    }
+    SlowFrameNote(std::string(thread == SlowFrameProfile::kMain ? "main" : "render") +
+                  " thread not sampled: " + StackSampler::DescribeResult(outcome));
+  };
+  take(SlowFrameProfile::kMain, _mainTid.load(std::memory_order_relaxed), std::nullopt);
+  if (_renderStack && !_slowUnavailable) take(SlowFrameProfile::kRender, _renderTid, _renderStack);
+
+  bool unmapped = false;
+  std::vector<std::vector<CodeLocation>> stacks;
+  for (auto const& sample : taken) {
+    std::vector<CodeLocation> stack;
+    for (int i = 0; i < sample.sample.count; i++) {
+      stack.push_back(_modules.Locate(sample.sample.frames[i]));
+      unmapped |= stack.back().module < 0;
+    }
+    stacks.push_back(std::move(stack));
+  }
+  // A library loaded since the table was built: rebuild it, at most every 5 s.
+  if (unmapped && NowNs() - _modulesBuiltNs > 5'000'000'000LL) _modulesBuiltNs = 0;
+
+  std::lock_guard lock(_slowMutex);
+  if (_slowGeneration.load(std::memory_order_acquire) != generation) return;
+  for (size_t i = 0; i < taken.size(); i++) {
+    _slowProfile.AddSample(section, taken[i].thread, taken[i].running, stacks[i].data(),
+                           static_cast<int>(stacks[i].size()));
+  }
+  if (_slowNames.size() != _modules.Names().size()) _slowNames = _modules.Names();
+}
+
 bool Watchdog::WriteStackSample(int number, double stalledSeconds) {
   StackSample sample;
   auto const result = StackSampler::Sample(_options.sampleTimeout, sample);
@@ -197,11 +363,15 @@ void Watchdog::Run() {
   std::optional<TaskStat> previousRender;
   int64_t previousSampleNs = 0;
 
-  while (sleepFor(_options.poll)) {
+  std::chrono::milliseconds delay = _options.poll;
+  while (sleepFor(delay)) {
+    delay = _options.poll;
     int64_t const lastBeat = _lastBeatNs.load(std::memory_order_relaxed);
     if (lastBeat == 0) continue;  // the first frame has not happened yet
     int64_t const now = NowNs();
-    bool const stale = !_paused.load(std::memory_order_relaxed) && now - lastBeat > toNs(_options.stallAfter);
+    bool const paused = _paused.load(std::memory_order_relaxed);
+    if (!paused) delay = SlowFrameTick(lastBeat, now);
+    bool const stale = !paused && now - lastBeat > toNs(_options.stallAfter);
 
     if (!stale) {
       if (inStall) {

@@ -602,6 +602,7 @@ private:
   void RecordPerfFrame(std::chrono::steady_clock::time_point frameStart);
   void WritePerfSummary();
   void UpdatePerfPrefabCounts();
+  void UpdateSlowFrameSection();
   void CountPrefabComponents(InstantiatePrefabData& data);
   // Replacement pool (naomi.5, VivifyObjectPrefabs.cpp).
   UnityEngine::GameObject* AcquireReplacement(AssignedPrefabInfo const& info, UnityEngine::Transform* parent,

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <string>
+#include <vector>
 // paper2_scotland2 4.7.0's shared/backtrace.hpp calls std::ifstream but includes
 // only <sstream>, and beatsaber-hook pulls that header in from
 // config-utils.hpp -> utils-functions.h. libc++ used to leak <fstream> through
@@ -67,6 +69,8 @@ bool GetCrashGuard();
 // Whether a Quest bundle missing shaders is replaced by its converted PC build.
 bool GetUsePcBundleForMissingShaders();
 int GetFarCullingDistance();
+// Slow-frame sampler (naomi.7): diagnostics, on by default.
+bool GetSlowFrameSampler();
 // Empty when the stand-in shader should be chosen automatically.
 std::string GetStandInShaderName();
 // Whether a map carrying the Vivify requirement still submits its score.
@@ -89,6 +93,14 @@ void VivifyWriteFlushedLine(std::string const& line);
 int VivifyGcCount();
 bool VivifyHeapMB(double& usedMB, double& totalMB);
 void VivifyCopyBreadcrumb(char* buffer, size_t size);
+// Slow-frame sampling (naomi.7), done by the watchdog thread. section >= 0
+// counts frames that run past 100 ms toward that section of the song, -1
+// stops. VivifySlowFrameReset forgets what was counted (a song's start);
+// VivifySlowFrameSummary returns the summary lines, without prefixes, and
+// forgets it. label(section) names a section.
+void VivifySlowFrameSection(int section);
+void VivifySlowFrameReset();
+std::vector<std::string> VivifySlowFrameSummary(std::function<std::string(int)> const& label);
 constexpr auto PaperLogger = Paper::ConstLoggerContext("Vivify");
 
 #define VIVIFY_DEBUG(...)                                          \

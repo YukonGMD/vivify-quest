@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VivifySlowFrames.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -10,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace Vivify {
 
@@ -54,6 +57,16 @@ class Watchdog {
     int maxSamples = 3;
     std::chrono::milliseconds sampleEvery{3000};
     std::chrono::milliseconds sampleTimeout{500};
+    // Slow-frame sampling (naomi.7): while a section is set, a frame that runs
+    // past slowFrameAfter gets a stack sample of the main thread and one of the
+    // render thread every slowSampleEvery, at most slowSamplesPerFrame pairs a
+    // frame and slowSamplesPerSong in a song.
+    std::chrono::milliseconds slowFrameAfter{100};
+    std::chrono::milliseconds slowSampleEvery{30};
+    std::chrono::milliseconds slowSampleTimeout{50};
+    int slowSamplesPerFrame = 6;
+    int slowSamplesPerSong = 6000;
+    int slowTopFunctions = 10;
   };
   using Writer = std::function<void(std::string const& line)>;
 
@@ -80,6 +93,18 @@ class Watchdog {
   // True on the thread that beats (false until the first beat).
   bool OnMainThread() const;
 
+  // Slow-frame sampling (naomi.7). section >= 0: frames that run past
+  // slowFrameAfter from now on are sampled and counted toward that section of
+  // the song; -1 stops sampling. While no section is set the watchdog thread
+  // wakes once a poll, as before; while one is, about once per slowFrameAfter
+  // when frames are fast, and it reads one atomic and the clock each time.
+  void SetSlowFrameSection(int section);
+  // Forgets what has been counted (the start of a song).
+  void ResetSlowFrames();
+  // The summary lines of what has been counted, without prefixes, then
+  // forgets it. label(section) names a section.
+  std::vector<std::string> TakeSlowFrameSummary(std::function<std::string(int)> const& label);
+
  private:
   void Run();
   // Takes one stack sample and writes it; false when sampling cannot work at
@@ -87,6 +112,11 @@ class Watchdog {
   bool WriteStackSample(int number, double stalledSeconds);
   std::string DescribeThread(char const* label, int tid, std::optional<TaskStat> const& before,
                              std::optional<TaskStat> const& after, double sampleSeconds) const;
+  // How long to sleep next while slow-frame sampling is on; takes the samples
+  // that are due.
+  std::chrono::milliseconds SlowFrameTick(int64_t lastBeat, int64_t now);
+  void TakeSlowFrameSamples(int section, bool newFrame);
+  void SlowFrameNote(std::string const& note);
 
   Writer _write;
   Options _options;
@@ -100,6 +130,27 @@ class Watchdog {
   std::atomic<bool> _paused{false};
   mutable std::mutex _breadcrumbMutex;
   std::string _breadcrumb = "none";
+
+  // Slow-frame sampling. Set by the main thread:
+  std::atomic<int> _slowSection{-1};
+  std::atomic<uint64_t> _slowGeneration{0};  // one a song: samples from an older one are dropped
+  // Shared, under _slowMutex (never held while sampling):
+  std::mutex _slowMutex;
+  SlowFrameProfile _slowProfile;
+  std::vector<std::string> _slowNames;
+  std::vector<std::string> _slowNotes;
+  // The watchdog thread's own:
+  uint64_t _slowSeenGeneration = 0;
+  int64_t _slowFrameBeat = 0;
+  int _slowFrameSamples = 0;
+  int _slowSongSamples = 0;
+  bool _slowUnavailable = false;  // for the life of the process
+  int _renderTid = 0;
+  std::optional<StackBounds> _renderStack;
+  int _renderLookups = 0;
+  bool _renderNoted = false;
+  ModuleTable _modules;
+  int64_t _modulesBuiltNs = 0;
 };
 
 }

@@ -181,10 +181,19 @@ jobs:
       run: |
         g++ -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -pthread \
             -I include -o /tmp/watchdog \
-            tools/watchdog/main.cpp src/VivifyWatchdog.cpp src/VivifyStackSampler.cpp
+            tools/watchdog/main.cpp src/VivifyWatchdog.cpp src/VivifyStackSampler.cpp src/VivifySlowFrames.cpp
 
     - name: Watchdog tests
       run: VIVIFY_WATCHDOG=/tmp/watchdog python3 tools/watchdog/run_tests.py
+
+  symbolize-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Slow-frame symbolizer tests
+      run: python3 tools/symbolize/run_tests.py
 
   perfstats-tests:
     runs-on: ubuntu-latest

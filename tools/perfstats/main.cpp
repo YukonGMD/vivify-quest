@@ -6,7 +6,8 @@
 //     PerfSections (naomi.7): "S <songTime> <label>" begins a section,
 //     "F <ms> <vivifyMs> <songTime>" adds a frame to it, and
 //     "L <renderers> <visible> <systems> <particles> <drawCalls> <batches> <triangles>"
-//     a live sample; their summary follows the song's.
+//     a live sample; their summary follows the song's. "D <index>" prints how
+//     other summaries name that section, after everything else.
 #include "VivifyPerfStats.hpp"
 
 #include <cstdio>
@@ -15,6 +16,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -27,6 +29,7 @@ int main(int argc, char** argv) {
   sections->Reset();
   std::string line;
   int labelCalls = 0;
+  std::vector<int> describe;
   while (std::getline(std::cin, line)) {
     if (line == "skip") {
       stats->SkipFrame();
@@ -48,6 +51,10 @@ int main(int argc, char** argv) {
       float vivify = 0, songTime = 0;
       in >> msText >> vivify >> songTime;
       sections->AddFrame(std::strtof(msText.c_str(), nullptr), vivify, songTime);
+      continue;
+    }
+    if (line.rfind("D ", 0) == 0) {
+      describe.push_back(std::atoi(line.c_str() + 2));
       continue;
     }
     if (line.rfind("L ", 0) == 0) {
@@ -84,5 +91,6 @@ int main(int argc, char** argv) {
   for (auto const& text : stats->Summary(context)) std::printf("%s\n", text.c_str());
   for (auto const& text : sections->Summary(stats->BudgetMs())) std::printf("%s\n", text.c_str());
   std::printf("label calls: %d\n", labelCalls);
+  for (int index : describe) std::printf("describe %d: %s\n", index, sections->Describe(index).c_str());
   return 0;
 }

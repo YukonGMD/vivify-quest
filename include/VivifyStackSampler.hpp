@@ -10,7 +10,8 @@
 namespace Vivify {
 
 // Native call-stack samples of the main thread, for the stall watchdog
-// (0.14.25-naomi.3).
+// (0.14.25-naomi.3), and from naomi.7 of the render thread too, for the
+// slow-frame sampler.
 //
 // The watchdog thread sends the main thread a real-time signal. The handler,
 // running on the main thread, walks the frame-pointer chain from the
@@ -64,6 +65,7 @@ struct MapEntry {
   uint64_t end = 0;
   uint64_t offset = 0;
   bool readable = false;
+  bool executable = false;
   std::string path;
 };
 std::vector<MapEntry> ParseProcMaps(std::string_view text);
@@ -99,13 +101,18 @@ enum class Result {
   NoTarget,         // RegisterTarget never ran
   HandlerTaken,     // something else already handles the signal
   InstallFailed,
-  Blocked,          // the main thread blocks the signal
+  Blocked,          // the thread blocks the signal
   SendFailed,
   Timeout,          // not delivered in time (the request is withdrawn)
   Unsupported,      // no register access on this architecture
 };
-// Watchdog thread only. The first call installs the handler.
+// Watchdog thread only. The first call installs the handler. Sample takes the
+// main thread; SampleThread (naomi.7) any thread of this process, given the
+// bounds of its stack (VivifySlowFrames.hpp finds them). Requests must not
+// overlap: they share one buffer.
 Result Sample(std::chrono::milliseconds timeout, StackSample& out);
+Result SampleThread(int tid, uintptr_t stackLo, uintptr_t stackHi, std::chrono::milliseconds timeout,
+                    StackSample& out);
 std::string DescribeResult(Result result);
 
 }  // namespace StackSampler

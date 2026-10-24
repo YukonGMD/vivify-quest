@@ -126,6 +126,14 @@ void PerfSections::Begin(std::string const& label, float songTime) {
   _sections.back().startSong = _sections.back().endSong = songTime;
 }
 
+std::string PerfSections::Describe(int index) const {
+  if (index < 0 || index >= Count()) return "section " + std::to_string(index);
+  Section const& section = _sections[static_cast<size_t>(index)];
+  char range[64];
+  std::snprintf(range, sizeof(range), " (song %.1f-%.1fs)", section.startSong, section.endSong);
+  return "'" + section.label + "'" + range;
+}
+
 void PerfSections::AddFrame(float frameMs, float vivifyMs, float songTime) {
   if (_sections.empty() || !(frameMs >= 0.0f)) return;
   Section& section = _sections.back();

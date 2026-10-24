@@ -97,6 +97,12 @@ check("the share at 60 fps counts frames of 16 ms", "60 fps in 97%" in amb, amb)
 lines = run(90, ["S %d s%d" % (i, i) for i in range(40)] + ["F 10 0 1"])
 check("sections past the limit fold into the last", find(lines, "by section").startswith("by section (32)") and
       find(lines, "  'later sections'"), [l for l in lines if "section" in l][:3])
+lines = run(120, frames + ["D 0", "D 2", "D 7", "D -1"])
+check("a section described for the slow-frame summary", find(lines, "describe 0:") ==
+      "describe 0: 'intro' (song 0.0-24.9s)" and find(lines, "describe 2:") == "describe 2: 'ambient' (song 36.0-70.0s)",
+      [l for l in lines if l.startswith("describe")])
+check("an unknown section is named by its number", find(lines, "describe 7:") == "describe 7: section 7" and
+      find(lines, "describe -1:") == "describe -1: section -1", [l for l in lines if l.startswith("describe")])
 lines = run(90, ["F 10 0 1", "L 1 1 1 1 1 1 1"])
 check("frames before any section are ignored", not find(lines, "by section"), lines)
 

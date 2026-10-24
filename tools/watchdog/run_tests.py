@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Tests for src/VivifyWatchdog.cpp. Build with:
     g++ -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -pthread -I include \\
-        -o /tmp/watchdog tools/watchdog/main.cpp src/VivifyWatchdog.cpp src/VivifyStackSampler.cpp
+        -o /tmp/watchdog tools/watchdog/main.cpp src/VivifyWatchdog.cpp src/VivifyStackSampler.cpp \\
+        src/VivifySlowFrames.cpp
     VIVIFY_WATCHDOG=/tmp/watchdog python3 tools/watchdog/run_tests.py
 """
 import os, re, subprocess, sys, tempfile
@@ -112,6 +113,55 @@ out = call("sample", "taken").stdout
 check("an existing handler disables sampling", "already has a handler" in out, out)
 out = call("sample", "blocked").stdout
 check("a blocked signal is reported", "blocks signal" in out, out)
+
+# Slow-frame sampling (naomi.7).
+out = call("slowframes").stdout.splitlines()
+expect = {l[7]: l[9:] for l in out if l.startswith("expect ")}
+summary = out[out.index(next(l for l in out if l.startswith("slow frames (over 100 ms)"))):out.index("---- taken twice")] \
+    if any(l.startswith("slow frames (over 100 ms)") for l in out) and "---- taken twice" in out else []
+blocks = {}
+current = None
+for line in summary[1:]:
+    m = re.match(r"section (\d+): ", line)
+    if m:
+        current = int(m.group(1))
+        blocks[current] = [line]
+    elif current is not None:
+        blocks[current].append(line)
+
+
+def thread_line(section, thread, kind):
+    prefix = "  %s thread%s: " % (thread, " was in" if kind == "was in" else ", " + kind)
+    return next((l[len(prefix):] for l in blocks.get(section, []) if l.startswith(prefix)), "")
+
+
+def times(section, thread):
+    m = re.search(r"%s thread (\d+) time\(s\), on a CPU in (\d+)%%" % thread, blocks.get(section, [""])[0])
+    return (int(m.group(1)), int(m.group(2))) if m else (0, -1)
+
+
+check("slow frames: sections with slow frames only, healthy frames never sampled", sorted(blocks) == [0, 1], summary)
+check("slow frames: each slow frame counted once", all(blocks.get(s, [""])[0].startswith(
+    "section %d: 3 slow frame(s) sampled" % s) for s in (0, 1)), summary)
+main0, cpu0 = times(0, "main")
+main1, cpu1 = times(1, "main")
+check("slow frames: several samples a frame, at most four", 6 <= main0 <= 12 and 6 <= main1 <= 12, (main0, main1))
+check("slow frames: a spinning main thread is on a CPU", cpu0 >= 50, cpu0)
+check("slow frames: a sleeping main thread is not", 0 <= cpu1 <= 50, cpu1)
+check("slow frames: the spinning function is found by its start address",
+      expect.get("A", "?") in thread_line(0, "main", "anywhere on the stack"), (expect, blocks.get(0)))
+check("slow frames: so is the sleeping one, as a caller",
+      expect.get("B", "?") in thread_line(1, "main", "anywhere on the stack"), (expect, blocks.get(1)))
+render0, _ = times(0, "render")
+check("slow frames: the render thread is found by name and sampled too", render0 >= 6, blocks.get(0))
+check("slow frames: the render thread's waiting function",
+      expect.get("R", "?") in thread_line(0, "render", "anywhere on the stack"), (expect, blocks.get(0)))
+check("slow frames: no sampling problems", not any(l.startswith("  ") and "thread" in l and "not" in l
+                                                    for l in summary[1:2]), summary[:3])
+again = out[out.index("---- taken twice") + 1:out.index("---- written")] if "---- written" in out else []
+check("slow frames: taking the summary forgets the samples", len(again) == 1 and again[0].endswith(
+    "no frame ran that long"), again)
+check("slow frames: nothing written to the stall log", out[-1] == "---- written", out[-3:])
 
 print("\n%d failure(s)" % failures)
 sys.exit(1 if failures else 0)

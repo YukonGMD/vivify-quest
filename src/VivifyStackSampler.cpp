@@ -103,6 +103,7 @@ std::vector<MapEntry> ParseProcMaps(std::string_view text) {
     entry.end = end;
     entry.offset = offset;
     entry.readable = perms[0] == 'r';
+    entry.executable = perms[2] == 'x';
     if (pathAt > 0 && static_cast<size_t>(pathAt) < line.size()) entry.path = line.substr(pathAt);
     while (!entry.path.empty() && entry.path.back() == ' ') entry.path.pop_back();
     maps.push_back(std::move(entry));
@@ -203,17 +204,30 @@ namespace {
 
 // Request states. The handler only acts on Armed; the watchdog thread only
 // reads the buffer once the handler has set Done.
-enum : int { kIdle = 0, kArmed = 1, kWriting = 2, kDone = 3 };
+enum : uint64_t { kIdle = 0, kArmed = 1, kWriting = 2, kDone = 3 };
 
+// The request word holds the thread a request is for as well as its state
+// (naomi.7, when the render thread became a second target), so a signal that
+// arrives late, after its request was withdrawn and a new one made for
+// another thread, cannot take the new one.
+constexpr uint64_t Request(int tid, uint64_t state) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(tid)) << 32) | state;
+}
+
+// The main thread, registered by RegisterTarget.
 std::atomic<int> gTargetTid{0};
 std::atomic<uintptr_t> gStackLo{0};
 std::atomic<uintptr_t> gStackHi{0};
-std::atomic<int> gState{kIdle};
+// The request being served: its stack bounds are written before it is armed.
+std::atomic<uintptr_t> gRequestLo{0};
+std::atomic<uintptr_t> gRequestHi{0};
+std::atomic<uint64_t> gRequest{kIdle};
 std::atomic<bool> gInstalled{false};
 StackSample gBuffer;
 
 static_assert(std::atomic<int>::is_always_lock_free);
 static_assert(std::atomic<uintptr_t>::is_always_lock_free);
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
 
 bool RegistersFrom(void* context, uint64_t& pc, uint64_t& lr, uint64_t& fp) {
   auto* uc = static_cast<ucontext_t*>(context);
@@ -236,19 +250,18 @@ bool RegistersFrom(void* context, uint64_t& pc, uint64_t& lr, uint64_t& fp) {
 
 VIVIFY_NO_ASAN void Handler(int, siginfo_t*, void* context) {
   int const savedErrno = errno;
-  if (static_cast<int>(syscall(SYS_gettid)) == gTargetTid.load(std::memory_order_relaxed)) {
-    int expected = kArmed;
-    if (gState.compare_exchange_strong(expected, kWriting, std::memory_order_acq_rel)) {
-      uint64_t pc = 0, lr = 0, fp = 0;
-      if (RegistersFrom(context, pc, lr, fp)) {
-        WalkFramePointers(pc, lr, fp, gStackLo.load(std::memory_order_relaxed),
-                          gStackHi.load(std::memory_order_relaxed), gBuffer);
-      } else {
-        gBuffer.count = 0;
-        gBuffer.stop = StackWalkStop::Unsupported;
-      }
-      gState.store(kDone, std::memory_order_release);
+  int const tid = static_cast<int>(syscall(SYS_gettid));
+  uint64_t expected = Request(tid, kArmed);
+  if (gRequest.compare_exchange_strong(expected, Request(tid, kWriting), std::memory_order_acq_rel)) {
+    uint64_t pc = 0, lr = 0, fp = 0;
+    if (RegistersFrom(context, pc, lr, fp)) {
+      WalkFramePointers(pc, lr, fp, gRequestLo.load(std::memory_order_relaxed),
+                        gRequestHi.load(std::memory_order_relaxed), gBuffer);
+    } else {
+      gBuffer.count = 0;
+      gBuffer.stop = StackWalkStop::Unsupported;
     }
+    gRequest.store(Request(tid, kDone), std::memory_order_release);
   }
   errno = savedErrno;
 }
@@ -297,12 +310,20 @@ int ChosenSignal() {
 }
 
 Result Sample(std::chrono::milliseconds timeout, StackSample& out) {
+  return SampleThread(TargetTid(), gStackLo.load(std::memory_order_relaxed), gStackHi.load(std::memory_order_relaxed),
+                      timeout, out);
+}
+
+Result SampleThread(int tid, uintptr_t stackLo, uintptr_t stackHi, std::chrono::milliseconds timeout,
+                    StackSample& out) {
 #if !defined(__aarch64__) && !defined(__x86_64__)
+  (void)tid;
+  (void)stackLo;
+  (void)stackHi;
   (void)timeout;
   (void)out;
   return Result::Unsupported;
 #else
-  int const tid = TargetTid();
   if (tid <= 0) return Result::NoTarget;
   int const signal = ChosenSignal();
   if (!gInstalled.load()) {
@@ -323,24 +344,26 @@ Result Sample(std::chrono::milliseconds timeout, StackSample& out) {
   if (!HandlerIsOurs(signal)) return Result::HandlerTaken;
   if (SignalBlockedBy(tid, signal)) return Result::Blocked;
 
-  gState.store(kArmed, std::memory_order_release);
+  gRequestLo.store(stackLo, std::memory_order_relaxed);
+  gRequestHi.store(stackHi, std::memory_order_relaxed);
+  gRequest.store(Request(tid, kArmed), std::memory_order_release);
   if (syscall(SYS_tgkill, getpid(), tid, signal) != 0) {
-    gState.store(kIdle, std::memory_order_release);
+    gRequest.store(kIdle, std::memory_order_release);
     return Result::SendFailed;
   }
   auto const deadline = std::chrono::steady_clock::now() + timeout;
-  while (gState.load(std::memory_order_acquire) != kDone) {
+  while (gRequest.load(std::memory_order_acquire) != Request(tid, kDone)) {
     if (std::chrono::steady_clock::now() >= deadline) {
-      int expected = kArmed;
-      if (gState.compare_exchange_strong(expected, kIdle, std::memory_order_acq_rel)) return Result::Timeout;
+      uint64_t expected = Request(tid, kArmed);
+      if (gRequest.compare_exchange_strong(expected, kIdle, std::memory_order_acq_rel)) return Result::Timeout;
       // The handler started just now; it finishes in microseconds.
-      while (gState.load(std::memory_order_acquire) != kDone) std::this_thread::yield();
+      while (gRequest.load(std::memory_order_acquire) != Request(tid, kDone)) std::this_thread::yield();
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   out = gBuffer;
-  gState.store(kIdle, std::memory_order_release);
+  gRequest.store(kIdle, std::memory_order_release);
   return out.stop == StackWalkStop::Unsupported ? Result::Unsupported : Result::Ok;
 #endif
 }
@@ -352,9 +375,9 @@ std::string DescribeResult(Result result) {
     case Result::NoTarget: return "the main thread was never registered";
     case Result::HandlerTaken: return signal + " already has a handler in this process";
     case Result::InstallFailed: return "could not install a handler for " + signal;
-    case Result::Blocked: return "the main thread blocks " + signal;
-    case Result::SendFailed: return "could not send " + signal + " to the main thread";
-    case Result::Timeout: return "the main thread did not take " + signal + " in time";
+    case Result::Blocked: return "the thread blocks " + signal;
+    case Result::SendFailed: return "could not send " + signal + " to the thread";
+    case Result::Timeout: return "the thread did not take " + signal + " in time";
     case Result::Unsupported: return "no register access on this architecture";
   }
   return "?";

@@ -38,6 +38,18 @@ Test builds report themselves as 0.14.25-naomi.N.
   systems with particles alive, and Unity's draw-call, batch and triangle
   counts where this game build keeps them (the summary says when it does
   not). Measured every two seconds of song, after the frame's own work.
+- **Slow-frame sampler** (naomi.7, setting "Slow-Frame Sampler
+  (diagnostics)", on). While a song plays, any frame that takes over 100 ms
+  gets stack samples of the main thread and of Unity's render thread, one of
+  each every 30 ms, at most six a frame; the `[PERF]` summary then lists,
+  per section, how many slow frames there were, how often each thread was
+  on a CPU rather than waiting, the functions each was in, and the functions
+  anywhere on its stack. Functions are written as library and start address,
+  found on the headset from each library's unwind table (no symbols needed
+  there); `tools/symbolize/symbolize.py` adds their names on a PC. While
+  frames are fast the watchdog thread wakes about ten times a second and
+  reads a clock; nothing runs on the game's threads. Changes nothing on
+  screen; turn it off if anything about it seems wrong.
 - **Render-state dump** (naomi.7, Debug logging only). Lines starting
   `Vivify render state (...)` after the time-0 catch-up, after each
   `SetRenderingSettings` event, and at level end before the settings are

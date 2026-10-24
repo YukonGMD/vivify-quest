@@ -9,6 +9,7 @@ A read-only audit of where Vivify Quest spends CPU, GPU and memory on a Quest 3S
 
 - **OVR Metrics Tool** (on headset): CPU/GPU frame time, GPU utilisation, stale frames. Compare a dense section with and without the feature, using the isolation toggles Vivify already has (Disable All Blits, Disable CreateCamera Depth, Disable Custom Note Visuals, Effect Resolution, Scene Depth).
 - **Vivify's own logs:** "Vivify level load: … took Nms", "Vivify frame stall", "Vivify frame took …ms" in `VivifySession.txt`; `VivifyReport.txt`.
+- **`[PERF]` summary** (end of each level, naomi.4+): frame times for the song, then per section (naomi.7) the frame times, Vivify's own share, live renderers, particles and draw counts, and the slow-frame sampler's report: where the main and render threads were during frames over 100 ms. Its function addresses are named on a PC with `tools/symbolize/symbolize.py VivifySession.txt --libs <dirs>`, given the mod's `libVivify.so` with symbols (`testlogs/symbols/<build>/`) and the game's `libunity.so` (which keeps its symbol table) from the headset.
 - **Timers:** wrap a suspect in `std::chrono::steady_clock` and log a per-second total, the same way `LoadMainBundle`'s `phase` lambda does.
 - **GPU captures:** RenderDoc for Oculus or Snapdragon Profiler, to count full-screen passes, render-target switches (resolves) and draw calls.
 - **Memory:** `adb shell dumpsys meminfo com.beatgames.beatsaber` before and after several plays of one map; Snapdragon Profiler's memory track.

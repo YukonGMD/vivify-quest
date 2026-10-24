@@ -65,6 +65,7 @@ constexpr std::string_view kOffscreenCullingConfigKey = "offscreenCullingOptIn";
 constexpr std::string_view kCrashGuardConfigKey = "crashGuard";
 constexpr std::string_view kPcBundleForMissingShadersConfigKey = "pcBundleForMissingShaders";
 constexpr std::string_view kFarCullingConfigKey = "farCullingDistance";
+constexpr std::string_view kSlowFrameSamplerConfigKey = "slowFrameSampler";
 bool gMultipassRenderingEnabled = true;
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
@@ -137,6 +138,9 @@ bool gCrashGuard = true;
 bool gPcBundleForMissingShaders = false;
 // Metres beyond which the main camera draws nothing; 0 is off (0.14.23).
 int gFarCullingDistance = 0;
+// Stack samples of the main and render threads during frames over 100 ms,
+// summed up per section in the song's [PERF] summary (naomi.7).
+bool gSlowFrameSampler = true;
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
 //
@@ -341,6 +345,18 @@ void VivifySetAppPaused(bool paused) {
   gWatchdog.SetPaused(paused);
 }
 
+void VivifySlowFrameSection(int section) {
+  gWatchdog.SetSlowFrameSection(section);
+}
+
+void VivifySlowFrameReset() {
+  gWatchdog.ResetSlowFrames();
+}
+
+std::vector<std::string> VivifySlowFrameSummary(std::function<std::string(int)> const& label) {
+  return gWatchdog.TakeSlowFrameSummary(label);
+}
+
 namespace {
 
 void EnsureConfigObject() {
@@ -515,6 +531,13 @@ void RegisterModSettings() {
         BSML::Lite::CreateToggle(
             container->get_transform(), u"Debug logging", GetVivifyDebugLogging(),
             [](bool value) { SetBoolConfigValue(kVivifyDebugLoggingConfigKey, value, gVivifyDebugLogging); });
+        // Diagnostics only, changes nothing on screen: during a frame that
+        // takes over 100 ms, where the main and render threads are, summed up
+        // per section of the song in the session log. Costs nothing while
+        // frames are fast; off if anything seems wrong with it.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Slow-Frame Sampler (diagnostics)", gSlowFrameSampler,
+            [](bool value) { SetBoolConfigValue(kSlowFrameSamplerConfigKey, value, gSlowFrameSampler); });
         BSML::Lite::CreateToggle(
             container->get_transform(), u"Disable Beat 0 Filmgrain Blit", GetDisableBeat0FilmgrainBlit(),
             [](bool value) { SetBoolConfigValue(kDisableBeat0FilmgrainBlitConfigKey, value, gDisableBeat0FilmgrainBlit); });
@@ -917,6 +940,10 @@ bool GetOffscreenCulling() {
   return gOffscreenCulling;
 }
 
+bool GetSlowFrameSampler() {
+  return gSlowFrameSampler;
+}
+
 int GetFarCullingDistance() {
   return std::clamp(gFarCullingDistance, 0, 1000);
 }
@@ -970,6 +997,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureBoolConfigValue(kCrashGuardConfigKey, true, gCrashGuard);
   needsWrite |= EnsureBoolConfigValue(kPcBundleForMissingShadersConfigKey, false, gPcBundleForMissingShaders);
   needsWrite |= EnsureIntConfigValue(kFarCullingConfigKey, 0, 0, 1000, gFarCullingDistance);
+  needsWrite |= EnsureBoolConfigValue(kSlowFrameSamplerConfigKey, true, gSlowFrameSampler);
   if (needsWrite) {
     config.Write();
   }
