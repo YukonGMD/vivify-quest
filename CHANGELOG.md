@@ -72,6 +72,14 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **The room offset was not applied in Vivify maps** (naomi.7). Beat
+  Saber's VRCenterAdjust applies the player's room centre and rotation when
+  it starts and follows later changes. Vivify skips its calls while the
+  game has not yet filled in the fields they use, and in a Vivify map that
+  was the case for OnEnable and Start, which never came again: the level
+  played without the room offset that PC and every other map apply. The
+  skipped OnEnable and Start now run, in that order, on the first frame the
+  fields are filled in; the log says so in a breadcrumb.
 - **Crash guard: three corrections** (naomi.7). A load that an older
   converter's bundle left unfinished no longer counts as a strike against
   the current version (that bundle is converted again anyway); naomi.6

@@ -231,6 +231,18 @@ struct VRCenterAdjustCounts {
 };
 std::map<std::string_view, VRCenterAdjustCounts> gVRCenterAdjustCounts;
 
+// OnEnable and Start calls skipped because the game had not filled in the
+// settings fields yet, per instance (naomi.7). Start applies the room offset
+// from the player's settings and OnEnable subscribes to its changes, so
+// skipping them for good left a Vivify map without the room offset that PC
+// (and every other map) applies. They run, OnEnable first as in Unity, on the
+// first Update that finds the fields filled in.
+struct DeferredVRCenterAdjust {
+  bool onEnable = false;
+  bool start = false;
+};
+std::unordered_map<GlobalNamespace::VRCenterAdjust*, DeferredVRCenterAdjust> gDeferredVRCenterAdjust;
+
 // Ported from the rbatteries1-design/Lars27110 base. VRCenterAdjust drives the
 // automatic room-scale recenter/floor-offset. Its methods touch
 // _settingsManager / _settingsApplicator fields that aren't always populated
@@ -271,12 +283,42 @@ bool ShouldSkipVRCenterAdjust(GlobalNamespace::VRCenterAdjust* self, std::string
       VivifyBreadcrumb("VRCenterAdjust." + std::string(method) +
                        " skipped (fields not set yet); further skips this level are counted at level end");
     }
+    if (method == "OnEnable") {
+      gDeferredVRCenterAdjust[self].onEnable = true;
+    } else if (method == "Start") {
+      gDeferredVRCenterAdjust[self].start = true;
+    } else if (method == "OnDisable") {
+      // Disabled before its OnEnable could run: there is nothing to undo.
+      if (auto it = gDeferredVRCenterAdjust.find(self); it != gDeferredVRCenterAdjust.end()) it->second.onEnable = false;
+    }
     return true;
   }
   if (!gVRCenterAdjustCounts.empty()) {
     if (auto it = gVRCenterAdjustCounts.find(method); it != gVRCenterAdjustCounts.end()) it->second.ran++;
   }
+  // Unity is running OnEnable or OnDisable itself now, so a skipped OnEnable
+  // is either happening or moot; a skipped Start waits for Update.
+  if (method == "OnEnable" || method == "OnDisable") {
+    if (auto it = gDeferredVRCenterAdjust.find(self); it != gDeferredVRCenterAdjust.end()) it->second.onEnable = false;
+  }
   return false;
+}
+
+// Runs what ShouldSkipVRCenterAdjust held back for this instance. Called from
+// Update once the fields are filled in; the calls go through the hooks above,
+// which now let them pass.
+void RunDeferredVRCenterAdjust(GlobalNamespace::VRCenterAdjust* self) {
+  auto it = gDeferredVRCenterAdjust.find(self);
+  if (it == gDeferredVRCenterAdjust.end()) return;
+  DeferredVRCenterAdjust const deferred = it->second;
+  gDeferredVRCenterAdjust.erase(it);
+  if (!deferred.onEnable && !deferred.start) return;
+  VivifyBreadcrumb(fmt::format("VRCenterAdjust: running the skipped{}{} now that its fields are set",
+                               deferred.onEnable ? " OnEnable" : "", deferred.start ? " Start" : ""));
+  VivifyPart("VRCenterAdjust deferred OnEnable/Start", [&] {
+    if (deferred.onEnable) self->OnEnable();
+    if (deferred.start) self->Start();
+  });
 }
 
 MAKE_HOOK_MATCH(VRCenterAdjust_Start, &GlobalNamespace::VRCenterAdjust::Start, void, GlobalNamespace::VRCenterAdjust* self) {
@@ -296,6 +338,7 @@ MAKE_HOOK_MATCH(VRCenterAdjust_OnDisable, &GlobalNamespace::VRCenterAdjust::OnDi
 
 MAKE_HOOK_MATCH(VRCenterAdjust_Update, &GlobalNamespace::VRCenterAdjust::Update, void, GlobalNamespace::VRCenterAdjust* self) {
   if (ShouldSkipVRCenterAdjust(self, "Update")) return;
+  if (!gDeferredVRCenterAdjust.empty()) RunDeferredVRCenterAdjust(self);
   VRCenterAdjust_Update(self);
 }
 
@@ -319,6 +362,8 @@ void EndLevelVRCenterAdjustCounts() {
                                  method, counts.skipped, counts.ran));
   }
   gVRCenterAdjustCounts.clear();
+  // Anything still held back belongs to the level's own instances.
+  gDeferredVRCenterAdjust.clear();
 }
 
 void LateLoad() {
