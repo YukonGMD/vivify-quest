@@ -69,6 +69,8 @@ All settings are in **Mod Settings → Vivify**.
 | Crash Guard | on | After two loads of a converted map that never finish, plays it with grey stand-ins instead. Turn off if maps go grey after crashes caused by other mods. |
 | Offscreen Culling (less lag) | off | Animators in a map's prefabs stop updating while nothing they draw is on screen. Can leave out scenery and particles that the animation itself grows, moves or spawns into view. |
 | Far Culling Distance | 0 (off) | Draws nothing farther than this many metres. Try 150-300 on heavy maps; far scenery may disappear. |
+| Performance Mode For Heavy Maps | off | While a song runs slower than 60 fps, steps down one level every 1.5 s: GPU clock boost (no change on screen), then foveation HighTop (edges of the view less sharp), then eye resolution 85%, 75%, 65% (the whole view softer). Steps back up while frames hold the refresh rate; the game's settings come back at the song's end. |
+| Slow-Frame Sampler (diagnostics) | on | During frames over 100 ms, samples where the main and render threads are and sums it up per section in the session log's `[PERF]` lines. Changes nothing on screen. |
 | AudioLink | on | Runs AudioLink for maps that use it. |
 | Map Realtime Shadows | off | Lets maps turn on realtime shadows. Expensive; can blacken note bodies. |
 | Replay Render Mode (converted maps) | off | Converts maps with single-screen programs so replay and recording renderers can draw them. Turn on to render, off to play. |

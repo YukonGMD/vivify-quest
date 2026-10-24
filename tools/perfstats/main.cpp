@@ -8,6 +8,9 @@
 //     "L <renderers> <visible> <systems> <particles> <drawCalls> <batches> <triangles>"
 //     a live sample; their summary follows the song's. "D <index>" prints how
 //     other summaries name that section, after everything else.
+//     PerformanceGovernor (naomi.7): "G <refreshHz>" resets it, "g <ms>
+//     <seconds>" adds a frame and prints "level N at <seconds>" on a change;
+//     its summary is printed last.
 #include "VivifyPerfStats.hpp"
 
 #include <cstdio>
@@ -30,6 +33,8 @@ int main(int argc, char** argv) {
   std::string line;
   int labelCalls = 0;
   std::vector<int> describe;
+  Vivify::PerformanceGovernor governor;
+  bool governed = false;
   while (std::getline(std::cin, line)) {
     if (line == "skip") {
       stats->SkipFrame();
@@ -51,6 +56,22 @@ int main(int argc, char** argv) {
       float vivify = 0, songTime = 0;
       in >> msText >> vivify >> songTime;
       sections->AddFrame(std::strtof(msText.c_str(), nullptr), vivify, songTime);
+      continue;
+    }
+    if (line.rfind("G ", 0) == 0) {
+      governor.Reset(std::strtof(line.c_str() + 2, nullptr));
+      governed = true;
+      continue;
+    }
+    if (line.rfind("g ", 0) == 0) {
+      std::istringstream in(line.substr(2));
+      float ms = 0;
+      double seconds = 0;
+      in >> ms >> seconds;
+      if (governor.AddFrame(ms, seconds)) {
+        std::printf("level %d at %.2f (median %.1f ms): %s\n", governor.Level(), seconds, governor.LastMedianMs(),
+                    Vivify::PerformanceGovernor::Describe(governor.Level()));
+      }
       continue;
     }
     if (line.rfind("D ", 0) == 0) {
@@ -92,5 +113,13 @@ int main(int argc, char** argv) {
   for (auto const& text : sections->Summary(stats->BudgetMs())) std::printf("%s\n", text.c_str());
   std::printf("label calls: %d\n", labelCalls);
   for (int index : describe) std::printf("describe %d: %s\n", index, sections->Describe(index).c_str());
+  if (governed) {
+    for (auto const& text : governor.Summary()) std::printf("%s\n", text.c_str());
+    for (int level = 0; level < Vivify::PerformanceGovernor::kLevels; level++) {
+      auto const settings = Vivify::PerformanceGovernor::SettingsFor(level);
+      std::printf("settings %d: boost=%d foveation=%d scale=%.2f\n", level, settings.boost, settings.foveation,
+                  settings.resolutionScale);
+    }
+  }
   return 0;
 }

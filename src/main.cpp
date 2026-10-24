@@ -66,6 +66,7 @@ constexpr std::string_view kCrashGuardConfigKey = "crashGuard";
 constexpr std::string_view kPcBundleForMissingShadersConfigKey = "pcBundleForMissingShaders";
 constexpr std::string_view kFarCullingConfigKey = "farCullingDistance";
 constexpr std::string_view kSlowFrameSamplerConfigKey = "slowFrameSampler";
+constexpr std::string_view kPerformanceModeConfigKey = "performanceModeHeavyMaps";
 bool gMultipassRenderingEnabled = true;
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
@@ -141,6 +142,9 @@ int gFarCullingDistance = 0;
 // Stack samples of the main and render threads during frames over 100 ms,
 // summed up per section in the song's [PERF] summary (naomi.7).
 bool gSlowFrameSampler = true;
+// While a song runs slower than 60 fps, a GPU clock boost, then stronger
+// foveation, then lower eye resolution (naomi.7).
+bool gPerformanceMode = false;
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
 //
@@ -674,6 +678,15 @@ void RegisterModSettings() {
             container->get_transform(), u"Offscreen Culling (less lag)", gOffscreenCulling,
             [](bool value) { SetBoolConfigValue(kOffscreenCullingConfigKey, value, gOffscreenCulling); });
 
+        // Off by default: changes how heavy maps look. While a song runs
+        // slower than 60 fps it steps down -- a GPU clock boost (no change on
+        // screen), then stronger foveation (the edges of the view less
+        // sharp), then eye resolution 85%, 75%, 65% (the whole view softer)
+        // -- and back up while frames hold the refresh rate.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Performance Mode For Heavy Maps", gPerformanceMode,
+            [](bool value) { SetBoolConfigValue(kPerformanceModeConfigKey, value, gPerformanceMode); });
+
         // Draws nothing farther than this from the player. 0 is off: far
         // scenery is part of many maps' look.
         BSML::Lite::CreateIncrementSetting(
@@ -944,6 +957,10 @@ bool GetSlowFrameSampler() {
   return gSlowFrameSampler;
 }
 
+bool GetPerformanceMode() {
+  return gPerformanceMode;
+}
+
 int GetFarCullingDistance() {
   return std::clamp(gFarCullingDistance, 0, 1000);
 }
@@ -998,6 +1015,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureBoolConfigValue(kPcBundleForMissingShadersConfigKey, false, gPcBundleForMissingShaders);
   needsWrite |= EnsureIntConfigValue(kFarCullingConfigKey, 0, 0, 1000, gFarCullingDistance);
   needsWrite |= EnsureBoolConfigValue(kSlowFrameSamplerConfigKey, true, gSlowFrameSampler);
+  needsWrite |= EnsureBoolConfigValue(kPerformanceModeConfigKey, false, gPerformanceMode);
   if (needsWrite) {
     config.Write();
   }

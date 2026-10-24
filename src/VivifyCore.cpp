@@ -12,6 +12,7 @@
 #include "GlobalNamespace/MultiplayerController.hpp"
 #include "GlobalNamespace/OVRDisplay.hpp"
 #include "GlobalNamespace/OVRManager.hpp"
+#include "UnityEngine/XR/XRSettings.hpp"
 #include "Unity/Profiling/ProfilerCategory.hpp"
 #include "Unity/Profiling/ProfilerRecorder.hpp"
 #include "Unity/Profiling/ProfilerRecorderOptions.hpp"
@@ -738,6 +739,8 @@ void Runtime::BeginPerfSummary() {
   }
   _perf.Reset(refreshHz);
   _perfSections.Reset();
+  _governor.Reset(refreshHz);
+  _perfModeUsed = false;
   _perfVivifyMs = 0.0;
   _perfLiveDue = 0.0f;
   StartPerfRecorders();
@@ -757,6 +760,65 @@ void Runtime::UpdateSlowFrameSection() {
   VivifySlowFrameSection(sampling ? _perfSections.Count() - 1 : -1);
 }
 
+// Performance mode for heavy maps (naomi.7). The GPU performance level and
+// the foveation level go through OVRManager, the eye resolution through
+// XRSettings, which reallocates the eye textures: a short hitch each time,
+// which is why the governor changes it at most every 1.5 s.
+void Runtime::ApplyPerformanceLevel(int level) {
+  using GlobalNamespace::OVRManager;
+  using Fov = GlobalNamespace::OVRManager_FoveatedRenderingLevel;
+  using Perf = GlobalNamespace::OVRManager_ProcessorPerformanceLevel;
+  auto const settings = PerformanceGovernor::SettingsFor(level);
+  try {
+    if (!_perfModeSaved) {
+      _perfModeScale = UnityEngine::XR::XRSettings::get_eyeTextureResolutionScale();
+      _perfModeFoveation = OVRManager::get_foveatedRenderingLevel().value__;
+      _perfModeGpuLevel = OVRManager::get_suggestedGpuPerfLevel().value__;
+      _perfModeGpuFixed = OVRManager::get_gpuLevel();
+      _perfModeSaved = true;
+    }
+    OVRManager::set_suggestedGpuPerfLevel(settings.boost ? Perf::Boost : Perf(_perfModeGpuLevel));
+    OVRManager::set_foveatedRenderingLevel(settings.foveation ? Fov::HighTop : Fov(_perfModeFoveation));
+    float const scale = _perfModeScale * settings.resolutionScale;
+    if (std::abs(UnityEngine::XR::XRSettings::get_eyeTextureResolutionScale() - scale) > 0.001f) {
+      UnityEngine::XR::XRSettings::set_eyeTextureResolutionScale(scale);
+    }
+    VivifyWriteFlushedLine(fmt::format(
+        "[PERF] performance mode: level {} ({}) at song {:.1f}s, after a median frame of {:.1f} ms over the last "
+        "second; GPU level now {}, foveation {}, eye resolution scale {:.2f} ({}x{})",
+        level, PerformanceGovernor::Describe(level), CurrentSongTime(), _governor.LastMedianMs(),
+        OVRManager::get_gpuLevel(), OVRManager::get_foveatedRenderingLevel().value__,
+        UnityEngine::XR::XRSettings::get_eyeTextureResolutionScale(), UnityEngine::XR::XRSettings::get_eyeTextureWidth(),
+        UnityEngine::XR::XRSettings::get_eyeTextureHeight()));
+  } catch (std::exception const& ex) {
+    PaperLogger.warn("Vivify performance mode: level {} could not be applied: {}", level, ex.what());
+  } catch (...) {
+    PaperLogger.warn("Vivify performance mode: level {} could not be applied", level);
+  }
+}
+
+void Runtime::RestorePerformanceMode() {
+  if (!_perfModeSaved) return;
+  _perfModeSaved = false;
+  using GlobalNamespace::OVRManager;
+  try {
+    OVRManager::set_suggestedGpuPerfLevel(GlobalNamespace::OVRManager_ProcessorPerformanceLevel(_perfModeGpuLevel));
+    // Should the game have set a fixed level rather than a suggested one.
+    if (OVRManager::get_gpuLevel() != _perfModeGpuFixed && _perfModeGpuFixed >= 0) {
+      OVRManager::set_gpuLevel(_perfModeGpuFixed);
+    }
+    OVRManager::set_foveatedRenderingLevel(GlobalNamespace::OVRManager_FoveatedRenderingLevel(_perfModeFoveation));
+    if (std::abs(UnityEngine::XR::XRSettings::get_eyeTextureResolutionScale() - _perfModeScale) > 0.001f) {
+      UnityEngine::XR::XRSettings::set_eyeTextureResolutionScale(_perfModeScale);
+    }
+    VivifyWriteFlushedLine(fmt::format("[PERF] performance mode: the game's settings are back (GPU level {}, "
+                                       "foveation {}, eye resolution scale {:.2f})",
+                                       OVRManager::get_gpuLevel(), _perfModeFoveation, _perfModeScale));
+  } catch (...) {
+    PaperLogger.warn("Vivify performance mode: the game's settings could not be put back");
+  }
+}
+
 void Runtime::RecordPerfFrame(std::chrono::steady_clock::time_point frameStart) {
   if (!_perfActive) {
     BeginPerfSummary();
@@ -774,6 +836,15 @@ void Runtime::RecordPerfFrame(std::chrono::steady_clock::time_point frameStart) 
     _perf.AddFrame(frameMs, CurrentSongTime(), gcDelta,
                    [this](char* buffer, size_t size) { WritePerfLabel(buffer, size); });
     _perfSections.AddFrame(frameMs, static_cast<float>(_perfVivifyMs), CurrentSongTime());
+    if (GetPerformanceMode()) {
+      _perfModeUsed = true;
+      double const seconds = std::chrono::duration<double>(frameStart - _perfStartWall).count();
+      if (_governor.AddFrame(frameMs, seconds)) ApplyPerformanceLevel(_governor.Level());
+    } else if (_perfModeSaved) {
+      // Turned off mid-song.
+      RestorePerformanceMode();
+      _governor.Reset(1000.0f / std::max(_perf.BudgetMs(), 1.0f));
+    }
   }
   _perfVivifyMs = 0.0;
   _perfGcLast = gc;
@@ -861,6 +932,7 @@ void Runtime::SamplePerfLive() {
 void Runtime::WritePerfSummary() {
   _perfActive = false;
   UpdateSlowFrameSection();
+  RestorePerformanceMode();
   PerfStats::Context context;
   std::filesystem::path const level(_selectedLevelPath);
   context.map = level.filename().string().empty() ? std::string("(unknown map)") : level.filename().string();
@@ -884,6 +956,9 @@ void Runtime::WritePerfSummary() {
     for (auto const& line : VivifySlowFrameSummary([this](int section) { return _perfSections.Describe(section); })) {
       VivifyWriteFlushedLine("[PERF] " + line);
     }
+  }
+  if (_perfModeUsed) {
+    for (auto const& line : _governor.Summary()) VivifyWriteFlushedLine("[PERF] " + line);
   }
   if (!PerfRecordersValid()) {
     VivifyWriteFlushedLine("[PERF] draw call counts: not available in this game build");

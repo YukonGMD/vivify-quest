@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Vivify {
@@ -168,6 +170,43 @@ class PerfSections {
   };
   float PercentileMs(Section const& section, double fraction) const;
   std::vector<Section> _sections;
+};
+
+// Performance mode for heavy maps (naomi.7; a setting, off by default).
+// Decides from frame times alone: while the last second's median frame is
+// slower than 60 fps it steps down one level -- first a GPU clock boost,
+// which changes nothing on screen, then stronger foveation, then lower eye
+// resolution -- and while frames hold the display's refresh rate it steps
+// back up. Applying a level is the caller's job (SettingsFor).
+class PerformanceGovernor {
+ public:
+  static constexpr int kLevels = 6;  // 0: as the game sets it ... 5: the lowest
+  struct Settings {
+    bool boost = false;            // GPU performance level Boost
+    bool foveation = false;        // fixed foveated rendering HighTop
+    float resolutionScale = 1.0f;  // times the game's eye resolution scale
+  };
+  static Settings SettingsFor(int level);
+  static char const* Describe(int level);
+
+  void Reset(float refreshHz);
+  // One frame of play ending at wall-clock `seconds`; true when the level
+  // changed.
+  bool AddFrame(float frameMs, double seconds);
+  int Level() const { return _level; }
+  // The median frame time the last change was decided on.
+  float LastMedianMs() const { return _lastMedianMs; }
+  // Time spent at each level, without prefixes.
+  std::vector<std::string> Summary() const;
+
+ private:
+  float _refreshMs = 1000.0f / 72.0f;
+  int _level = 0;
+  int _lowest = 0;
+  double _changedAt = -1.0;  // the first frame starts the clock
+  float _lastMedianMs = 0.0f;
+  std::deque<std::pair<double, float>> _frames;  // the last second's frames
+  double _secondsAt[kLevels] = {};
 };
 
 }  // namespace Vivify

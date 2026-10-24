@@ -106,5 +106,52 @@ check("an unknown section is named by its number", find(lines, "describe 7:") ==
 lines = run(90, ["F 10 0 1", "L 1 1 1 1 1 1 1"])
 check("frames before any section are ignored", not find(lines, "by section"), lines)
 
+# Performance mode (naomi.7).
+def govern(hz, frames):
+    lines = run(90, ["G %s" % hz] + ["g %s %.4f" % f for f in frames])
+    return [l for l in lines if l.startswith("level ")], lines
+
+
+def steady(ms, start, seconds):
+    out, t = [], start
+    while t < start + seconds:
+        t += ms / 1000.0
+        out.append((ms, t))
+    return out
+
+
+changes, lines = govern(120, steady(8.33, 0, 20))
+check("governor: a map holding 120 fps is left alone", changes == [] and find(lines, "performance mode:") ==
+      "performance mode: lowest level 0 of 5 (as the game sets it)", (changes, find(lines, "performance mode:")))
+changes, lines = govern(120, steady(16.67, 0, 20))
+check("governor: exactly 60 fps is the goal, not a reason to step down", changes == [], changes)
+changes, lines = govern(120, steady(25.0, 0, 20))
+check("governor: 40 fps steps all the way down, one level at a time, 1.5 s apart",
+      [l.split(" at ")[0] for l in changes] == ["level %d" % i for i in range(1, 6)], changes)
+times = [float(l.split(" at ")[1].split()[0]) for l in changes]
+check("governor: never sooner than 1.5 s after the last change", all(b - a >= 1.5 for a, b in zip(times, times[1:]))
+      and times and times[0] >= 1.5, times)
+check("governor: the first step is the clock boost alone", changes and changes[0].endswith(": GPU clock boost"), changes)
+check("governor: the median it decided on is reported", changes and "(median 25.0 ms)" in changes[0], changes)
+frames = steady(40.0, 0, 10) + steady(8.33, 10, 30)
+changes, lines = govern(120, frames)
+downs = [l for l in changes if int(l.split()[1]) >= 1]
+check("governor: back up a level at a time once frames hold the refresh rate", changes[-1].startswith("level 0 at")
+      and len(changes) == 10, changes)
+ups = [float(l.split(" at ")[1].split()[0]) for l in changes[5:]]
+check("governor: at least 3 s between steps up", all(b - a >= 3.0 for a, b in zip(ups, ups[1:])), ups)
+check("governor: time at each level adds up", abs(sum(float(l.rsplit(": ", 1)[1][:-1]) for l in lines
+                                                      if l.startswith("  level ")) - 40.0) < 0.2,
+      [l for l in lines if l.startswith("  level ")])
+changes, _ = govern(72, steady(13.9, 0, 6) + steady(40, 6, 4) + steady(13.9, 10, 30))
+check("governor: at 72 Hz, holding 72 fps counts as headroom", changes and changes[-1].startswith("level 0"), changes)
+changes, _ = govern(120, [(25.0, 0.025 * i) for i in range(1, 200)] + [(float("nan"), 5.1), (-1.0, 5.2)])
+check("governor: nonsense frame times are ignored", len(changes) >= 1, changes)
+settings = [l for l in lines if l.startswith("settings ")]
+check("governor: what each level applies", settings == [
+    "settings 0: boost=0 foveation=0 scale=1.00", "settings 1: boost=1 foveation=0 scale=1.00",
+    "settings 2: boost=1 foveation=1 scale=1.00", "settings 3: boost=1 foveation=1 scale=0.85",
+    "settings 4: boost=1 foveation=1 scale=0.75", "settings 5: boost=1 foveation=1 scale=0.65"], settings)
+
 print("\n%d failure(s)" % failures)
 sys.exit(1 if failures else 0)

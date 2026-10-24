@@ -38,6 +38,26 @@ Test builds report themselves as 0.14.25-naomi.N.
   systems with particles alive, and Unity's draw-call, batch and triangle
   counts where this game build keeps them (the summary says when it does
   not). Measured every two seconds of song, after the frame's own work.
+- **Performance mode for heavy maps** (naomi.7, setting "Performance Mode
+  For Heavy Maps", **off**: it changes how heavy maps look). While a song
+  runs slower than 60 fps -- the median frame of the last second over 17.5
+  ms -- it steps down one level at a time, at most every 1.5 s:
+  1. GPU clock boost (the GPU performance level Boost instead of the game's
+     level): no change on screen.
+  2. Foveation HighTop instead of the game's level (High): the edges of the
+     view are drawn at a lower resolution.
+  3. to 5. Eye resolution 85%, 75%, 65% of the game's: the whole view is
+     softer. Each change reallocates the eye textures, a short hitch.
+  While frames hold the refresh rate (median 12.5 ms or less, at 72 Hz 72
+  fps) it steps back up, at most every 3 s, and at the song's end the
+  game's own settings are put back. Each change is logged with the frame
+  time it was decided on, the GPU level, the foveation level and the eye
+  texture size, and the `[PERF]` summary says how long each level lasted.
+  Expected gains, unmeasured: the boost is worth as much as the clock goes
+  up (OVR Metrics' gpu_frequency_MHz shows it); HighTop saves a few percent
+  over High; 85/75/65% resolution draw 72/56/42% of the pixels, which helps
+  in proportion where the GPU is busy shading pixels (full-screen skies,
+  transparent effects, blits) and little where it is busy with geometry.
 - **Slow-frame sampler** (naomi.7, setting "Slow-Frame Sampler
   (diagnostics)", on). While a song plays, any frame that takes over 100 ms
   gets stack samples of the main thread and of Unity's render thread, one of

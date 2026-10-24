@@ -224,4 +224,88 @@ std::vector<std::string> PerfSections::Summary(float budgetMs) const {
   return lines;
 }
 
+namespace {
+
+// Slower than 60 fps: a step down. With a 120 Hz display, frames last whole
+// refreshes, so this takes 25 ms frames (40 fps), not 16.7 ms ones.
+constexpr float kStepDownMs = 17.5f;
+// Holding most refreshes (at 72 Hz, 72 fps): a step up.
+constexpr float kStepUpMs = 12.5f;
+constexpr double kStepDownAfter = 1.5;  // seconds at a level before a step down
+constexpr double kStepUpAfter = 3.0;    // and before a step up
+constexpr double kWindow = 1.0;         // the median is over this many seconds
+
+}  // namespace
+
+PerformanceGovernor::Settings PerformanceGovernor::SettingsFor(int level) {
+  static float const kScales[kLevels] = {1.0f, 1.0f, 1.0f, 0.85f, 0.75f, 0.65f};
+  Settings settings;
+  level = std::clamp(level, 0, kLevels - 1);
+  settings.boost = level >= 1;
+  settings.foveation = level >= 2;
+  settings.resolutionScale = kScales[level];
+  return settings;
+}
+
+char const* PerformanceGovernor::Describe(int level) {
+  static char const* const kNames[kLevels] = {
+      "as the game sets it",
+      "GPU clock boost",
+      "GPU clock boost, foveation HighTop",
+      "GPU clock boost, foveation HighTop, eye resolution 85%",
+      "GPU clock boost, foveation HighTop, eye resolution 75%",
+      "GPU clock boost, foveation HighTop, eye resolution 65%",
+  };
+  return kNames[std::clamp(level, 0, kLevels - 1)];
+}
+
+void PerformanceGovernor::Reset(float refreshHz) {
+  _refreshMs = refreshHz > 1.0f ? 1000.0f / refreshHz : 1000.0f / 72.0f;
+  _level = _lowest = 0;
+  _changedAt = -1.0;
+  _lastMedianMs = 0.0f;
+  _frames.clear();
+  for (double& seconds : _secondsAt) seconds = 0.0;
+}
+
+bool PerformanceGovernor::AddFrame(float frameMs, double seconds) {
+  if (!(frameMs >= 0.0f)) return false;
+  _secondsAt[_level] += frameMs / 1000.0;
+  if (_changedAt < 0.0) _changedAt = seconds;
+  _frames.emplace_back(seconds, frameMs);
+  while (!_frames.empty() && _frames.front().first < seconds - kWindow) _frames.pop_front();
+  // A full second of frames at this level, the first of which may be a
+  // change's own hitch, before anything is decided.
+  if (seconds - _changedAt < kWindow) return false;
+  std::vector<float> times;
+  times.reserve(_frames.size());
+  for (auto const& frame : _frames) times.push_back(frame.second);
+  std::nth_element(times.begin(), times.begin() + static_cast<long>(times.size() / 2), times.end());
+  float const median = times[times.size() / 2];
+  int next = _level;
+  if (median > kStepDownMs && seconds - _changedAt >= kStepDownAfter && _level < kLevels - 1) {
+    next = _level + 1;
+  } else if (median <= std::max(kStepUpMs, _refreshMs * 1.05f) && seconds - _changedAt >= kStepUpAfter &&
+             _level > 0) {
+    next = _level - 1;
+  }
+  if (next == _level) return false;
+  _level = next;
+  _lowest = std::max(_lowest, _level);
+  _changedAt = seconds;
+  _lastMedianMs = median;
+  _frames.clear();
+  return true;
+}
+
+std::vector<std::string> PerformanceGovernor::Summary() const {
+  std::vector<std::string> lines;
+  lines.push_back(Format("performance mode: lowest level %d of %d (%s)", _lowest, kLevels - 1, Describe(_lowest)));
+  for (int level = 0; level < kLevels; level++) {
+    if (_secondsAt[level] <= 0.0) continue;
+    lines.push_back(Format("  level %d, %s: %.1fs", level, Describe(level), _secondsAt[level]));
+  }
+  return lines;
+}
+
 }  // namespace Vivify

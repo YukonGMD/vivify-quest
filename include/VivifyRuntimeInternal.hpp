@@ -659,6 +659,19 @@ private:
   double _perfVivifyMs = 0.0;
   float _perfLiveDue = 0.0f;
   void SamplePerfLive();
+  // Performance mode for heavy maps (naomi.7, a setting, off by default):
+  // the governor picks a level from frame times, ApplyPerformanceLevel sets
+  // it, and RestorePerformanceMode puts back the game's own values, which are
+  // saved before the first change.
+  void ApplyPerformanceLevel(int level);
+  void RestorePerformanceMode();
+  PerformanceGovernor _governor;
+  bool _perfModeUsed = false;   // this song
+  bool _perfModeSaved = false;  // the game's values below are saved
+  float _perfModeScale = 1.0f;
+  int _perfModeFoveation = 0;
+  int _perfModeGpuLevel = 0;  // suggested
+  int _perfModeGpuFixed = -1;
   // Adds the time it lives to _perfVivifyMs.
   struct PerfScope {
     Runtime& runtime;
