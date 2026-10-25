@@ -135,6 +135,8 @@ class PerfSections {
     int particleSystems = -1;
     int particles = -1;         // alive particles
     int64_t drawCalls = -1, batches = -1, setPassCalls = -1, triangles = -1, vertices = -1;
+    // naomi.10: memory and heat. Negative (below -100 for temperatures): unknown.
+    double residentMB = -1, nativeHeapMB = -1, hottestC = -1000, batteryC = -1000, gpuMHz = -1;
   };
 
   void Reset();
@@ -144,7 +146,9 @@ class PerfSections {
   // One frame (its duration and Vivify's own share of it) at that song time;
   // from naomi.8 also the app's GPU time and the GPU's busy percentage as the
   // OVR plugin reports them (negative: not known).
-  void AddFrame(float frameMs, float vivifyMs, float songTime, float gpuMs = -1.0f, float gpuBusy = -1.0f);
+  // naomi.10: also how many garbage collections ran during it.
+  void AddFrame(float frameMs, float vivifyMs, float songTime, float gpuMs = -1.0f, float gpuBusy = -1.0f,
+                int gcDelta = 0);
   void AddLive(Live const& live);
   int Count() const { return static_cast<int>(_sections.size()); }
   // "'label' (song 5.0-30.2s)", for other summaries of the same section.
@@ -172,7 +176,14 @@ class PerfSections {
     Live peak;
     double sumRenderers = 0.0, sumVisible = 0.0, sumDrawCalls = 0.0, sumBatches = 0.0, sumTriangles = 0.0;
     int drawCallSamples = 0;
+    int gcs = 0, gcFrames = 0;
+    float worstGcFrameMs = 0.0f;
+    double peakResidentMB = -1, peakNativeMB = -1, hottestC = -1000, batteryC = -1000, sumGpuMHz = 0;
+    int gpuClockSamples = 0;
   };
+  // The second line for a section: frame times by band, refreshes dropped,
+  // garbage collections, memory and heat (naomi.10).
+  std::string Detail(Section const& section, float budgetMs) const;
   static float Percentile(uint32_t const* bins, int count, double fraction);
   float PercentileMs(Section const& section, double fraction) const;
   std::vector<Section> _sections;

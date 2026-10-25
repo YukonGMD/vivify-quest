@@ -2400,6 +2400,7 @@ void Runtime::LoadMainBundle() {
     VivifyBreadcrumb("geometry emulation begin");
     PrepareGeometryEmulation(bundlePath);
     ApplySceneryInstancing();
+    LogAssetInventory(bundlePath);
     VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s)", _assets.size()));
     return;
   }
@@ -2434,6 +2435,7 @@ void Runtime::LoadMainBundle() {
     work();
     double const ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    VivifyBreadcrumb(fmt::format("{} end: {:.0f}ms", name, ms));
     if (ms > 250.0) {
       PaperLogger.warn("Vivify level load: {} took {:.0f}ms", name, ms);
     } else {
@@ -2447,6 +2449,7 @@ void Runtime::LoadMainBundle() {
   _loadMsRepairShaders = phase("repair shaders", [this]() { RepairLoadedMaterialShaders(); });
   phase("geometry emulation", [this, &bundlePath]() { PrepareGeometryEmulation(bundlePath); });
   ApplySceneryInstancing();
+  LogAssetInventory(bundlePath);
   _loadMsTotal = _loadMsCacheAssets + _loadMsDecodeTextures + _loadMsRepairShaders;
   PaperLogger.info("Vivify level load: {:.0f}ms total", _loadMsTotal);
   VivifyBreadcrumb(fmt::format("level bundle end: {} asset(s), {:.0f}ms", _assets.size(), _loadMsTotal));
@@ -2454,6 +2457,76 @@ void Runtime::LoadMainBundle() {
   // Written now, not at the end of the level: if this map is about to freeze,
   // this block is the only one that will ever reach disk.
   WriteLevelStartReport();
+}
+
+// What a level's materials draw with, in one line (naomi.10). The gray
+// ledger for naomi.9 could not be built from the log alone: the per-bundle
+// shader verdict counts only shaders stored as assets, and a map's materials
+// mostly sit inside its prefabs. This walks every material the level reaches
+// (the set texture decoding gathered) and says, per shader, how many
+// materials use it and how many of those draw a stand-in -- in place of an
+// unsupported shader, or as a copy for an object geometry emulation could not
+// rebuild -- plus the textures by format.
+void Runtime::LogAssetInventory(std::string const& bundlePath) {
+  try {
+    struct ShaderUse {
+      int materials = 0;
+      int standIns = 0;
+      bool unsupported = false;
+    };
+    std::map<std::string, ShaderUse> shaders;
+    std::unordered_set<int> emulationStandIns;
+    for (auto const& [original, copy] : _emulationStandIns) emulationStandIns.insert(original);
+    std::unordered_set<UnityEngine::Texture*> textures;
+    std::map<std::string, int> formats;
+    int prefabs = 0;
+    for (auto const& [path, asset] : _assets) {
+      if (IsAlive(asset) && il2cpp_utils::try_cast<UnityEngine::GameObject>(asset).value_or(nullptr)) prefabs++;
+    }
+    for (auto* material : _texturesScannedMaterials) {
+      if (!IsAlive(material)) continue;
+      auto* shader = material->get_shader().unsafePtr();
+      std::string name = ShaderNameForLog(shader);
+      auto standIn = _standInShaderNames.find(material);
+      if (standIn != _standInShaderNames.end()) name = standIn->second;
+      auto& use = shaders[name];
+      use.materials++;
+      if (standIn != _standInShaderNames.end() || emulationStandIns.contains(material->GetInstanceID())) use.standIns++;
+      if (standIn == _standInShaderNames.end() && IsAlive(shader) && !shader->get_isSupported()) use.unsupported = true;
+      auto names = material->GetPropertyNames(UnityEngine::MaterialPropertyType::Texture);
+      if (!names) continue;
+      for (auto propertyName : names) {
+        if (!propertyName) continue;
+        auto* texture = material->GetTexture(propertyName).unsafePtr();
+        if (!IsAlive(texture) || !textures.insert(texture).second) continue;
+        auto* texture2d = il2cpp_utils::try_cast<UnityEngine::Texture2D>(texture).value_or(nullptr);
+        formats[IsAlive(texture2d) ? std::to_string(static_cast<int>(texture2d->get_format().value__))
+                                   : std::string("other")]++;
+      }
+    }
+    int standInTotal = 0;
+    std::string list;
+    for (auto const& [name, use] : shaders) {
+      standInTotal += use.standIns;
+      list += (list.empty() ? "" : ", ") + name + " x" + std::to_string(use.materials);
+      if (use.standIns > 0) list += " (" + std::to_string(use.standIns) + " stand-in)";
+      if (use.unsupported) list += " (unsupported)";
+    }
+    std::string formatList;
+    for (auto const& [format, count] : formats) {
+      formatList += (formatList.empty() ? "" : ", ") + format + " x" + std::to_string(count);
+    }
+    std::filesystem::path const level(_selectedLevelPath);
+    PaperLogger.info("[ASSETS] {}: {} asset(s), {} prefab(s); {} material(s) on {} shader(s), {} drawing a stand-in; "
+                     "shaders: {}; {} texture(s) by Unity format number: {}",
+                     level.filename().string(), _assets.size(), prefabs, _texturesScannedMaterials.size(),
+                     shaders.size(), standInTotal, list.empty() ? "none" : list, textures.size(),
+                     formatList.empty() ? "none" : formatList);
+    VivifyBlackBoxRecord(BlackBox::kLoad, "assets: " + std::to_string(_texturesScannedMaterials.size()) +
+                                              " materials, " + std::to_string(standInTotal) + " stand-ins");
+  } catch (std::exception const& ex) {
+    PaperLogger.warn("Vivify asset inventory for '{}' failed: {}", bundlePath, ex.what());
+  }
 }
 
 UnityEngine::Object* Runtime::LookUpAsset(std::string_view assetName) const {
@@ -3001,6 +3074,7 @@ void Runtime::RepairMaterialShader(UnityEngine::Material* material, std::string_
       // full-screen blit would smear an unrelated shader over the whole frame,
       // so CanUseBlitMaterial refuses these outright and the blit is skipped.
       _fallbackShadedMaterials.emplace(material);
+      _standInShaderNames[material] = originalShaderName;
     }
     if (GetVivifyDebugLogging()) {
       PaperLogger.info("Vivify shader repaired: context={} material='{}' from='{}' to='{}' preservedColor={} preservedTexture={}",
@@ -3936,6 +4010,10 @@ void StartBulkPcBundleConversion(std::function<void(BulkConversionProgress const
     report(progress);
     gBulkConversionRunning.store(false);
   }).detach();
+}
+
+int BundleConversionVersion() {
+  return kBundleConversionVersion;
 }
 
 }

@@ -134,7 +134,8 @@ std::string PerfSections::Describe(int index) const {
   return "'" + section.label + "'" + range;
 }
 
-void PerfSections::AddFrame(float frameMs, float vivifyMs, float songTime, float gpuMs, float gpuBusy) {
+void PerfSections::AddFrame(float frameMs, float vivifyMs, float songTime, float gpuMs, float gpuBusy,
+                            int gcDelta) {
   if (_sections.empty() || !(frameMs >= 0.0f)) return;
   Section& section = _sections.back();
   if (gpuMs >= 0.0f) {
@@ -158,6 +159,11 @@ void PerfSections::AddFrame(float frameMs, float vivifyMs, float songTime, float
   int bin = static_cast<int>(frameMs);
   if (bin >= kBins) bin = kBins - 1;
   section.bins[bin]++;
+  if (gcDelta > 0) {
+    section.gcs += gcDelta;
+    section.gcFrames++;
+    section.worstGcFrameMs = std::max(section.worstGcFrameMs, frameMs);
+  }
 }
 
 void PerfSections::AddLive(Live const& live) {
@@ -178,6 +184,14 @@ void PerfSections::AddLive(Live const& live) {
   peak(section.peak.vertices, live.vertices);
   section.sumRenderers += std::max(live.renderers, 0);
   section.sumVisible += std::max(live.visibleRenderers, 0);
+  if (live.residentMB >= 0) section.peakResidentMB = std::max(section.peakResidentMB, live.residentMB);
+  if (live.nativeHeapMB >= 0) section.peakNativeMB = std::max(section.peakNativeMB, live.nativeHeapMB);
+  if (live.hottestC > -100) section.hottestC = std::max(section.hottestC, live.hottestC);
+  if (live.batteryC > -100) section.batteryC = std::max(section.batteryC, live.batteryC);
+  if (live.gpuMHz >= 0) {
+    section.gpuClockSamples++;
+    section.sumGpuMHz += live.gpuMHz;
+  }
   if (live.drawCalls >= 0) {
     section.drawCallSamples++;
     section.sumDrawCalls += static_cast<double>(live.drawCalls);
@@ -247,8 +261,54 @@ std::vector<std::string> PerfSections::Summary(float budgetMs) const {
       }
     }
     lines.push_back(line);
+    lines.push_back(Detail(section, budgetMs));
   }
   return lines;
+}
+
+std::string PerfSections::Detail(Section const& section, float budgetMs) const {
+  // Bands by whole milliseconds (bins are 1 ms wide): under 9 is one refresh
+  // at 120 Hz, under 12 at 90 Hz, under 14 at 72 Hz, under 17 holds 60 fps.
+  static constexpr int kEdges[] = {9, 12, 14, 17, 25, 34, 50, 100};
+  std::string line = "    '" + section.label + "' frame times:";
+  int from = 0;
+  for (int edge : kEdges) {
+    uint64_t count = 0;
+    for (int bin = from; bin < edge && bin < kBins; bin++) count += section.bins[bin];
+    double const share = 100.0 * count / section.frames;
+    if (from == 0) {
+      line += Format(" under %d ms %.1f%%,", edge, share);
+    } else {
+      line += Format(" %d-%d %.1f%%,", from, edge, share);
+    }
+    from = edge;
+  }
+  uint64_t over = 0;
+  for (int bin = from; bin < kBins; bin++) over += section.bins[bin];
+  line += Format(" %d+ %.1f%%", from, 100.0 * over / section.frames);
+  // A frame of n refreshes dropped n - 1 of them (bins at their middle).
+  double dropped = 0.0, refreshes = 0.0;
+  if (budgetMs > 0.0f) {
+    for (int bin = 0; bin < kBins; bin++) {
+      if (section.bins[bin] == 0) continue;
+      double const shown = std::max(1.0, std::ceil((bin + 0.5) / budgetMs - 0.2));
+      refreshes += shown * section.bins[bin];
+      dropped += (shown - 1.0) * section.bins[bin];
+    }
+  }
+  line += Format("; dropped about %.0f of %.0f refreshes", dropped, refreshes);
+  line += Format(" (%.1f%%)", refreshes > 0 ? 100.0 * dropped / refreshes : 0.0);
+  if (section.gcFrames > 0) {
+    line += Format("; garbage collections %d (the slowest frame with one %.0f ms)", section.gcs, section.worstGcFrameMs);
+  } else {
+    line += "; no garbage collection";
+  }
+  if (section.peakResidentMB >= 0) line += Format("; memory peak %.0f MB resident", section.peakResidentMB);
+  if (section.peakNativeMB >= 0) line += Format(", native heap %.0f MB", section.peakNativeMB);
+  if (section.hottestC > -100) line += Format("; hottest sensor %.1f C", section.hottestC);
+  if (section.batteryC > -100) line += Format(", battery %.1f C", section.batteryC);
+  if (section.gpuClockSamples > 0) line += Format("; GPU clock average %.0f MHz", section.sumGpuMHz / section.gpuClockSamples);
+  return line;
 }
 
 }  // namespace Vivify

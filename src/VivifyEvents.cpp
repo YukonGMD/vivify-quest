@@ -1,4 +1,5 @@
 #include "VivifyRuntimeInternal.hpp"
+#include <filesystem>
 #include "VivifyComponents.hpp"
 
 namespace Vivify {
@@ -62,6 +63,14 @@ void Runtime::PrepareBeatmap(CustomJSONData::CustomBeatmapData* beatmapData, flo
                                beatmapData->customEventDatas.size(), triggerTime));
   ResetRuntime();
   SetSongPlaying(true);
+  {
+    // The session index lists the maps each session played (naomi.10), by
+    // the folder's key ("4968d" of "4968d (743 Aether - Swifter)").
+    std::string const folder = std::filesystem::path(_selectedLevelPath).filename().string();
+    std::string const key = folder.substr(0, folder.find(' '));
+    if (!key.empty()) VivifySessionMap(key);
+    VivifyBlackBoxRecord(BlackBox::kLoad, "level start: " + folder);
+  }
   _currentBeatmapData = beatmapData;
   _beatmapAD = nullptr;
   _audioTimeSyncController = UnityEngine::Object::FindObjectOfType<GlobalNamespace::AudioTimeSyncController*>();
@@ -97,6 +106,7 @@ void Runtime::DispatchEvent(std::string_view type, CustomJSONData::CustomEventDa
   _perfLastEventType = type;
   _perfLastEventBeat = eventTime;
   _perfEventsSinceFrame++;
+  VivifyBlackBoxRecord(BlackBox::kEvent, type, eventTime);
   try {
     if (type == kInstantiatePrefabEvent) {
       InstantiatePrefab(customEventData, json);

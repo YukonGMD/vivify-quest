@@ -259,7 +259,7 @@ void Runtime::SetViewportScale(float scale, char const* reason) {
     // viewport; anywhere else it stays as it was.
     float const actual = UnityEngine::XR::XRSettings::get_renderViewportScale();
     if (std::abs(actual - scale) > 0.02f) {
-      _perfChanges->Record(wall, CurrentSongTime(), PerfMechanism::Scale, before, actual,
+      RecordPerfChange(wall, CurrentSongTime(), PerfMechanism::Scale, before, actual,
                            "Unity did not take the viewport scale");
       TurnOffPerfMechanism(PerfMechanism::Scale, "Unity did not keep the viewport scale on this rendering path");
       return;
@@ -269,7 +269,16 @@ void Runtime::SetViewportScale(float scale, char const* reason) {
     TurnOffPerfMechanism(PerfMechanism::Scale, "setting the viewport scale threw");
     return;
   }
-  _perfChanges->Record(wall, CurrentSongTime(), PerfMechanism::Scale, before, _perfScale, reason);
+  RecordPerfChange(wall, CurrentSongTime(), PerfMechanism::Scale, before, _perfScale, reason);
+}
+
+// Every performance-mode change goes in the song's change log and, from
+// naomi.10, the black box, so a crash right after a change shows it.
+void Runtime::RecordPerfChange(double wall, float song, PerfMechanism mechanism, float before, float after,
+                               char const* reason) {
+  _perfChanges->Record(wall, song, mechanism, before, after, reason);
+  VivifyBlackBoxRecord(BlackBox::kScale, std::string(PerfMechanismName(mechanism)) + ": " + (reason ? reason : ""),
+                       before, after);
 }
 
 void Runtime::ApplyHeavyMapSettings(char const* reason) {
@@ -280,12 +289,12 @@ void Runtime::ApplyHeavyMapSettings(char const* reason) {
   try {
     if (!_perfOff[static_cast<int>(PerfMechanism::Foveation)] && _perfGameFoveation < kFoveationHighTop) {
       OVRManager::set_foveatedRenderingLevel(GlobalNamespace::OVRManager_FoveatedRenderingLevel(kFoveationHighTop));
-      _perfChanges->Record(wall, CurrentSongTime(), PerfMechanism::Foveation, static_cast<float>(_perfGameFoveation),
+      RecordPerfChange(wall, CurrentSongTime(), PerfMechanism::Foveation, static_cast<float>(_perfGameFoveation),
                            static_cast<float>(OVRManager::get_foveatedRenderingLevel().value__), reason);
     }
     if (!_perfOff[static_cast<int>(PerfMechanism::Boost)] && _perfGameGpuLevel != kGpuBoost) {
       OVRManager::set_suggestedGpuPerfLevel(GlobalNamespace::OVRManager_ProcessorPerformanceLevel(kGpuBoost));
-      _perfChanges->Record(wall, CurrentSongTime(), PerfMechanism::Boost, static_cast<float>(_perfGameGpuFixed),
+      RecordPerfChange(wall, CurrentSongTime(), PerfMechanism::Boost, static_cast<float>(_perfGameGpuFixed),
                            static_cast<float>(OVRManager::get_gpuLevel()), reason);
     }
   } catch (...) {
@@ -306,20 +315,20 @@ void Runtime::TurnOffPerfMechanism(PerfMechanism mechanism, char const* why) {
           float const before = _perfScale;
           UnityEngine::XR::XRSettings::set_renderViewportScale(_perfGameViewportScale);
           _perfScale = _perfGameViewportScale;
-          _perfChanges->Record(wall, CurrentSongTime(), mechanism, before, _perfScale, "turned off: back to full size");
+          RecordPerfChange(wall, CurrentSongTime(), mechanism, before, _perfScale, "turned off: back to full size");
         }
         break;
       case PerfMechanism::Foveation:
         if (_perfHeavyApplied && _perfGameSaved) {
           OVRManager::set_foveatedRenderingLevel(GlobalNamespace::OVRManager_FoveatedRenderingLevel(_perfGameFoveation));
-          _perfChanges->Record(wall, CurrentSongTime(), mechanism, kFoveationHighTop,
+          RecordPerfChange(wall, CurrentSongTime(), mechanism, kFoveationHighTop,
                                static_cast<float>(_perfGameFoveation), "turned off: the game's level back");
         }
         break;
       case PerfMechanism::Boost:
         if (_perfHeavyApplied && _perfGameSaved) {
           OVRManager::set_suggestedGpuPerfLevel(GlobalNamespace::OVRManager_ProcessorPerformanceLevel(_perfGameGpuLevel));
-          _perfChanges->Record(wall, CurrentSongTime(), mechanism, static_cast<float>(OVRManager::get_gpuLevel()),
+          RecordPerfChange(wall, CurrentSongTime(), mechanism, static_cast<float>(OVRManager::get_gpuLevel()),
                                static_cast<float>(_perfGameGpuFixed), "turned off: the game's level back");
         }
         break;

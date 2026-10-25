@@ -100,6 +100,23 @@ heavy = find(lines, "  'heavy'")
 check("sections: GPU time and GPU busy from the OVR plugin", "GPU time (OVR plugin) median 25 ms, 95th 29, max 29" in
       heavy and "GPU busy 98%" in heavy, heavy)
 check("sections: no GPU numbers where none were given", "GPU" not in find(lines, "  'light'"), find(lines, "  'light'"))
+# The per-section detail line (naomi.10): bands, refreshes dropped, GC, memory, heat.
+lines = run(120, ["S 0 mixed"] + ["F 8.3 0.1 %.3f" % (i / 120) for i in range(90)] +
+            ["F 16.0 0.1 1 -1 -1 1", "F 40.0 0.1 1.1 -1 -1 2"] + ["F 120 0.1 1.5"] * 8 +
+            ["L 1 1 1 1 -1 -1 -1 1200 300 41.5 33.0 587", "L 1 1 1 1 -1 -1 -1 1300 280 42.0 32.0 615"])
+detail = find(lines, "    'mixed' frame times:")
+check("detail: bands", " under 9 ms 90.0%," in detail and " 9-12 0.0%," in detail and " 14-17 1.0%," in detail and
+      " 34-50 1.0%," in detail and " 100+ 8.0%" in detail, detail)
+# 90 frames of one refresh, one of 2 (16 ms), one of 5 (40 ms), 8 of 15 (120 ms at 8.33).
+check("detail: refreshes dropped", "dropped about 117 of 217 refreshes (53.9%)" in detail, detail)
+check("detail: garbage collections", "garbage collections 3 (the slowest frame with one 40 ms)" in detail, detail)
+check("detail: memory and heat", "memory peak 1300 MB resident, native heap 300 MB; hottest sensor 42.0 C, battery "
+      "33.0 C; GPU clock average 601 MHz" in detail, detail)
+lines = run(120, frames)
+check("detail: unknowns left out", find(lines, "    'intro' frame times:") and
+      "memory" not in find(lines, "    'intro' frame times:"), find(lines, "    'intro' frame times:"))
+check("detail: a section with no GC says so", "no garbage collection" in find(lines, "    'drop' frame times:"),
+      find(lines, "    'drop' frame times:"))
 lines = run(90, ["S %d s%d" % (i, i) for i in range(40)] + ["F 10 0 1"])
 check("sections past the limit fold into the last", find(lines, "by section").startswith("by section (32)") and
       find(lines, "  'later sections'"), [l for l in lines if "section" in l][:3])

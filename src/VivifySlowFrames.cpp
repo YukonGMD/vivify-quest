@@ -494,6 +494,26 @@ std::vector<std::string> SlowFrameProfile::Summary(std::function<std::string(int
       };
       lines.push_back(std::string("  ") + kNames[t] + " thread was in: " + list(true));
       lines.push_back(std::string("  ") + kNames[t] + " thread, anywhere on the stack: " + list(false));
+      // naomi.10: a render thread inside the GPU driver's shader compiler is
+      // a first-use compile -- the stall Version X wants gone. Counted by the
+      // compiler function seen in the most samples (each once per sample).
+      if (t == kRender) {
+        int compiling = 0;
+        std::string library;
+        for (auto const& [key, counts] : entries) {
+          std::string const where = FormatCodeLocation(FromProfileKey(key, counts.function), modules);
+          bool const compiler = where.find("llvm") != std::string::npos || where.find("glnext") != std::string::npos;
+          if (compiler && counts.inclusive > compiling) {
+            compiling = counts.inclusive;
+            library = where.substr(0, where.find_first_of("+@"));
+          }
+        }
+        if (compiling > 0) {
+          lines.push_back("  render thread in the GPU driver's shader compiler (" + library + ") in " +
+                          std::to_string(percent(compiling, thread.samples)) +
+                          "% of samples: first-use shader compiles");
+        }
+      }
     }
   }
   return lines;

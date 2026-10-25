@@ -1,4 +1,6 @@
 #include "VivifyRuntimeInternal.hpp"
+#include <limits>
+#include <map>
 #include <chrono>
 #include <filesystem>
 #include <algorithm>
@@ -141,12 +143,14 @@ void Runtime::Update() {
     CheckDownloadTimeout();
     UpdateSyncedObjects();
     if (_audioTimeSyncController != nullptr && !UnityEngine::Object::op_Implicit_bool(_audioTimeSyncController)) {
+      VivifyBlackBoxRecord(BlackBox::kUnload, "level ended (quit or finished)");
       ResetRuntime("level ended (quit or finished)");
 
       _activeSabers.clear();
       return;
     }
     if (_currentBeatmapData == nullptr) {
+      VivifySetSongTime(std::numeric_limits<float>::quiet_NaN());
       RefreshCameraComponents(false);
       _lastGameplayFrame = {};
       if (_leakCheckDueAt >= 0.0f && UnityEngine::Time::get_realtimeSinceStartup() >= _leakCheckDueAt) {
@@ -168,6 +172,7 @@ void Runtime::Update() {
       }
     }
     _lastGameplayFrame = frameStart;
+    VivifySetSongTime(CurrentSongTime());
     RecordPerfFrame(frameStart);
     // The frame level start ran in has finished, rendering included: whatever
     // freezes after "level start end" and before this line is in that frame.
@@ -179,17 +184,34 @@ void Runtime::Update() {
     // Ten seconds into the song the converted bundle has loaded and drawn;
     // whatever happens after that is not what the crash guard is for.
     if (!_loadGuardPath.empty() && CurrentSongTime() > 10.0f) DisarmLoadGuard();
-    UpdateParticleBakes();
-    UpdateMaterialAnimations();
-    UpdateGlobalAnimations();
-    UpdateAnimatorAnimations();
-    UpdatePrefabAnimationSpeed();
-    UpdateBlitEffects();
-    UpdateRenderSettingAnimations();
-    RefreshCameraComponents(true);
-    DetectSongRestart();
-    UpdateSaberReplacementColors();
-    SyncReplacementTintColors();
+    // Detailed mode (naomi.10) times each part; otherwise this is a plain call.
+    bool const timeParts = _perfActive && GetDetailedLogging();
+    auto part = [this, timeParts](int index, auto&& work) {
+      if (!timeParts) {
+        work();
+        return;
+      }
+      auto const start = std::chrono::steady_clock::now();
+      work();
+      _detailPartMs[index] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    part(0, [this]() { UpdateParticleBakes(); });
+    part(1, [this]() {
+      UpdateMaterialAnimations();
+      UpdateGlobalAnimations();
+      UpdateAnimatorAnimations();
+      UpdatePrefabAnimationSpeed();
+    });
+    part(2, [this]() { UpdateBlitEffects(); });
+    part(3, [this]() {
+      UpdateRenderSettingAnimations();
+      RefreshCameraComponents(true);
+    });
+    part(4, [this]() {
+      DetectSongRestart();
+      UpdateSaberReplacementColors();
+      SyncReplacementTintColors();
+    });
   } catch (std::exception const& ex) {
     LogThrottledUpdateError(ex.what());
   } catch (...) {
@@ -205,6 +227,25 @@ void Runtime::Update() {
     if (!_pauseMenuActive && CurrentSongTime() >= _perfLiveDue) {
       _perfLiveDue = CurrentSongTime() + 2.0f;
       SamplePerfLive();
+      VivifyCheckGlErrors();
+    }
+    if (GetDetailedLogging() && !_pauseMenuActive) {
+      auto const start = std::chrono::steady_clock::now();
+      _detailFrames++;
+      if (CurrentSongTime() >= _detailDue && _detailFrames > 0) {
+        double const n = _detailFrames;
+        VivifyLogLine("COST", fmt::format("Vivify's own work per frame over the last {} frame(s): particle bakes {:.3f} ms, "
+                                          "animations {:.3f}, blits {:.3f}, render settings and cameras {:.3f}, "
+                                          "notes and sabers {:.3f}",
+                                          _detailFrames, _detailPartMs[0] / n, _detailPartMs[1] / n,
+                                          _detailPartMs[2] / n, _detailPartMs[3] / n, _detailPartMs[4] / n),
+                      false, false);
+        _detailFrames = 0;
+        for (double& ms : _detailPartMs) ms = 0.0;
+        _detailDue = CurrentSongTime() + 1.0f;
+      }
+      VivifyAddLayer3Cost(static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()));
     }
   }
   if (frameMs > kSlowFrameMs) {
@@ -608,6 +649,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
   _repairedMaterials.clear();
   _prefabRenderability.clear();
   _fallbackShadedMaterials.clear();
+  _standInShaderNames.clear();
   // A new beatmap gets a fresh chance: the watchdog is per level, not permanent.
   _selfDisabledThisLevel = false;
   _animationTargetsDirty = true;
@@ -759,6 +801,11 @@ void Runtime::BeginPerfSummary() {
   }
   _perf.Reset(refreshHz);
   _perfSections.Reset();
+  _perfLogCostStart = VivifyLoggingCost();
+  _detailFrames = 0;
+  for (double& ms : _detailPartMs) ms = 0.0;
+  _detailSlowSection = -1;
+  _detailSlowCount = 0;
   _perfVivifyMs = 0.0;
   _perfLiveDue = 0.0f;
   StartPerfRecorders();
@@ -801,8 +848,20 @@ void Runtime::RecordPerfFrame(std::chrono::steady_clock::time_point frameStart) 
                    [this](char* buffer, size_t size) { WritePerfLabel(buffer, size); });
     float gpuMs = -1.0f, gpuBusy = -1.0f;
     ReadGpuMetrics(gpuMs, gpuBusy);
-    _perfSections.AddFrame(frameMs, static_cast<float>(_perfVivifyMs), CurrentSongTime(), gpuMs, gpuBusy);
+    _perfSections.AddFrame(frameMs, static_cast<float>(_perfVivifyMs), CurrentSongTime(), gpuMs, gpuBusy,
+                           std::max(gcDelta, 0));
     PerformanceModeFrame(frameMs, gpuMs, std::chrono::duration<double>(frameStart - _perfStartWall).count());
+    // Every frame into the black box (naomi.10): about 30 s of them survive a crash.
+    VivifyBlackBoxRecord(BlackBox::kFrame, {}, frameMs, gpuMs, _perfScale);
+    if (GetDetailedLogging()) {
+      auto const start = std::chrono::steady_clock::now();
+      VivifyLogLine("FRAME", fmt::format("dt={:.1f} gpu={:.1f} busy={:.0f} scale={:.2f} vivify={:.2f} gc={}", frameMs,
+                                         gpuMs, gpuBusy, _perfScale, _perfVivifyMs, gcDelta),
+                    false, false);
+      if (frameMs > 50.0f) LogSlowFrameDetail(frameMs);
+      VivifyAddLayer3Cost(static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()));
+    }
   }
   _perfVivifyMs = 0.0;
   _perfGcLast = gc;
@@ -884,7 +943,57 @@ void Runtime::SamplePerfLive() {
     }
   }
   ReadPerfRecorders(live.drawCalls, live.batches, live.setPassCalls, live.triangles, live.vertices);
+  VivifyDeviceSample const device = VivifyLatestDeviceSample();
+  live.residentMB = device.residentMB;
+  live.nativeHeapMB = device.nativeHeapMB;
+  live.hottestC = device.hottestC;
+  live.batteryC = device.batteryC;
+  live.gpuMHz = device.gpuMHz;
   _perfSections.AddLive(live);
+}
+
+// Detailed mode, a frame over 50 ms (naomi.10): what was in view, by
+// material, for the first three such frames of each section, and the render
+// state for the first. Nothing here runs with detailed mode off.
+void Runtime::LogSlowFrameDetail(float frameMs) {
+  int const section = _perfSections.Count() - 1;
+  if (section != _detailSlowSection) {
+    _detailSlowSection = section;
+    _detailSlowCount = 0;
+  }
+  if (_detailSlowCount >= 3) return;
+  _detailSlowCount++;
+  static auto* isVisible =
+      reinterpret_cast<bool (*)(UnityEngine::Object*)>(ResolveEngineIcall("UnityEngine.Renderer::get_isVisible"));
+  std::map<std::string, int> materials;
+  int inView = 0;
+  for (auto const& [id, prefab] : _livePrefabs) {
+    if (!IsAlive(prefab.gameObject) || !prefab.gameObject->get_activeInHierarchy()) continue;
+    for (auto* renderer : prefab.gameObject->GetComponentsInChildren<UnityEngine::Renderer*>(false)) {
+      if (!IsAlive(renderer) || !renderer->get_enabled()) continue;
+      if (isVisible != nullptr && !isVisible(renderer)) continue;
+      inView++;
+      auto* material = renderer->get_sharedMaterial().unsafePtr();
+      std::string name = IsAlive(material) ? ToStdString(material->get_name()) + " (" +
+                                                 ShaderNameForLog(material->get_shader().unsafePtr()) + ")"
+                                           : std::string("(no material)");
+      materials[name]++;
+    }
+  }
+  std::vector<std::pair<int, std::string>> ranked;
+  for (auto const& [name, count] : materials) ranked.emplace_back(count, name);
+  std::sort(ranked.rbegin(), ranked.rend());
+  std::string list;
+  for (size_t i = 0; i < ranked.size() && i < 20; i++) {
+    list += (list.empty() ? "" : ", ") + ranked[i].second + " x" + std::to_string(ranked[i].first);
+  }
+  char label[192];
+  WritePerfLabel(label, sizeof(label));
+  VivifyLogLine("SLOW", fmt::format("frame {:.1f} ms in {}: {} renderer(s) in view{}; by material: {}; {}", frameMs,
+                                    _perfSections.Describe(section), inView,
+                                    isVisible == nullptr ? " (visibility unknown: all counted)" : "", list, label),
+                false, false);
+  if (_detailSlowCount == 1) DumpRenderingState("slow frame, detailed logging");
 }
 
 void Runtime::WritePerfSummary() {
@@ -917,6 +1026,16 @@ void Runtime::WritePerfSummary() {
     for (auto const& line : VivifySlowFrameSummary([this](int section) { return _perfSections.Describe(section); })) {
       VivifyWriteFlushedLine("[PERF] " + line);
     }
+  }
+  {
+    VivifyLogCost const cost = VivifyLoggingCost();
+    int const frames = std::max(_perf.Frames(), 1);
+    VivifyWriteFlushedLine(fmt::format(
+        "[PERF] logging cost on the game's threads, per frame on average: session log {:.4f} ms, black box {:.4f} ms, "
+        "detailed mode {:.4f} ms ({})",
+        (cost.layer1Ns - _perfLogCostStart.layer1Ns) / 1e6 / frames,
+        (cost.layer2Ns - _perfLogCostStart.layer2Ns) / 1e6 / frames,
+        (cost.layer3Ns - _perfLogCostStart.layer3Ns) / 1e6 / frames, GetDetailedLogging() ? "on" : "off"));
   }
   EndPerformanceMode(true);
   if (!PerfRecordersValid()) {

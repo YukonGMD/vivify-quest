@@ -88,6 +88,8 @@ constexpr std::array kDefs = {
     // --- Debug (Show Developer Options) -------------------------------------
     Def{"vivifyDebugLogging", Bool, 0, 0, 1, 1, Debug, kDiagnostics, "Debug Logging",
         "Writes far more detail to the session log."},
+    Def{"detailedLogging", Bool, 0, 0, 1, 1, Debug, kDiagnostics, "Detailed Logging",
+        "Adds a line per frame, Vivify's cost by part, and detail around slow frames to the log."},
     Def{"slowFrameSampler", Bool, 1, 0, 1, 1, Debug, kDiagnostics, "Slow-Frame Sampler",
         "During frames over 100 ms, notes where the game's threads were, for the log."},
     Def{"performanceModeFixedScalePercent", Int, 0, 0, 100, 5, Debug, kDiagnostics,

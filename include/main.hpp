@@ -18,6 +18,8 @@
 #include "beatsaber-hook/shared/utils/logging.hpp"
 #include "paper2_scotland2/shared/logger.hpp"
 #include "_config.hpp"
+#include "VivifyBlackBox.hpp"
+#include <string_view>
 Configuration &getConfig();
 bool GetMultipassRenderingEnabled();
 bool GetVivifyDebugLogging();
@@ -112,6 +114,40 @@ void VivifyCopyBreadcrumb(char* buffer, size_t size);
 void VivifySlowFrameSection(int section);
 void VivifySlowFrameReset();
 std::vector<std::string> VivifySlowFrameSummary(std::function<std::string(int)> const& label);
+// Saved session logs (naomi.10; LOGGING.md). VivifySetSongTime stamps every
+// later line with the song time (NaN outside a song). VivifyLogLine queues one
+// line with its own tag ("LOAD", "FRAME", ...) on the writer thread; `limit`
+// false keeps it out of the rate limit. VivifyBlackBoxRecord adds one record
+// to the black box. VivifySessionMap names a map played, for the index.
+// VivifySessionHeaderLate writes the header lines that need Unity, once, on the
+// first frame. VivifySessionEnd writes the clean-exit footer (quit).
+void VivifySetSongTime(float songTime);
+void VivifyLogLine(std::string_view tag, std::string text, bool important = false, bool limit = true);
+void VivifyBlackBoxRecord(Vivify::BlackBox::Type type, std::string_view text, float a = 0.0f, float b = 0.0f,
+                          float c = 0.0f);
+void VivifySessionMap(std::string const& key);
+void VivifySessionHeaderLate();
+// About once a second during a song: GL errors since the last check, read on
+// the render thread.
+void VivifyCheckGlErrors();
+void VivifySessionEnd();
+// What logging cost the game's threads so far, in nanoseconds, per layer:
+// 1 the session log, 2 the black box, 3 detailed mode.
+struct VivifyLogCost {
+  uint64_t layer1Ns = 0, layer2Ns = 0, layer3Ns = 0;
+};
+VivifyLogCost VivifyLoggingCost();
+void VivifyAddLayer3Cost(uint64_t ns);
+// Detailed mode (Debug setting, off): per-frame lines and more (naomi.10).
+bool GetDetailedLogging();
+// Memory and heat for the per-section summary (naomi.10). Returns what was
+// last read and asks the log's writer thread to read again, so /proc and
+// /sys are never read on the calling thread. Negative (below -100 for
+// temperatures): unknown.
+struct VivifyDeviceSample {
+  float residentMB = -1, nativeHeapMB = -1, hottestC = -1000, batteryC = -1000, gpuMHz = -1;
+};
+VivifyDeviceSample VivifyLatestDeviceSample();
 constexpr auto PaperLogger = Paper::ConstLoggerContext("Vivify");
 
 #define VIVIFY_DEBUG(...)                                          \

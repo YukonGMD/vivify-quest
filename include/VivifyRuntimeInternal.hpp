@@ -222,6 +222,8 @@ private:
   void ApplyGameObjectStereoKeywords(UnityEngine::GameObject* gameObject);
   void RefreshLoadedMaterialStereoKeywords();
   void RepairLoadedMaterialShaders();
+  // One [ASSETS] line per level load: shaders by use and how they draw, textures by format (naomi.10).
+  void LogAssetInventory(std::string const& bundlePath);
   void SetMaterialKeyword(UnityEngine::Material* material, ::StringW keyword, bool enabled) const;
 
   void HandleCustomEvent(GlobalNamespace::BeatmapCallbacksController* callbackController,
@@ -696,6 +698,16 @@ private:
   PerfSections _perfSections;
   double _perfVivifyMs = 0.0;
   float _perfLiveDue = 0.0f;
+  // naomi.10: what logging cost during the song (VivifyLoggingCost at its
+  // start), and detailed mode's per-part times and slow-frame detail.
+  VivifyLogCost _perfLogCostStart;
+  double _detailPartMs[5] = {};
+  int _detailFrames = 0;
+  float _detailDue = 0.0f;
+  int _detailSlowSection = -1;
+  int _detailSlowCount = 0;
+  void LogSlowFrameDetail(float frameMs);
+  void RecordPerfChange(double wall, float song, PerfMechanism mechanism, float before, float after, char const* reason);
   void SamplePerfLive();
   // Performance mode for heavy maps (naomi.8, VivifyPerformanceMode.cpp; a
   // setting, off by default). The eye buffers are never reallocated during a
@@ -787,6 +799,8 @@ private:
   // Materials whose original shader could not run here and were given the
   // generic stand-in. Fine for geometry, never valid for a full-screen blit.
   std::unordered_set<UnityEngine::Material*> _fallbackShadedMaterials;
+  // The shader each of them had before the stand-in, for the asset inventory (naomi.10).
+  std::unordered_map<UnityEngine::Material*, std::string> _standInShaderNames;
   // Original (undecodable) texture -> decoded RGBA32 replacement. nullptr value
   // means it was tried and could not be decoded, so it is not retried.
   std::unordered_map<UnityEngine::Texture*, UnityEngine::Texture*> _decodedTextures;

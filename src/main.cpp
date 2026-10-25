@@ -23,6 +23,21 @@
 #include "UnityEngine/UI/Button.hpp"
 #include "VivifySettings.hpp"
 #include "VivifyVersion.hpp"
+#include "VivifyDeviceInfo.hpp"
+#include "VivifyLogWriter.hpp"
+#include "VivifySessionLog.hpp"
+#include <atomic>
+#include <cctype>
+#include <limits>
+#include <optional>
+#include <sys/stat.h>
+#include <map>
+#include <set>
+#include <sstream>
+#include "UnityEngine/Application.hpp"
+#include "UnityEngine/GL.hpp"
+#include "UnityEngine/SystemInfo.hpp"
+#include "GlobalNamespace/OVRPlugin.hpp"
 #include <algorithm>
 #include <array>
 #include "beatsaber-hook/shared/utils/typedefs-wrappers.hpp"
@@ -81,6 +96,7 @@ constexpr std::string_view kPerfLearnConfigKey = "performanceModeLearnedProfiles
 constexpr std::string_view kPerfFixedScaleConfigKey = "performanceModeFixedScalePercent";
 constexpr std::string_view kDebugCostTestConfigKey = "debugCostTest";
 constexpr std::string_view kShowDeveloperOptionsConfigKey = "showDeveloperOptions";
+constexpr std::string_view kDetailedLoggingConfigKey = "detailedLogging";
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
 bool gDisableAllBlits = false;
@@ -169,6 +185,8 @@ int gPerfFixedScale = 0;        // debug: a fixed viewport scale, percent; 0 off
 int gDebugCostTest = 0;         // debug: what is switched off for a cost test (Vivify::CostTest)
 // Shows the Debug section of the menu (naomi.10).
 bool gShowDeveloperOptions = false;
+// Layer 3 of the session log: per-frame lines and more (naomi.10, debug).
+bool gDetailedLogging = false;
 
 // Where each setting in Vivify::Settings' table is held while the game runs.
 struct BoundSetting {
@@ -177,7 +195,7 @@ struct BoundSetting {
   int* intValue = nullptr;
   std::string* stringValue = nullptr;
 };
-std::array<BoundSetting, 37> const kBoundSettings = {{
+std::array<BoundSetting, 38> const kBoundSettings = {{
     {kVivifyDebugLoggingConfigKey, &gVivifyDebugLogging},
     {kDisableBeat0FilmgrainBlitConfigKey, &gDisableBeat0FilmgrainBlit},
     {kDisableAllBlitsConfigKey, &gDisableAllBlits},
@@ -215,6 +233,7 @@ std::array<BoundSetting, 37> const kBoundSettings = {{
     {kPerfFixedScaleConfigKey, nullptr, &gPerfFixedScale},
     {kDebugCostTestConfigKey, nullptr, &gDebugCostTest},
     {kShowDeveloperOptionsConfigKey, &gShowDeveloperOptions},
+    {kDetailedLoggingConfigKey, &gDetailedLogging},
 }};
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
@@ -224,19 +243,29 @@ std::array<BoundSetting, 37> const kBoundSettings = {{
 // -- and it sat in a different directory from the per-level report, so there
 // were two places to look. One directory, two .txt files, both openable.
 constexpr std::string_view kVivifyLogDir = "/sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify";
+// naomi.9 and earlier wrote one session log here, replaced at every launch;
+// it now only says where the saved sessions are.
 constexpr std::string_view kVivifyLogPath =
     "/sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify/VivifySession.txt";
 
-// A session log must not fill a headset, and it is truncated at launch anyway,
-// so this only has to bound one play session.
-constexpr std::streamoff kVivifyLogMaxBytes = 8 * 1024 * 1024;
+// Saved sessions (naomi.10, LOGGING.md): one file per launch in Sessions/,
+// named by start time, build and commit, with index.txt, latest.txt and the
+// black box beside them. The game's threads only queue lines; a thread of
+// its own writes them (VivifyLogWriter).
+constexpr std::string_view kSessionsDir = "/sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify/Sessions";
+constexpr uint32_t kBlackBoxRecords = 4096;  // 512 KB: about 30 s of frames plus everything else
 
-std::ofstream gVivifyLogFile;
-std::mutex gVivifyLogMutex;
-// vivify_global.txt: every session appended, never truncated; 9 MB parts
-// (vivify_global-p2.txt, ...), the older half deleted past 1 GB in total.
-Vivify::GlobalLog gVivifyGlobalLog(std::string(kVivifyLogDir), "vivify_global", 9ull * 1024 * 1024,
-                                   1024ull * 1024 * 1024);
+Vivify::LogWriter gSessionLog;
+Vivify::BlackBox gBlackBox;
+std::string gSessionFile;
+std::string gSessionStarted;
+long gUtcOffsetSeconds = 0;  // taken at launch; lines use it rather than looking the zone up each time
+std::atomic<float> gSongTime{std::numeric_limits<float>::quiet_NaN()};
+std::atomic<uint64_t> gLayer1Ns{0}, gLayer2Ns{0}, gLayer3Ns{0};
+std::mutex gSessionMutex;  // gSessionMaps, gLoadTimeline
+std::string gSessionMaps;
+Vivify::SessionLog::LoadTimeline gLoadTimeline;
+bool gSessionEnded = false;
 
 std::string WallClockText() {
   std::time_t const now = std::time(nullptr);
@@ -247,25 +276,52 @@ std::string WallClockText() {
   return buffer;
 }
 bool gVivifyLogSinkInstalled = false;
-bool gVivifyLogCapped = false;
-std::chrono::steady_clock::time_point gVivifyLogLastFlush{};
 std::chrono::steady_clock::time_point gVivifyLogOpened = std::chrono::steady_clock::now();
 
-// Writes one line to both log files and flushes them, on the calling thread.
-// Lines through PaperLogger reach the files later, from Paper's own thread,
-// and ordinary ones are only flushed every 250 ms -- so when the game hangs and
-// is killed, the last of them never reach disk. Breadcrumbs and watchdog lines
-// go through here instead, and so can land ahead of PaperLogger lines that
-// were logged just before them.
-void WriteFlushedLogLine(std::string const& line) {
-  std::lock_guard<std::mutex> lock(gVivifyLogMutex);
-  if (gVivifyGlobalLog.IsOpen()) {
-    gVivifyGlobalLog.Write(WallClockText() + " " + line);
-    gVivifyGlobalLog.Flush();
+// Adds the time from construction to destruction to a layer's total.
+class CostTimer {
+ public:
+  explicit CostTimer(std::atomic<uint64_t>& total) : _total(total), _start(std::chrono::steady_clock::now()) {}
+  ~CostTimer() {
+    _total.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now() - _start)
+                                               .count()),
+                     std::memory_order_relaxed);
   }
-  if (gVivifyLogFile.is_open() && !gVivifyLogCapped) {
-    gVivifyLogFile << line << '\n';
-    gVivifyLogFile.flush();
+
+ private:
+  std::atomic<uint64_t>& _total;
+  std::chrono::steady_clock::time_point _start;
+};
+
+std::string LinePrefix(std::string_view tag) {
+  auto const now = std::chrono::system_clock::now();
+  auto const ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  std::time_t const local = static_cast<std::time_t>(ms / 1000) + gUtcOffsetSeconds;
+  std::tm parts{};
+  gmtime_r(&local, &parts);
+  return Vivify::SessionLog::FormatPrefix(parts, static_cast<int>(ms % 1000), gSongTime.load(std::memory_order_relaxed),
+                                          tag);
+}
+
+void PushLine(std::string_view tag, std::string text, bool important, bool limit) {
+  gSessionLog.Push(LinePrefix(tag), std::move(text), important, limit);
+}
+
+void BlackBoxRecord(Vivify::BlackBox::Type type, std::string_view text, float a = 0.0f, float b = 0.0f,
+                    float c = 0.0f) {
+  CostTimer cost(gLayer2Ns);
+  gBlackBox.Record(type, gSongTime.load(std::memory_order_relaxed), text, a, b, c);
+}
+
+// A line that names its own tag, "[PERF] ...", is written under that tag.
+void WriteFlushedLogLine(std::string const& line) {
+  CostTimer cost(gLayer1Ns);
+  size_t const close = line.find("] ");
+  if (!line.empty() && line[0] == '[' && close != std::string::npos && close < 16) {
+    PushLine(std::string_view(line).substr(1, close - 1), line.substr(close + 2), true, false);
+  } else {
+    PushLine("INFO", line, true, false);
   }
 }
 
@@ -283,61 +339,124 @@ std::string ElapsedText() {
   return "+" + std::to_string(ms) + "ms";
 }
 
+// latest.txt names this session's file; VivifySession.txt, where naomi.9 and
+// earlier kept their one log, says where the logs went.
+void WritePointers() {
+  std::ofstream latest(std::string(kSessionsDir) + "/latest.txt", std::ios::trunc);
+  latest << gSessionFile << "\n";
+  std::ofstream old(std::string(kVivifyLogPath), std::ios::trunc);
+  old << "Vivify session logs are now saved one per launch in Sessions/ (see LOGGING.md).\n"
+      << "This session: Sessions/" << gSessionFile << "\n";
+}
+
+// vivify_global.txt (every session appended since 0.14.23) is kept as it is
+// and no longer written: each session has its own file now. Said once, in
+// the file itself.
+void RetireGlobalLog() {
+  std::string const marker = std::string(kSessionsDir) + "/.global-log-retired";
+  std::error_code ec;
+  if (std::filesystem::exists(marker, ec)) return;
+  Vivify::GlobalLog global(std::string(kVivifyLogDir), "vivify_global", 9ull * 1024 * 1024, 1024ull * 1024 * 1024);
+  if (!global.Parts().empty()) {
+    global.Open("=== " + WallClockText() + " " + VERSION + ": this file is kept as history and no longer written; "
+                "each session now has its own file in Sessions/ (LOGGING.md) ===");
+  }
+  std::ofstream(marker) << VERSION << "\n";
+}
+
 void InstallVivifyFileLogSink() {
   if (gVivifyLogSinkInstalled) return;
   gVivifyLogSinkInstalled = true;
   std::error_code ec;
-  std::filesystem::create_directories(std::string(kVivifyLogDir), ec);
+  std::filesystem::create_directories(std::string(kSessionsDir), ec);
 
-  gVivifyLogFile.open(std::string(kVivifyLogPath), std::ios::out | std::ios::trunc);
-  if (!gVivifyLogFile.is_open()) {
-    PaperLogger.warn("Vivify: could not open log file at {} (logging to logcat only)", kVivifyLogPath);
-    return;
+  std::time_t const now = std::time(nullptr);
+  std::tm local{};
+  localtime_r(&now, &local);
+  gUtcOffsetSeconds = local.tm_gmtoff;
+  gSessionFile = Vivify::SessionLog::SessionFileName(local, VERSION, VIVIFY_GIT_COMMIT);
+  std::string const offset = Vivify::SessionLog::UtcOffset(local);
+  gSessionStarted = WallClockText() + " " + offset;
+
+  // What the previous session left, before anything of this one is written.
+  Vivify::BlackBox::Previous previous;
+  gBlackBox.Open(std::string(kSessionsDir) + "/blackbox.bin", gSessionFile, kBlackBoxRecords, previous);
+  Vivify::SessionLog::Session current;
+  current.file = gSessionFile;
+  current.started = gSessionStarted;
+  current.build = VERSION;
+  Vivify::SessionLog::Startup startup;
+  try {
+    startup = Vivify::SessionLog::BeginSession(
+        std::string(kSessionsDir), current,
+        Vivify::SessionLog::PreviousBox{previous.found, previous.state, previous.session, previous.lines},
+        std::string(kVivifyLogPath));
+  } catch (std::exception const& ex) {
+    startup.notes.push_back(std::string("the session index could not be updated: ") + ex.what());
   }
-  gVivifyLogFile << "=== Vivify " << VERSION << " (commit " << VIVIFY_GIT_COMMIT << ") session log ===\n";
-  gVivifyLogFile.flush();
-  gVivifyLogLastFlush = std::chrono::steady_clock::now();
-  gVivifyGlobalLog.Open("=== Vivify " + std::string(VERSION) + " (commit " + VIVIFY_GIT_COMMIT + ") session started " +
-                        WallClockText() + " ===");
 
-  // Started once the files are open, so its lines have somewhere to go.
+  std::string const path = std::string(kSessionsDir) + "/" + gSessionFile;
+  std::vector<std::string> header = {
+      "=== Vivify session log, schema " + std::to_string(Vivify::SessionLog::kSchemaVersion) + " ===",
+      "build: " + std::string(VERSION) + " · " + std::string(Vivify::kCodename),
+      "commit: " + std::string(VIVIFY_GIT_COMMIT),
+      "started: " + gSessionStarted + " (local time, UTC" + offset + ")",
+  };
+  if (!gSessionLog.Start(path, header)) {
+    PaperLogger.warn("Vivify: could not open the session log at {} (logging to logcat only)", path);
+  }
+  PushLine("HEADER", "converter: conversion version " + std::to_string(Vivify::BundleConversionVersion()), false, false);
+  PushLine("HEADER", "device: " + Vivify::DeviceInfo::DeviceLine(), false, false);
+  PushLine("HEADER", "memory: " + Vivify::DeviceInfo::MemoryLine(), false, false);
+  PushLine("HEADER", "battery: " + Vivify::DeviceInfo::BatteryLine(), false, false);
+  PushLine("HEADER", "thermal: " + Vivify::DeviceInfo::ThermalLine(), false, false);
+  PushLine("HEADER", "GPU clock: " + Vivify::DeviceInfo::GpuClockLine(), false, false);
+  PushLine("HEADER", "black box: " + std::string(gBlackBox.IsOpen() ? "on" : "could not be opened") + ", " +
+                         std::to_string(kBlackBoxRecords) + " records",
+           false, false);
+  for (auto const& note : startup.notes) PushLine("SESSION", note, false, false);
+  if (!startup.deleted.empty()) {
+    PushLine("SESSION", "deleted " + std::to_string(startup.deleted.size()) +
+                            " old session file(s) to stay within 10 recent, 5 unexpected and 96 MB",
+             false, false);
+  }
+  BlackBoxRecord(Vivify::BlackBox::kSession, "session started");
+  // A process that exits through exit() without Unity's quit callback still
+  // gets its footer. Registered after gSessionLog and gBlackBox exist, so it
+  // runs before they are destroyed.
+  std::atexit([]() { VivifySessionEnd(); });
+  gSessionLog.Post([]() {
+    WritePointers();
+    RetireGlobalLog();
+  });
+
+  // Started once the file is open, so its lines have somewhere to go.
   gWatchdog.Start([](std::string const& line) {
-    WriteFlushedLogLine("[" + ElapsedText() + "] " + line);
+    {
+      CostTimer cost(gLayer1Ns);
+      PushLine("WATCHDOG", ElapsedText() + " " + line, true, false);
+    }
+    BlackBoxRecord(Vivify::BlackBox::kWarning, line);
     WatchdogLogger.warn("{}", line);
   });
 
+  // Paper calls this on its own thread, so the game's threads pay nothing
+  // for it; lines are stamped as they arrive (within a few ms of the call).
   Paper::Logger::AddLogSink([](Paper::LogData const& data) {
     if (!data.tag.has_value() || *data.tag != std::string_view(MOD_ID)) return;
-    std::lock_guard<std::mutex> lock(gVivifyLogMutex);
     bool const important = data.level >= Paper::LogLevel::WRN;
-    if (gVivifyGlobalLog.IsOpen()) {
-      gVivifyGlobalLog.Write(WallClockText() + " [" + std::string(Paper::format_as(data.level)) + "] " +
-                             std::string(data.message));
-      if (important) gVivifyGlobalLog.Flush();
+    std::string_view message = data.message;
+    std::string tag(Paper::format_as(data.level));
+    // A message that starts "[ASSETS] " is written under that tag.
+    size_t const close = message.find("] ");
+    if (message.size() > 3 && message[0] == '[' && close != std::string_view::npos && close < 12 &&
+        std::all_of(message.begin() + 1, message.begin() + static_cast<long>(close),
+                    [](char c) { return std::isupper(static_cast<unsigned char>(c)) || c == '_'; })) {
+      tag = std::string(message.substr(1, close - 1));
+      message.remove_prefix(close + 2);
     }
-    if (!gVivifyLogFile.is_open() || gVivifyLogCapped) return;
-
-    gVivifyLogFile << '[' << Paper::format_as(data.level) << "] " << data.message << '\n';
-
-    if (gVivifyLogFile.tellp() > kVivifyLogMaxBytes) {
-      gVivifyLogFile << "=== log capped at " << (kVivifyLogMaxBytes / (1024 * 1024))
-                     << "MB; further lines go to logcat only ===\n";
-      gVivifyLogFile.flush();
-      gVivifyLogCapped = true;
-      return;
-    }
-
-    // Flushing every line meant an sdcard write per log line, on whichever
-    // thread logged -- including the main thread mid-gameplay, where Vivify can
-    // be noisy. Warnings and errors still flush immediately, because those are
-    // the lines that matter if the game stops before the buffer is written;
-    // ordinary lines are flushed at most a few times a second.
-    auto const now = std::chrono::steady_clock::now();
-    if (important || now - gVivifyLogLastFlush > std::chrono::milliseconds(250)) {
-      gVivifyLogFile.flush();
-      gVivifyGlobalLog.Flush();
-      gVivifyLogLastFlush = now;
-    }
+    gSessionLog.Push(LinePrefix(tag), std::string(message), important, true);
+    if (important) gBlackBox.Record(Vivify::BlackBox::kWarning, gSongTime.load(std::memory_order_relaxed), message);
   });
 }
 
@@ -408,7 +527,17 @@ void VivifyCopyBreadcrumb(char* buffer, size_t size) {
 void VivifyBreadcrumb(std::string const& text) {
   gWatchdog.SetBreadcrumb(text);
   std::string const gc = GcText();
-  WriteFlushedLogLine("[CRUMB " + ElapsedText() + "] " + text + gc);
+  std::optional<std::string> timeline;
+  {
+    CostTimer cost(gLayer1Ns);
+    PushLine("CRUMB", ElapsedText() + " " + text + gc, true, false);
+    std::lock_guard<std::mutex> lock(gSessionMutex);
+    double const ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gVivifyLogOpened).count();
+    timeline = gLoadTimeline.Feed(text, ms);
+  }
+  BlackBoxRecord(Vivify::BlackBox::kCrumb, text);
+  if (timeline) VivifyLogLine("LOAD", *timeline, false, false);
   CrumbLogger.info("{}{}", text, gc);
 }
 
@@ -418,6 +547,319 @@ void VivifyHeartbeat() {
 
 void VivifySetAppPaused(bool paused) {
   gWatchdog.SetPaused(paused);
+  // The headset usually closes an app while it is in the background, without
+  // a quit: the black box's state tells that apart from a crash (naomi.10).
+  gBlackBox.SetState(paused ? Vivify::BlackBox::kPaused : Vivify::BlackBox::kRunning);
+  BlackBoxRecord(Vivify::BlackBox::kSession, paused ? "app paused" : "app resumed");
+  PushLine("SESSION", paused ? "=== app paused at " + WallClockText() + " ===" : std::string("=== app resumed ==="),
+           true, false);
+  if (paused) {
+    gBlackBox.Sync();
+    std::string maps;
+    {
+      std::lock_guard<std::mutex> lock(gSessionMutex);
+      maps = gSessionMaps;
+    }
+    gSessionLog.Post([maps]() {
+      Vivify::SessionLog::UpdateSession(std::string(kSessionsDir), gSessionFile, maps, {}, gSessionLog.BytesWritten());
+    });
+  }
+}
+
+namespace {
+
+// GL, from the system library Unity's context uses; looked up once.
+struct GlFunctions {
+  using GetString = unsigned char const* (*)(unsigned int);
+  using GetStringi = unsigned char const* (*)(unsigned int, unsigned int);
+  using GetIntegerv = void (*)(unsigned int, int*);
+  using GetError = unsigned int (*)();
+  GetString getString = nullptr;
+  GetStringi getStringi = nullptr;
+  GetIntegerv getIntegerv = nullptr;
+  GetError getError = nullptr;
+};
+
+GlFunctions const& Gl() {
+  static GlFunctions const functions = [] {
+    GlFunctions found;
+    void* gles = dlopen("libGLESv2.so", RTLD_NOW | RTLD_NOLOAD);
+    if (gles == nullptr) gles = dlopen("libGLESv2.so", RTLD_NOW);
+    if (gles != nullptr) {
+      found.getString = reinterpret_cast<GlFunctions::GetString>(dlsym(gles, "glGetString"));
+      found.getStringi = reinterpret_cast<GlFunctions::GetStringi>(dlsym(gles, "glGetStringi"));
+      found.getIntegerv = reinterpret_cast<GlFunctions::GetIntegerv>(dlsym(gles, "glGetIntegerv"));
+      found.getError = reinterpret_cast<GlFunctions::GetError>(dlsym(gles, "glGetError"));
+    }
+    return found;
+  }();
+  return functions;
+}
+
+// The extensions a Vivify problem tends to turn on.
+constexpr std::string_view kImportantExtensions[] = {
+    "GL_OVR_multiview2", "GL_OVR_multiview_multisampled_render_to_texture", "GL_EXT_multisampled_render_to_texture",
+    "GL_EXT_geometry_shader", "GL_EXT_tessellation_shader", "GL_EXT_shader_framebuffer_fetch",
+    "GL_QCOM_shader_framebuffer_fetch_noncoherent", "GL_EXT_color_buffer_float", "GL_EXT_color_buffer_half_float",
+    "GL_EXT_texture_filter_anisotropic", "GL_KHR_texture_compression_astc_ldr", "GL_KHR_texture_compression_astc_hdr",
+    "GL_EXT_texture_compression_s3tc", "GL_EXT_texture_compression_bptc", "GL_EXT_disjoint_timer_query",
+    "GL_QCOM_tiled_rendering", "GL_EXT_clip_cull_distance", "GL_OES_texture_float_linear",
+    "GL_EXT_texture_cube_map_array", "GL_QCOM_texture_foveated", "GL_EXT_buffer_storage"};
+
+constexpr int kRenderEventGlInfo = 0x56490001;
+constexpr int kRenderEventGlErrors = 0x56490002;
+
+char const* GlErrorName(unsigned int error) {
+  switch (error) {
+    case 0x0500: return "GL_INVALID_ENUM";
+    case 0x0501: return "GL_INVALID_VALUE";
+    case 0x0502: return "GL_INVALID_OPERATION";
+    case 0x0505: return "GL_OUT_OF_MEMORY";
+    case 0x0506: return "GL_INVALID_FRAMEBUFFER_OPERATION";
+    default: return "?";
+  }
+}
+
+// Runs on Unity's render thread, with its GL context current, through
+// GL.IssuePluginEvent -- the way native plugins reach GL without a hook.
+void OnRenderThreadEvent(int eventId) {
+  try {
+    auto const& gl = Gl();
+    if (eventId == kRenderEventGlInfo && gl.getString != nullptr) {
+      auto text = [&gl](unsigned int name) {
+        auto const* value = gl.getString(name);
+        return value != nullptr ? std::string(reinterpret_cast<char const*>(value)) : std::string("?");
+      };
+      VivifyLogLine("HEADER", "GL: " + text(0x1F00) + " / " + text(0x1F01) + " / " + text(0x1F02) + " / " + text(0x8B8C),
+                    false, false);
+      std::set<std::string, std::less<>> present;
+      int count = 0;
+      if (gl.getIntegerv != nullptr && gl.getStringi != nullptr) {
+        gl.getIntegerv(0x821D, &count);  // GL_NUM_EXTENSIONS
+        for (int i = 0; i < count && i < 1024; i++) {
+          if (auto const* name = gl.getStringi(0x1F03, static_cast<unsigned int>(i))) {
+            present.emplace(reinterpret_cast<char const*>(name));
+          }
+        }
+      }
+      std::string have, lack;
+      for (auto name : kImportantExtensions) {
+        std::string& list = present.contains(name) ? have : lack;
+        list += (list.empty() ? "" : " ") + std::string(name);
+      }
+      VivifyLogLine("HEADER", "GL extensions: " + std::to_string(count) + " in all; present: " +
+                                  (have.empty() ? "none" : have) + "; missing: " + (lack.empty() ? "none" : lack),
+                    false, false);
+      // Drained once here, so the first check in a song reports only its own.
+      if (gl.getError != nullptr) {
+        for (int i = 0; i < 16 && gl.getError() != 0; i++) {
+        }
+      }
+    } else if (eventId == kRenderEventGlErrors && gl.getError != nullptr) {
+      for (int i = 0; i < 8; i++) {
+        unsigned int const error = gl.getError();
+        if (error == 0) break;
+        char text[96];
+        std::snprintf(text, sizeof(text), "error 0x%04x (%s) since the last check", error, GlErrorName(error));
+        VivifyLogLine("GL", text, true, true);
+        VivifyBlackBoxRecord(Vivify::BlackBox::kGl, text);
+      }
+    }
+  } catch (...) {
+  }
+}
+
+void IssueRenderEvent(int eventId) {
+  try {
+    UnityEngine::GL::IssuePluginEvent(System::IntPtr(reinterpret_cast<void*>(&OnRenderThreadEvent)), eventId);
+  } catch (...) {
+  }
+}
+
+std::string Text(StringW value) {
+  return value ? static_cast<std::string>(value) : std::string();
+}
+
+std::string ModTime(char const* path) {
+  struct stat info {};
+  if (path == nullptr || ::stat(path, &info) != 0) return "?";
+  std::tm local{};
+  localtime_r(&info.st_mtime, &local);
+  char buffer[32];
+  std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &local);
+  return buffer;
+}
+
+}  // namespace
+
+// Once, on the first frame: what needs Unity running (naomi.10).
+void VivifySessionHeaderLate() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  std::map<std::string, std::string> summary;
+  summary["build"] = VERSION;
+  summary["commit"] = VIVIFY_GIT_COMMIT;
+  summary["os"] = Vivify::DeviceInfo::Property("ro.build.display.id");
+  try {
+    std::string const game = Text(UnityEngine::Application::get_version());
+    std::string const unity = Text(UnityEngine::Application::get_unityVersion());
+    summary["beatsaber"] = game;
+    PushLine("HEADER", "Beat Saber " + game + ", Unity " + unity, false, false);
+    PushLine("HEADER",
+             "SystemInfo: " + Text(UnityEngine::SystemInfo::get_deviceModel()) + "; " +
+                 Text(UnityEngine::SystemInfo::get_operatingSystem()) + "; GPU " +
+                 Text(UnityEngine::SystemInfo::get_graphicsDeviceName()) + " (" +
+                 Text(UnityEngine::SystemInfo::get_graphicsDeviceVendor()) + "), " +
+                 Text(UnityEngine::SystemInfo::get_graphicsDeviceVersion()) + ", " +
+                 std::to_string(UnityEngine::SystemInfo::get_graphicsMemorySize()) + " MB graphics memory; " +
+                 std::to_string(UnityEngine::SystemInfo::get_systemMemorySize()) + " MB system memory; " +
+                 std::to_string(UnityEngine::SystemInfo::get_processorCount()) + " cores",
+             false, false);
+  } catch (std::exception const& ex) {
+    PushLine("HEADER", std::string("Unity details could not be read: ") + ex.what(), false, false);
+  }
+  try {
+    PushLine("HEADER", fmt::format("refresh rate: {:.0f} Hz", GlobalNamespace::OVRPlugin::get_systemDisplayFrequency()),
+             false, false);
+  } catch (...) {
+    PushLine("HEADER", "refresh rate: unknown", false, false);
+  }
+  CModResults results = modloader_get_loaded();
+  PushLine("HEADER", "mods loaded: " + std::to_string(results.size), false, false);
+  for (size_t i = 0; i < results.size; i++) {
+    auto const& mod = results.array[i];
+    if (mod.info.id == nullptr) continue;
+    std::string const version = mod.info.version != nullptr ? mod.info.version : "?";
+    summary[std::string("mod:") + mod.info.id] = version;
+    PushLine("HEADER", std::string("mod: ") + mod.info.id + " " + version + ", file from " + ModTime(mod.path), false,
+             false);
+  }
+  modloader_free_results(&results);
+  {
+    auto const& doc = getConfig().config;
+    for (auto const& def : Vivify::Settings::All()) {
+      std::string value;
+      switch (def.kind) {
+        case Vivify::Settings::Kind::Bool: value = Vivify::Settings::GetBool(doc, def.key) ? "true" : "false"; break;
+        case Vivify::Settings::Kind::Int: value = std::to_string(Vivify::Settings::GetInt(doc, def.key)); break;
+        case Vivify::Settings::Kind::String: value = Vivify::Settings::GetString(doc, def.key); break;
+      }
+      summary["setting:" + std::string(def.key)] = value;
+    }
+  }
+  // What changed since the last session, from the summary it left.
+  std::string const summaryPath = std::string(kSessionsDir) + "/last-summary.txt";
+  gSessionLog.Post([summary, summaryPath]() {
+    std::string before;
+    {
+      std::ifstream in(summaryPath, std::ios::binary);
+      std::stringstream text;
+      text << in.rdbuf();
+      before = text.str();
+    }
+    std::string const changed = Vivify::SessionLog::WhatChanged(Vivify::SessionLog::ParseSummary(before), summary);
+    VivifyLogLine("HEADER", "changed since the last session: " + (changed.empty() ? std::string("(first session with a summary)") : changed),
+                  false, false);
+    std::ofstream out(summaryPath, std::ios::binary | std::ios::trunc);
+    out << Vivify::SessionLog::FormatSummary(summary);
+  });
+  IssueRenderEvent(kRenderEventGlInfo);
+}
+
+// About once a second during a song: GL errors since the last check.
+void VivifyCheckGlErrors() {
+  IssueRenderEvent(kRenderEventGlErrors);
+}
+
+void VivifySetSongTime(float songTime) {
+  gSongTime.store(songTime, std::memory_order_relaxed);
+}
+
+void VivifyLogLine(std::string_view tag, std::string text, bool important, bool limit) {
+  CostTimer cost(gLayer1Ns);
+  PushLine(tag, std::move(text), important, limit);
+}
+
+void VivifyBlackBoxRecord(Vivify::BlackBox::Type type, std::string_view text, float a, float b, float c) {
+  BlackBoxRecord(type, text, a, b, c);
+}
+
+void VivifySessionMap(std::string const& key) {
+  std::string maps;
+  {
+    std::lock_guard<std::mutex> lock(gSessionMutex);
+    std::string const listed = "," + gSessionMaps + ",";
+    if (listed.find("," + key + ",") == std::string::npos) {
+      gSessionMaps += (gSessionMaps.empty() ? "" : ",") + key;
+    }
+    maps = gSessionMaps;
+  }
+  gSessionLog.Post([maps]() {
+    Vivify::SessionLog::UpdateSession(std::string(kSessionsDir), gSessionFile, maps, {}, gSessionLog.BytesWritten());
+  });
+}
+
+namespace {
+std::atomic<float> gSampleResident{-1}, gSampleNative{-1}, gSampleHottest{-1000}, gSampleBattery{-1000},
+    gSampleGpu{-1};
+std::atomic<bool> gSamplePending{false};
+}  // namespace
+
+VivifyDeviceSample VivifyLatestDeviceSample() {
+  VivifyDeviceSample sample;
+  sample.residentMB = gSampleResident.load();
+  sample.nativeHeapMB = gSampleNative.load();
+  sample.hottestC = gSampleHottest.load();
+  sample.batteryC = gSampleBattery.load();
+  sample.gpuMHz = gSampleGpu.load();
+  if (!gSamplePending.exchange(true)) {
+    gSessionLog.Post([]() {
+      gSampleResident = static_cast<float>(Vivify::DeviceInfo::ResidentMB());
+      gSampleNative = static_cast<float>(Vivify::DeviceInfo::NativeHeapMB());
+      gSampleHottest = static_cast<float>(Vivify::DeviceInfo::HottestZoneC());
+      gSampleBattery = static_cast<float>(Vivify::DeviceInfo::BatteryTempC());
+      gSampleGpu = static_cast<float>(Vivify::DeviceInfo::GpuClockMHz());
+      gSamplePending = false;
+    });
+  }
+  return sample;
+}
+
+VivifyLogCost VivifyLoggingCost() {
+  return VivifyLogCost{gLayer1Ns.load(), gLayer2Ns.load(), gLayer3Ns.load()};
+}
+
+void VivifyAddLayer3Cost(uint64_t ns) {
+  gLayer3Ns.fetch_add(ns, std::memory_order_relaxed);
+}
+
+void VivifySessionEnd() {
+  if (gSessionEnded) return;
+  gSessionEnded = true;
+  BlackBoxRecord(Vivify::BlackBox::kSession, "quit");
+  PushLine("SESSION", "quit through the game", true, false);
+  auto const cost = VivifyLoggingCost();
+  char footer[256];
+  std::snprintf(footer, sizeof(footer),
+                "%s cleanly at %s: %llu lines written, %llu left out by the rate limit; logging cost the game's "
+                "threads %.1f ms (session log), %.1f ms (black box), %.1f ms (detailed mode) ===",
+                std::string(Vivify::SessionLog::kFooter).c_str(), WallClockText().c_str(),
+                static_cast<unsigned long long>(gSessionLog.LinesWritten()),
+                static_cast<unsigned long long>(gSessionLog.LinesSuppressed()), cost.layer1Ns / 1e6,
+                cost.layer2Ns / 1e6, cost.layer3Ns / 1e6);
+  gSessionLog.Stop({footer});
+  gBlackBox.SetState(Vivify::BlackBox::kClean);
+  gBlackBox.Sync();
+  std::string maps;
+  {
+    std::lock_guard<std::mutex> lock(gSessionMutex);
+    maps = gSessionMaps;
+  }
+  std::error_code ec;
+  auto const bytes = std::filesystem::file_size(std::string(kSessionsDir) + "/" + gSessionFile, ec);
+  Vivify::SessionLog::UpdateSession(std::string(kSessionsDir), gSessionFile, maps, Vivify::SessionLog::kClean,
+                                    ec ? 0 : static_cast<uint64_t>(bytes));
 }
 
 void VivifySlowFrameSection(int section) {
@@ -773,11 +1215,10 @@ void RegisterModSettings() {
         // paperlog output is not reachable without adb, so Vivify writes its own
         // plain-text report next to its data. Showing the path here means the
         // file can be found without being told where to look.
-        BSML::Lite::CreateText(parent, u"Diagnostics (both plain .txt, same folder):");
+        BSML::Lite::CreateText(parent, u"Diagnostics (plain .txt):");
         BSML::Lite::CreateText(parent, StringW("<size=70%>" + Vivify::Report::FilePath() + "</size>"));
-        BSML::Lite::CreateText(parent, StringW("<size=70%>" + std::string(kVivifyLogPath) + "</size>"));
-        BSML::Lite::CreateText(
-            parent, StringW("<size=70%>" + std::string(kVivifyLogDir) + "/vivify_global.txt (every session)</size>"));
+        BSML::Lite::CreateText(parent, StringW("<size=70%>" + std::string(kSessionsDir) +
+                                               "/ (one file per session; latest.txt names this one)</size>"));
 
         AddToggle(parent, kShowDeveloperOptionsConfigKey, gShowDeveloperOptions,
                   [](bool show) { ShowDebugSection(show); });
@@ -798,6 +1239,7 @@ void RegisterModSettings() {
         debug(AddHeading(parent, "Debug"));
         debug(AddHeading(parent, "<size=80%>Diagnostics</size>"));
         debug(AddToggle(parent, kVivifyDebugLoggingConfigKey, gVivifyDebugLogging));
+        debug(AddToggle(parent, kDetailedLoggingConfigKey, gDetailedLogging));
         // Changes nothing on screen: during a frame that takes over 100 ms,
         // where the main and render threads are, summed up per section of the
         // song in the session log. Costs nothing while frames are fast.
@@ -974,6 +1416,10 @@ bool GetOffscreenCulling() {
   return gOffscreenCulling;
 }
 
+bool GetDetailedLogging() {
+  return gDetailedLogging;
+}
+
 bool GetSlowFrameSampler() {
   return gSlowFrameSampler;
 }
@@ -1062,7 +1508,8 @@ MOD_EXTERN_FUNC void setup(CModInfo *info) noexcept {
   // reset here. EnsureConfigDefaults() above already loaded the saved values (or
   // wrote the defaults on first run); hardcoding them back to a fixed value here
   // would silently discard the player's saved settings-menu choice on every launch.
-  PaperLogger.info("Vivify file logging active -> {}", kVivifyLogPath);
+  PushLine("HEADER", "settings: " + Vivify::Settings::Snapshot(getConfig().config), false, false);
+  PaperLogger.info("Vivify file logging active -> {}/{}", kSessionsDir, gSessionFile);
 }
 namespace {
 // Every other mod the loader started, in one line of the session log: the

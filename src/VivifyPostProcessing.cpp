@@ -167,6 +167,9 @@ bool Runtime::EnsureMidRenderTextures() {
   ReleaseMidRenderTextures();
   _midMainRT = UnityEngine::RenderTexture::New_ctor(_cachedMainDescriptor);
   _midScratchRT = UnityEngine::RenderTexture::New_ctor(_cachedMainDescriptor);
+  VivifyBlackBoxRecord(BlackBox::kTarget, "mid-frame copies (2)", static_cast<float>(_cachedMainDescriptor.get_width()),
+                       static_cast<float>(_cachedMainDescriptor.get_height()),
+                       static_cast<float>(_cachedMainDescriptor.get_graphicsFormat().value__));
   if (!IsAlive(_midMainRT) || !IsAlive(_midScratchRT) || !_midMainRT->Create() || !_midScratchRT->Create()) {
     ReleaseMidRenderTextures();
     return false;
@@ -362,6 +365,8 @@ UnityEngine::RenderTexture* Runtime::EnsureCachedBlitTexture(UnityEngine::Render
   _cachedBlitHeight = height;
   _cachedBlitFormat = format;
   ClearRenderTexture(texture);
+  VivifyBlackBoxRecord(BlackBox::kTarget, "blit target", static_cast<float>(width), static_cast<float>(height),
+                       static_cast<float>(format));
   return texture;
 }
 
@@ -809,6 +814,8 @@ bool Runtime::CreateDeclaredTexture(DeclaredTextureData& dt) {
   }
 
   dt.texture = UnityEngine::RenderTexture::New_ctor(desc);
+  VivifyBlackBoxRecord(BlackBox::kTarget, "screen texture '" + dt.name + "'", static_cast<float>(w),
+                       static_cast<float>(h), static_cast<float>(desc.get_graphicsFormat().value__));
   if (IsAlive(dt.texture) && dt.filterMode.has_value()) dt.texture->set_filterMode(dt.filterMode.value());
   if (!IsAlive(dt.texture) || !dt.texture->Create()) {
     PaperLogger.warn("Vivify CreateScreenTexture failed: id='{}' size={}x{} slices={} graphicsFormat={}", dt.name, w,
@@ -890,6 +897,8 @@ void Runtime::HandleCreateCamera(rapidjson::Value const& json) {
   }
   bool const wantColor = cam.texturePropertyId.has_value();
   bool const wantDepth = cam.depthTexturePropertyId.has_value();
+  VivifyBlackBoxRecord(BlackBox::kCamera, "camera '" + name + "'" + (wantColor ? " colour" : "") + (wantDepth ? " depth" : ""),
+                       static_cast<float>(w), static_cast<float>(h), cam.camera->get_depth());
 
   if (!wantColor && !wantDepth) {
     cam.camera->set_enabled(false);

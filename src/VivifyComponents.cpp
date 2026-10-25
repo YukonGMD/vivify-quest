@@ -396,6 +396,11 @@ void MultipassKeywordController::OnDisable() {
 void RuntimeBehaviour::Update() {
   // First, so a throw anywhere below cannot make a healthy frame look stalled.
   VivifyHeartbeat();
+  // The session log's header lines that need Unity running (naomi.10); once.
+  try {
+    VivifySessionHeaderLate();
+  } catch (...) {
+  }
   // Before the runtime's own update, which returns early in the menu and when
   // its watchdog stands down; AudioLink has to run regardless (song previews).
   try {
@@ -426,6 +431,13 @@ void RuntimeBehaviour::Update() {
 // a stall.
 void RuntimeBehaviour::OnApplicationPause(bool paused) {
   VivifySetAppPaused(paused);
+}
+
+// The game quitting through Unity: the session log's clean-exit footer
+// (naomi.10). On the headset an app is more often closed in the background,
+// which the black box's paused state records instead.
+void RuntimeBehaviour::OnApplicationQuit() {
+  VivifySessionEnd();
 }
 
 void RuntimeBehaviour::OnDestroy() {

@@ -69,10 +69,12 @@ int main(int argc, char** argv) {
       std::istringstream in(line.substr(2));
       std::string msText;
       float vivify = 0, songTime = 0, gpu = -1, busy = -1;
+      int gc = 0;
       in >> msText >> vivify >> songTime;
       if (!(in >> gpu)) gpu = -1;
       if (!(in >> busy)) busy = -1;
-      sections->AddFrame(std::strtof(msText.c_str(), nullptr), vivify, songTime, gpu, busy);
+      if (!(in >> gc)) gc = 0;
+      sections->AddFrame(std::strtof(msText.c_str(), nullptr), vivify, songTime, gpu, busy, gc);
       continue;
     }
     if (line.rfind("V ", 0) == 0) {
@@ -158,6 +160,10 @@ int main(int argc, char** argv) {
       Vivify::PerfSections::Live live;
       in >> live.renderers >> live.visibleRenderers >> live.particleSystems >> live.particles >> live.drawCalls >>
           live.batches >> live.triangles;
+      if (!(in >> live.residentMB >> live.nativeHeapMB >> live.hottestC >> live.batteryC >> live.gpuMHz)) {
+        live.residentMB = live.nativeHeapMB = live.gpuMHz = -1;
+        live.hottestC = live.batteryC = -1000;
+      }
       sections->AddLive(live);
       continue;
     }

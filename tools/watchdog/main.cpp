@@ -233,6 +233,24 @@ void SlowFrameSelftest() {
     same.AddSample(0, SlowFrameProfile::kRender, false, stack, 4);
   }
   auto sameLines = same.Summary([](int) { return std::string("s"); }, moduleNames, 3);
+  // naomi.10: render-thread samples inside the driver's shader compiler.
+  SlowFrameProfile compiling;
+  std::vector<std::string> const driverNames{"libGLESv2_adreno.so", "libllvm-glnext.so"};
+  CodeLocation const gl{0, 0x1000, true}, compile{1, 0x4000, true};
+  for (int i = 0; i < 3; i++) {
+    CodeLocation stack[] = {compile, gl};
+    compiling.AddSample(0, SlowFrameProfile::kRender, true, stack, 2);
+  }
+  CodeLocation drawing[] = {gl};
+  compiling.AddSample(0, SlowFrameProfile::kRender, true, drawing, 1);
+  auto compileLines = compiling.Summary([](int) { return std::string("s"); }, driverNames, 3);
+  Check("summary: shader compiles named", compileLines.size() == 4 &&
+        compileLines[3] == "  render thread in the GPU driver's shader compiler (libllvm-glnext.so) in 75% of samples: "
+                           "first-use shader compiles", compileLines.size() > 3 ? compileLines[3] : "");
+  auto mainOnly = profile.Summary([](int) { return std::string("s"); }, moduleNames, 2);
+  bool noCompiler = true;
+  for (auto const& line : mainOnly) noCompiler &= line.find("shader compiler") == std::string::npos;
+  Check("summary: no compile line without the compiler", noCompiler);
   Check("summary: equal counts list the frames nearest where the thread was first", sameLines.size() == 3 &&
         sameLines[2] == "  render thread, anywhere on the stack: [anonymous] 100%, libfake.so+0x2200 100%, "
                         "libfake.so+0x2000 100%", sameLines.size() > 2 ? sameLines[2] : "");

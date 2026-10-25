@@ -86,6 +86,35 @@ codename (CODENAMES.md), shown in the settings menu and the session log:
   headset.
 
 ### Added
+- **Saved session logs, a black box, and detailed mode** (naomi.10;
+  LOGGING.md). Each launch writes its own file in `Mods/Vivify/Sessions/`
+  (`Vivify_<date>_<time>_<build>-<commit>.txt`) instead of replacing
+  VivifySession.txt; the 10 most recent and the 5 most recent that ended
+  unexpectedly are kept (96 MB at most), listed in `index.txt` with the maps
+  played and how each ended, and `latest.txt` names the current one. Every
+  line carries the wall-clock and song time and a tag. The header records the
+  build and codename, commit, converter version, headset and OS build, GPU
+  and GL details, the refresh rate, memory, battery, heat, every setting,
+  every mod with its version and file time, and what changed since the last
+  session. Each level start gets a load timeline and an asset inventory
+  (every shader and how many of its materials draw a stand-in), each song
+  section a frame-time histogram, refreshes dropped, garbage collections,
+  memory and heat, and the slow-frame sampler names first-use shader
+  compiles. GL errors are checked every 2 s on the render thread.
+  - The black box keeps the last 4096 events (frames, breadcrumbs, warnings,
+    loads, cameras, render targets, scale changes, events, GL errors) in a
+    memory-mapped file that survives a crash without a signal handler; the
+    next launch says how the previous session ended and appends the box to
+    its file when it did not quit cleanly.
+  - Detailed Logging (Debug, off) adds a line per frame, Vivify's own cost by
+    part, and what was in view during slow frames.
+  - All writing is on a thread of its own; repeated lines are rate-limited;
+    e-mail addresses and account-like values are scrubbed. Each song reports
+    what logging cost the game's threads per frame.
+  - `tools/logdigest` turns a session into one page; `tools/pull` copies
+    every saved session off the headset (read-only, never overwriting) and
+    digests the new ones. The old vivify_global.txt is kept, no longer
+    written.
 - **Geometry-shader effects on static mesh particles** (naomi.8, setting
   "Emulate Geometry Effects On Particles", on). A particle system's
   vertices are built by Unity every frame without the corner data the

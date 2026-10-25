@@ -99,6 +99,7 @@ files.
 | Menu name | Key | Default | What it does |
 |---|---|---|---|
 | Debug Logging | `vivifyDebugLogging` | off | Writes far more detail to the session log. |
+| Detailed Logging | `detailedLogging` | off | Layer 3 of the session log (LOGGING.md): a line per frame during songs, Vivify's own cost by part every second, and detail around slow frames. New in naomi.10. |
 | Slow-Frame Sampler | `slowFrameSampler` | on | During frames over 100 ms, records where the main and render threads were, summed per song section in the log. Costs nothing while frames are fast. |
 | Debug: Fixed Resolution % (0 = off) | `performanceModeFixedScalePercent` | 0 | Holds the resolution at this scale (40–95) for a whole song, for A/B tests. |
 | Debug: Switch Off For A Cost Test | `debugCostTest` | Nothing | Switches one kind of drawing off for the song (skies, transparent effects, depth pre-pass, emulated geometry, blits, scenery), so the log shows its cost. The map looks wrong while it is set. |
@@ -151,7 +152,7 @@ control has a hover hint, and there is a reset-to-defaults button.
 | Slow-Frame Sampler (diagnostics) | Slow-Frame Sampler (now under Debug) |
 | Debug logging | Debug Logging (now under Debug) |
 
-Moved to Debug: Debug Logging, Slow-Frame Sampler, Debug: Fixed Resolution %,
+New in Debug: Detailed Logging. Moved to Debug: Debug Logging, Slow-Frame Sampler, Debug: Fixed Resolution %,
 Debug: Switch Off For A Cost Test, GPU Instancing For Scenery, Translate
 Shaders On Conversion, Disable Beat 0 Filmgrain Blit, Disable CreateCamera
 Depth and Disable VR Center Adjust Handling.
