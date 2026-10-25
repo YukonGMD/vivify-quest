@@ -35,6 +35,7 @@
 #include "UnityEngine/Shader.hpp"
 #include "UnityEngine/Transform.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace Vivify {
@@ -70,6 +71,22 @@ struct Rotation {
                                 m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z);
   }
 };
+
+// ParticleSystem.GetParticles(Particle[] particles, int size, int offset),
+// called through Unity's internal call with the array itself. The generated
+// binding declares the array parameter by reference (its [Out] attribute) and
+// passes the address of the caller's ArrayW, while the managed method hands
+// its argument straight to Unity, which fills the array it is given: naomi.8
+// had Unity write every particle over Runtime::Update's stack, and Aether
+// aborted on its first frame (__stack_chk_fail). Null when the call is
+// missing; the system then keeps its stand-in.
+using GetParticlesCall = int32_t (*)(UnityEngine::ParticleSystem* system, void* particles, int32_t size,
+                                     int32_t offset);
+GetParticlesCall ResolveGetParticles() {
+  static auto* const call =
+      reinterpret_cast<GetParticlesCall>(ResolveEngineIcall("UnityEngine.ParticleSystem::GetParticles"));
+  return call;
+}
 
 // What says the particles held still: their count and a sum over all of them.
 double ParticleSignature(ArrayW<UnityEngine::ParticleSystem_Particle> const& particles, int count) {
@@ -135,8 +152,16 @@ void Runtime::UpdateParticleBakes() {
       continue;
     }
     if (count <= 0 || bakedThisFrame) continue;
+    auto const getParticles = ResolveGetParticles();
+    if (getParticles == nullptr) {
+      bake.state = ParticleBake::kGaveUp;
+      PaperLogger.warn("Vivify particle emulation: '{}' keeps the stand-in: ParticleSystem.GetParticles is missing "
+                       "in this game build", bake.name);
+      continue;
+    }
     ArrayW<UnityEngine::ParticleSystem_Particle> particles(static_cast<il2cpp_array_size_t>(count));
-    int const got = system->GetParticles(byref(particles), count);
+    // Never more than the array holds.
+    int const got = std::clamp(getParticles(system, particles.convert(), count, 0), 0, count);
     double const signature = ParticleSignature(particles, got);
     if (got != bake.count || signature != bake.signature) {
       // Still being emitted, or moving: look again in a moment.

@@ -196,6 +196,15 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **naomi.8 crashed 743 Aether on its first frame** (naomi.9). Particle
+  emulation read the particles with the generated `GetParticles` binding,
+  which declares the array parameter by reference and so passes the
+  address of a local variable; Unity fills the array it is given, and wrote
+  the particles over the stack of Vivify's per-frame update, which then
+  aborted (`__stack_chk_fail`). The particles are now read through Unity's
+  internal call with the array itself, never more than the array holds; if
+  the call is missing, the system keeps its stand-in. With Performance Mode
+  on or off alike, as the crash came from the particle bake alone.
 - **The `[PERF]` summary could count missed refreshes against the wrong
   refresh rate** (naomi.7). When OVRManager had no display to ask, it
   guessed from the median frame: naomi.6's first Aether play guessed 90 Hz
