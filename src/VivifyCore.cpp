@@ -304,6 +304,10 @@ void Runtime::RegisterSyncedObject(UnityEngine::GameObject* root, float startTim
     VIVIFY_DEBUG("Vivify sync: registered '{}' with {} video / {} animator / {} particle component(s), startTime={}",
                  IsAlive(root) ? ToStdString(root->get_name()) : std::string("?"),
                  synced.videoPlayers.size(), synced.animators.size(), synced.particleSystems.size(), startTime);
+    _levelPins.Pin(synced.root);
+    for (auto* player : synced.videoPlayers) _levelPins.Pin(player);
+    for (auto* animator : synced.animators) _levelPins.Pin(animator);
+    for (auto* system : synced.particleSystems) _levelPins.Pin(system);
     _syncedObjects.emplace_back(std::move(synced));
     _animationTargetsDirty = true;
   }
@@ -659,6 +663,8 @@ void Runtime::ResetRuntime(std::string_view reason) {
   _inMultiplayerGameplayCached = false;
   _inMultiplayerGameplay = false;
   _isResetting = false;
+  // Everything this level kept has been put back or destroyed above.
+  _levelPins.ReleaseAll();
 }
 
 // ---------------------------------------------------------------------------

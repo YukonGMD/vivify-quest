@@ -10,6 +10,7 @@
 #include <mutex>
 #include "VivifyTypes.hpp"
 #include "VivifyPerfMode.hpp"
+#include "VivifyPins.hpp"
 #include "VivifyPerfStats.hpp"
 #include <memory>
 #include "VivifyGeometryEmulation.hpp"
@@ -638,6 +639,12 @@ private:
   std::unordered_set<int> _emulationMeshSet;  // the rebuilt meshes
   std::unordered_map<int, SafePtrUnity<UnityEngine::Material>> _emulationStandIns;  // by original
   std::unordered_map<int, SafePtrUnity<UnityEngine::Material>> _standInOriginals;  // by copy (naomi.8)
+  // Strong GC handles on the Unity objects Vivify keeps in its own containers
+  // (naomi.10, VivifyPins.hpp): level objects are released at the end of
+  // ResetRuntime, the bundle and its assets in ReleaseMainBundle.
+  ObjectPins _levelPins;
+  ObjectPins _bundlePins;
+  void PinReplacement(void const* key, VisualReplacement const& replacement);
   // Geometry emulation for static mesh particles (naomi.8,
   // VivifyParticleEmulation.cpp): found when a prefab goes live, baked once its
   // particles hold still.

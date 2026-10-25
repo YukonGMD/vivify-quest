@@ -643,6 +643,7 @@ void Runtime::PreloadInstantiatePrefabs() {
       if (IsAlive(instance)) {
         instance->SetActive(false);
         data.instance = instance;
+        _levelPins.Pin(instance);
         CountPrefabComponents(data);
       }
     }
@@ -697,6 +698,7 @@ void Runtime::InstantiatePrefab(CustomJSONData::CustomEventData* customEventData
       return;
     }
     data.instance = UnityEngine::Object::Instantiate(prefab);
+    _levelPins.Pin(data.instance);
     if (!IsAlive(data.instance)) {
       data.instance = nullptr;
       PaperLogger.warn("Vivify InstantiatePrefab: Instantiate of '{}' returned null", data.asset);
@@ -745,6 +747,9 @@ void Runtime::InstantiatePrefab(CustomJSONData::CustomEventData* customEventData
   FindParticleBakes(instance, storageId);
   VIVIFY_DEBUG("Vivify InstantiatePrefab spawned: id='{}' asset='{}' tracks={} animators={} offscreenCulled={}",
                storageId, data.asset, data.tracks.size(), animators.size(), culledAnimators);
+  _levelPins.Pin(instance);
+  for (auto* animator : animators) _levelPins.Pin(animator);
+  for (auto* system : particleSystems) _levelPins.Pin(system);
   _livePrefabs[storageId] = LivePrefab{
       .gameObject = instance,
       .tracks = data.tracks,
@@ -766,6 +771,11 @@ bool Runtime::DestroyPrefabById(std::string const& id) {
   auto prefab = std::move(it->second);
   _livePrefabs.erase(it);
   ReleaseParticleBakes(id);
+  // The instance is about to be destroyed: nothing may use it again, the
+  // level's teardown included (naomi.9 destroyed it a second time from here).
+  for (auto& [eventData, instantiate] : _instantiatePrefabs) {
+    if (instantiate.instance == prefab.gameObject) instantiate.instance = nullptr;
+  }
   UpdatePerfPrefabCounts();
   if (prefab.gameObject != nullptr) {
     UnregisterSyncedObject(prefab.gameObject);
@@ -1283,6 +1293,7 @@ void Runtime::ReplaceNoteVisuals(GlobalNamespace::NoteController* noteController
                hideOriginal, replacement.disabledRenderers.size());
   replacement.hideOriginal = hideOriginal;
   replacement.appliedFingerprint = ComputePrefabFingerprint(infos);
+  PinReplacement(noteController, replacement);
   _noteReplacements[noteController] = std::move(replacement);
 }
 
@@ -1388,6 +1399,7 @@ void Runtime::ApplySaberVisuals(GlobalNamespace::SaberModelController* smc, Glob
                replacement.replacementRenderers.size(), replacement.disabledRenderers.size());
   if (!replacement.spawnedObjects.empty() || !replacement.disabledRenderers.empty()) {
     replacement.appliedFingerprint = ComputeSaberFingerprint(modelInfos, trailInfos);
+    PinReplacement(smc, replacement);
     _saberReplacements[smc] = std::move(replacement);
   }
 }
@@ -1475,6 +1487,7 @@ void Runtime::ReplaceDebrisVisuals(GlobalNamespace::NoteDebris* debris) {
   }
   ApplyReplacementRenderersToMaterialBlock(debris->get_gameObject(), replacement, hideOriginal);
   if (!replacement.spawnedObjects.empty() || !replacement.disabledRenderers.empty()) {
+    PinReplacement(debris, replacement);
     _debrisReplacements[debris] = std::move(replacement);
   }
 }
@@ -1590,6 +1603,16 @@ void Runtime::SyncReplacementTintColors() {
   for (auto& [debris, replacement] : _debrisReplacements) {
     if (IsAlive(debris)) sync(replacement);
   }
+}
+
+void Runtime::PinReplacement(void const* key, VisualReplacement const& replacement) {
+  _levelPins.Pin(key);
+  for (auto* object : replacement.spawnedObjects) _levelPins.Pin(object);
+  for (auto* renderer : replacement.disabledRenderers) _levelPins.Pin(renderer);
+  for (auto* renderer : replacement.replacementRenderers) _levelPins.Pin(renderer);
+  for (auto* trail : replacement.followedTrails) _levelPins.Pin(trail);
+  _levelPins.Pin(replacement.materialPropertyBlockController);
+  if (replacement.originalMaterialBlockRenderers) _levelPins.Pin(replacement.originalMaterialBlockRenderers.convert());
 }
 
 void Runtime::RestoreAllVisualReplacements() {

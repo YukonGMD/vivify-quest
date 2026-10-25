@@ -1887,6 +1887,7 @@ void Runtime::CacheBundleAssets() {
       continue;
     }
     if (!key.empty()) _assets[key] = asset;
+    _bundlePins.Pin(asset);
     auto name = asset->get_name();
     if (name) {
       auto nameKey = NormalizeAssetKey(il2cpp_utils::detail::to_string(name));
@@ -2079,6 +2080,9 @@ void Runtime::ReleaseMainBundle() {
   ReleaseDecodedTextures();
   if (UnityEngine::Object::op_Implicit_bool(_mainBundle)) _mainBundle->Unload(true);
   _mainBundle = nullptr;
+  _assets.clear();
+  _assetsByName.clear();
+  _bundlePins.ReleaseAll();
 }
 
 void Runtime::PreloadBundle(std::string const& bundlePath) {
@@ -2101,6 +2105,7 @@ void Runtime::PreloadBundle(std::string const& bundlePath) {
   VivifyBreadcrumb("bundle preload begin: '" + bundlePath + "'");
   _emulationList = ReadGeometryEmulationList(bundlePath);
   _mainBundle = UnityEngine::AssetBundle::LoadFromFile(StringW(bundlePath));
+  _bundlePins.Pin(_mainBundle);
   if (_mainBundle == nullptr) {
     VivifyBreadcrumb("bundle preload failed");
     if (GetVivifyDebugLogging()) {
@@ -2405,6 +2410,7 @@ void Runtime::LoadMainBundle() {
   ReleaseMainBundle();
   _emulationList = ReadGeometryEmulationList(bundlePath);
   _mainBundle = UnityEngine::AssetBundle::LoadFromFile(StringW(bundlePath));
+  _bundlePins.Pin(_mainBundle);
   if (_mainBundle == nullptr) {
     VivifyBreadcrumb("level bundle load failed");
     if (GetVivifyDebugLogging()) {

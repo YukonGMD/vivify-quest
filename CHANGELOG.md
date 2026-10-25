@@ -196,6 +196,19 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **Random crashes when a level ended or another was selected** (naomi.10).
+  Vivify kept Unity objects -- its prefab instances, the note renderers it
+  hides, the copies it spawns, bundle assets -- as plain pointers in its
+  own lists, which the game's garbage collector cannot see. Once a
+  collection had freed such an object's wrapper, the next check read freed
+  memory, took it for alive, and the call after it crashed: naomi.9 crashed
+  twice this way while tearing a level down (switching a freed note
+  renderer back on; destroying a prefab instance a DestroyObject event had
+  already destroyed). Every object Vivify keeps now holds a strong GC
+  handle until the level ends (or, for bundle assets, until the bundle is
+  released), and a destroyed prefab instance is forgotten everywhere at
+  once. Memory was not the cause: no low-memory kill or warning near
+  either crash.
 - **naomi.8 crashed 743 Aether on its first frame** (naomi.9). Particle
   emulation read the particles with the generated `GetParticles` binding,
   which declares the array parameter by reference and so passes the
