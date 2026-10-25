@@ -198,6 +198,18 @@ jobs:
             -o /tmp/pins tools/pins/main.cpp src/VivifyPins.cpp
         /tmp/pins
 
+  settings-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Settings table and config migration tests
+      run: |
+        g++ -std=c++20 -O1 -g -fsanitize=address,undefined -I include -I extern/includes \
+            -o /tmp/settingstest tools/settings/main.cpp src/VivifySettings.cpp
+        /tmp/settingstest tools/settings/fixtures SETTINGS.md
+
   symbolize-tests:
     runs-on: ubuntu-latest
     steps:

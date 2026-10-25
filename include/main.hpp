@@ -53,9 +53,6 @@ bool GetEmulateGeometryShaderEffects();
 bool GetPoolNoteReplacements();
 // Converted maps' scenery keeps GPU instancing (naomi.5, experimental); off by default.
 bool GetSceneryGpuInstancing();
-// Whether a shader a map's Quest bundle shipped empty is replaced by the PC
-// build of it, converted (VivifyAssets.cpp).
-bool GetUsePcShadersForEmptyShaders();
 // Fraction (0.25-1) of the eye resolution that map post-process effects render
 // at (0.14.20); 1 renders them at full resolution, as before.
 float GetEffectResolutionScale();

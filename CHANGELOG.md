@@ -14,6 +14,18 @@ conversion cache version, and cached conversions are redone automatically.
 Test builds report themselves as 0.14.25-naomi.N.
 
 ### Changed
+- **The settings menu is in three parts** (naomi.10). Everyday (Performance
+  Mode, Effect Resolution %, Plain Notes And Sabers, Submit Scores, and
+  Convert All PC Bundles Now) fits on one screen. Advanced follows,
+  grouped: Performance Mode, How maps look, PC maps, Other. Debug holds the
+  test and isolation switches and shows only with "Show Developer Options";
+  while it is hidden, a line says if any of them is not at its default.
+  Every control has a one-line hover hint, several names are plainer (keys
+  unchanged), and "Reset All Vivify Settings To Defaults" is new. No default
+  changed and no setting behaves differently; saved settings carry over (host
+  test on the tester's naomi.9 config file). Two settings nothing read were
+  removed: `multipassRendering` and `pcShadersForEmptyQuestShaders`.
+  SETTINGS.md lists every setting.
 - **Performance mode no longer blanks the screen** (naomi.8, setting
   "Performance Mode For Heavy Maps", still off). naomi.7 lowered the eye
   resolution with `XRSettings.eyeTextureResolutionScale`, which reallocates

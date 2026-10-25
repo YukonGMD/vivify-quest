@@ -1,0 +1,19 @@
+{
+    "multipassRendering": true,
+    "vivifyDebugLogging": true,
+    "disableAllBlits": false,
+    "disableVisualsInMultiplayer": false,
+    "convertPcBundlesOnDevice": true,
+    "standInShading": false,
+    "sceneDepthTexture": true,
+    "translateShadersOnConversion": true,
+    "audioLink": false,
+    "prepareShaders": true,
+    "offscreenCulling": true,
+    "pcShadersForEmptyQuestShaders": false,
+    "standInShaderName": "Custom/UnlitGlow",
+    "effectResolutionPercent": 10,
+    "farCullingDistance": 200,
+    "performanceModeFloorPercent": "70",
+    "debugCostTest": 9
+}

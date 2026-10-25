@@ -18,6 +18,12 @@
 #include "bsml/shared/BSML-Lite/Creation/Layout.hpp"
 #include "bsml/shared/BSML-Lite/Creation/Settings.hpp"
 #include "bsml/shared/BSML-Lite/Creation/Text.hpp"
+#include "bsml/shared/BSML-Lite/Creation/Misc.hpp"
+#include "bsml/shared/BSML/Components/Settings/ToggleSetting.hpp"
+#include "UnityEngine/UI/Button.hpp"
+#include "VivifySettings.hpp"
+#include <algorithm>
+#include <array>
 #include "beatsaber-hook/shared/utils/typedefs-wrappers.hpp"
 #include "HMUI/CurvedTextMeshPro.hpp"
 #include "bsml/shared/BSML/Settings/BSMLSettings.hpp"
@@ -32,7 +38,6 @@ static modloader::ModInfo modInfo{MOD_ID, VERSION, 0};
 void EnsureConfigDefaults();
 
 namespace {
-constexpr std::string_view kMultipassRenderingConfigKey = "multipassRendering";
 constexpr std::string_view kVivifyDebugLoggingConfigKey = "vivifyDebugLogging";
 constexpr std::string_view kDisableBeat0FilmgrainBlitConfigKey = "disableBeat0FilmgrainBlit";
 constexpr std::string_view kDisableAllBlitsConfigKey = "disableAllBlits";
@@ -57,7 +62,6 @@ constexpr std::string_view kGeometryEffectsConfigKey = "drawGeometryShaderEffect
 constexpr std::string_view kEmulateGeometryConfigKey = "emulateGeometryShaderEffects";
 constexpr std::string_view kPoolReplacementsConfigKey = "poolNoteReplacements";
 constexpr std::string_view kSceneryInstancingConfigKey = "sceneryGpuInstancing";
-constexpr std::string_view kPcShadersForEmptyConfigKey = "pcShadersForEmptyQuestShaders";
 constexpr std::string_view kStandInShaderNameConfigKey = "standInShaderName";
 constexpr std::string_view kEffectResolutionConfigKey = "effectResolutionPercent";
 // A new key: the setting is now off by default, and the old key
@@ -75,7 +79,7 @@ constexpr std::string_view kPerfDepthMapsConfigKey = "performanceModeScaleDepthM
 constexpr std::string_view kPerfLearnConfigKey = "performanceModeLearnedProfiles";
 constexpr std::string_view kPerfFixedScaleConfigKey = "performanceModeFixedScalePercent";
 constexpr std::string_view kDebugCostTestConfigKey = "debugCostTest";
-bool gMultipassRenderingEnabled = true;
+constexpr std::string_view kShowDeveloperOptionsConfigKey = "showDeveloperOptions";
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
 bool gDisableAllBlits = false;
@@ -124,7 +128,6 @@ bool gGeometryEffects = false;
 bool gEmulateGeometry = true;
 bool gPoolReplacements = true;
 bool gSceneryInstancing = false;
-bool gPcShadersForEmpty = true;
 // Which shader to use as the stand-in, by name, overriding the automatic pick.
 //
 // Empty means "choose automatically". This exists because the right answer
@@ -163,6 +166,55 @@ bool gPerfDepthMaps = false;    // scale maps whose shaders read scene depth too
 bool gPerfLearn = false;        // learned profiles per map and difficulty
 int gPerfFixedScale = 0;        // debug: a fixed viewport scale, percent; 0 off
 int gDebugCostTest = 0;         // debug: what is switched off for a cost test (Vivify::CostTest)
+// Shows the Debug section of the menu (naomi.10).
+bool gShowDeveloperOptions = false;
+
+// Where each setting in Vivify::Settings' table is held while the game runs.
+struct BoundSetting {
+  std::string_view key;
+  bool* boolValue = nullptr;
+  int* intValue = nullptr;
+  std::string* stringValue = nullptr;
+};
+std::array<BoundSetting, 37> const kBoundSettings = {{
+    {kVivifyDebugLoggingConfigKey, &gVivifyDebugLogging},
+    {kDisableBeat0FilmgrainBlitConfigKey, &gDisableBeat0FilmgrainBlit},
+    {kDisableAllBlitsConfigKey, &gDisableAllBlits},
+    {kDisableCreateCameraDepthConfigKey, &gDisableCreateCameraDepth},
+    {kDisableCustomNoteVisualsConfigKey, &gDisableCustomNoteVisuals},
+    {kDisableVisualsInMultiplayerConfigKey, &gDisableVisualsInMultiplayer},
+    {kDisableVRCenterAdjustConfigKey, &gDisableVRCenterAdjust},
+    {kConvertPcBundlesOnDeviceConfigKey, &gConvertPcBundlesOnDevice},
+    {kStandInShadingConfigKey, &gStandInShading},
+    {kSceneDepthConfigKey, &gSceneDepth},
+    {kSubmitScoresConfigKey, &gSubmitScores},
+    {kTranslateShadersConfigKey, &gTranslateShaders},
+    {kAudioLinkConfigKey, &gAudioLink},
+    {kMapRealtimeShadowsConfigKey, &gMapRealtimeShadows},
+    {kReplayRenderModeConfigKey, &gReplayRenderMode},
+    {kBlitFixConfigKey, &gBlitFix},
+    {kPrepareShadersConfigKey, &gPrepareShaders},
+    {kGeometryEffectsConfigKey, &gGeometryEffects},
+    {kEmulateGeometryConfigKey, &gEmulateGeometry},
+    {kPoolReplacementsConfigKey, &gPoolReplacements},
+    {kSceneryInstancingConfigKey, &gSceneryInstancing},
+    {kStandInShaderNameConfigKey, nullptr, nullptr, &gStandInShaderName},
+    {kEffectResolutionConfigKey, nullptr, &gEffectResolution},
+    {kOffscreenCullingConfigKey, &gOffscreenCulling},
+    {kCrashGuardConfigKey, &gCrashGuard},
+    {kPcBundleForMissingShadersConfigKey, &gPcBundleForMissingShaders},
+    {kFarCullingConfigKey, nullptr, &gFarCullingDistance},
+    {kSlowFrameSamplerConfigKey, &gSlowFrameSampler},
+    {kParticleGeometryConfigKey, &gParticleGeometry},
+    {kPerformanceModeConfigKey, &gPerformanceMode},
+    {kPerfFloorConfigKey, nullptr, &gPerfFloor},
+    {kPerfHalfRefreshConfigKey, &gPerfHalfRefresh},
+    {kPerfDepthMapsConfigKey, &gPerfDepthMaps},
+    {kPerfLearnConfigKey, &gPerfLearn},
+    {kPerfFixedScaleConfigKey, nullptr, &gPerfFixedScale},
+    {kDebugCostTestConfigKey, nullptr, &gDebugCostTest},
+    {kShowDeveloperOptionsConfigKey, &gShowDeveloperOptions},
+}};
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
 //
@@ -388,66 +440,21 @@ void EnsureConfigObject() {
   }
 }
 
-// The string equivalent of EnsureBoolConfigValue, for settings whose value is a
-// name rather than a switch.
-bool EnsureStringConfigValue(std::string_view key, std::string const& defaultValue,
-                             std::string& value) {
-  auto& doc = getConfig().config;
-  auto it = doc.FindMember(key.data());
-  if (it != doc.MemberEnd() && it->value.IsString()) {
-    value.assign(it->value.GetString(), it->value.GetStringLength());
-    return false;
+// Copies every setting from the config document into the variable it lives
+// in. The document has been through Vivify::Settings::Load, so every value is
+// present and valid.
+void ApplyConfigValues() {
+  auto const& doc = getConfig().config;
+  for (auto const& bound : kBoundSettings) {
+    if (bound.boolValue) *bound.boolValue = Vivify::Settings::GetBool(doc, bound.key);
+    if (bound.intValue) *bound.intValue = Vivify::Settings::GetInt(doc, bound.key);
+    if (bound.stringValue) *bound.stringValue = Vivify::Settings::GetString(doc, bound.key);
   }
-
-  auto& allocator = doc.GetAllocator();
-  value = defaultValue;
-  rapidjson::Value stored(defaultValue.c_str(), static_cast<rapidjson::SizeType>(defaultValue.size()),
-                          allocator);
-  if (it == doc.MemberEnd()) {
-    doc.AddMember(rapidjson::Value(key.data(), allocator), stored, allocator);
-  } else {
-    it->value = stored;
+  for (auto const& def : Vivify::Settings::All()) {
+    bool const bound = std::any_of(kBoundSettings.begin(), kBoundSettings.end(),
+                                   [&](BoundSetting const& b) { return b.key == def.key; });
+    if (!bound) PaperLogger.error("Vivify settings: '{}' is in the settings table but not bound", def.key);
   }
-  return true;
-}
-
-// The integer equivalent of EnsureBoolConfigValue; a stored value outside
-// [minValue, maxValue] is replaced by the default.
-bool EnsureIntConfigValue(std::string_view key, int defaultValue, int minValue, int maxValue, int& value) {
-  auto& doc = getConfig().config;
-  auto it = doc.FindMember(key.data());
-  if (it != doc.MemberEnd() && it->value.IsInt() && it->value.GetInt() >= minValue &&
-      it->value.GetInt() <= maxValue) {
-    value = it->value.GetInt();
-    return false;
-  }
-
-  auto& allocator = doc.GetAllocator();
-  value = defaultValue;
-  if (it == doc.MemberEnd()) {
-    doc.AddMember(rapidjson::Value(key.data(), allocator), rapidjson::Value(defaultValue), allocator);
-  } else {
-    it->value.SetInt(defaultValue);
-  }
-  return true;
-}
-
-bool EnsureBoolConfigValue(std::string_view key, bool defaultValue, bool& value) {
-  auto& doc = getConfig().config;
-  auto it = doc.FindMember(key.data());
-  if (it != doc.MemberEnd() && it->value.IsBool()) {
-    value = it->value.GetBool();
-    return false;
-  }
-
-  auto& allocator = doc.GetAllocator();
-  value = defaultValue;
-  if (it == doc.MemberEnd()) {
-    doc.AddMember(rapidjson::Value(key.data(), allocator), rapidjson::Value(defaultValue), allocator);
-  } else {
-    it->value.SetBool(defaultValue);
-  }
-  return true;
 }
 
 // True only while the settings view controller is being constructed.
@@ -509,10 +516,93 @@ void SetIntConfigValue(std::string_view key, int newValue, int& value) {
 // aware liveness check -- a plain SafePtr is not even permitted for Unity
 // types.
 SafePtrUnity<HMUI::CurvedTextMeshPro> gConvertStatusText;
+// The same text beside the buttons in Advanced, which are a screen further
+// down (naomi.10).
+SafePtrUnity<HMUI::CurvedTextMeshPro> gActionStatusText;
 
 void SetConvertStatusText(std::string const& text) {
-  if (!gConvertStatusText) return;
-  gConvertStatusText->set_text(StringW(text));
+  if (gConvertStatusText) gConvertStatusText->set_text(StringW(text));
+  if (gActionStatusText) gActionStatusText->set_text(StringW(text));
+}
+
+// The Debug section's controls, shown only with "Show Developer Options"
+// (naomi.10), and the line that says when a hidden one is not at its default.
+std::vector<SafePtrUnity<UnityEngine::GameObject>> gDebugObjects;
+SafePtrUnity<HMUI::CurvedTextMeshPro> gDeveloperNote;
+
+void ShowDebugSection(bool show) {
+  for (auto& object : gDebugObjects) {
+    if (object) object->SetActive(show);
+  }
+  if (!gDeveloperNote) return;
+  std::string const changed =
+      Vivify::Settings::NonDefault(getConfig().config, Vivify::Settings::Section::Debug);
+  gDeveloperNote->set_text(StringW("<size=70%>Developer options not at their defaults: " + changed + "</size>"));
+  gDeveloperNote->get_gameObject()->SetActive(!show && !changed.empty());
+}
+
+StringW SettingLabel(std::string_view key) {
+  auto const* def = Vivify::Settings::Find(key);
+  return StringW(std::string(def != nullptr ? def->label : key));
+}
+
+UnityEngine::GameObject* WithHint(UnityEngine::GameObject* object, std::string_view hint) {
+  if (object != nullptr && !hint.empty()) BSML::Lite::AddHoverHint(object, StringW(std::string(hint)));
+  return object;
+}
+
+UnityEngine::GameObject* WithSettingHint(UnityEngine::GameObject* object, std::string_view key) {
+  auto const* def = Vivify::Settings::Find(key);
+  return WithHint(object, def != nullptr ? def->hint : std::string_view());
+}
+
+// A toggle for one on/off setting from the table, named and hinted from it.
+UnityEngine::GameObject* AddToggle(UnityEngine::Transform* parent, std::string_view key, bool& value,
+                                   std::function<void(bool)> after = nullptr) {
+  auto* toggle = BSML::Lite::CreateToggle(parent, SettingLabel(key), value, [key, &value, after](bool enabled) {
+    SetBoolConfigValue(key, enabled, value);
+    if (after) after(enabled);
+  });
+  return toggle != nullptr ? WithSettingHint(toggle->get_gameObject(), key) : nullptr;
+}
+
+// An increment for one number setting from the table, with its range and step.
+UnityEngine::GameObject* AddIncrement(UnityEngine::Transform* parent, std::string_view key, int& value) {
+  auto const* def = Vivify::Settings::Find(key);
+  if (def == nullptr) return nullptr;
+  auto* setting = BSML::Lite::CreateIncrementSetting(
+      parent, SettingLabel(key), 0, static_cast<float>(def->step), static_cast<float>(value), true, true,
+      static_cast<float>(def->minValue), static_cast<float>(def->maxValue), [key, def, &value](float chosen) {
+        SetIntConfigValue(key, std::clamp(static_cast<int>(chosen + 0.5f), def->minValue, def->maxValue), value);
+      });
+  return setting != nullptr ? WithSettingHint(setting->get_gameObject(), key) : nullptr;
+}
+
+UnityEngine::GameObject* AddButton(UnityEngine::Transform* parent, std::u16string_view text, std::string_view hint,
+                                   std::function<void()> onClick) {
+  auto* button = BSML::Lite::CreateUIButton(parent, StringW(text), onClick);
+  return button != nullptr ? WithHint(button->get_gameObject(), hint) : nullptr;
+}
+
+UnityEngine::GameObject* AddHeading(UnityEngine::Transform* parent, std::string_view text) {
+  auto* heading = BSML::Lite::CreateText(parent, StringW("<b>" + std::string(text) + "</b>"));
+  return heading != nullptr ? heading->get_gameObject() : nullptr;
+}
+
+// A button that does nothing until it is pressed twice within five seconds,
+// for actions that cannot be undone.
+std::function<void()> PressTwice(std::string confirm, std::function<void()> action) {
+  auto armedUntil = std::make_shared<std::chrono::steady_clock::time_point>();
+  return [armedUntil, confirm = std::move(confirm), action = std::move(action)]() {
+    auto const now = std::chrono::steady_clock::now();
+    if (now > *armedUntil) {
+      *armedUntil = now + std::chrono::seconds(5);
+      SetConvertStatusText(confirm);
+      return;
+    }
+    *armedUntil = {};
+    action();
+  };
 }
 
 void RegisterModSettings() {
@@ -538,6 +628,8 @@ void RegisterModSettings() {
         try {
         auto* container = BSML::Lite::CreateScrollableSettingsContainer(viewController->get_transform());
         if (container == nullptr) return;
+        UnityEngine::Transform* const parent = container->get_transform().ptr();
+        gDebugObjects.clear();
 
         // Which build is actually running, in the headset, without a file.
         // "the new features do not work" and "the new build did not install"
@@ -547,250 +639,25 @@ void RegisterModSettings() {
         // Built as a StringW from a std::string, the way every other text in
         // this menu is: the std::u16string this used to assemble by hand is
         // what took the menu down.
-        BSML::Lite::CreateText(container->get_transform(),
-                               StringW(std::string("Vivify ") + VERSION));
+        BSML::Lite::CreateText(parent, StringW(std::string("Vivify ") + VERSION));
 
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Debug logging", GetVivifyDebugLogging(),
-            [](bool value) { SetBoolConfigValue(kVivifyDebugLoggingConfigKey, value, gVivifyDebugLogging); });
-        // Diagnostics only, changes nothing on screen: during a frame that
-        // takes over 100 ms, where the main and render threads are, summed up
-        // per section of the song in the session log. Costs nothing while
-        // frames are fast; off if anything seems wrong with it.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Slow-Frame Sampler (diagnostics)", gSlowFrameSampler,
-            [](bool value) { SetBoolConfigValue(kSlowFrameSamplerConfigKey, value, gSlowFrameSampler); });
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Disable Beat 0 Filmgrain Blit", GetDisableBeat0FilmgrainBlit(),
-            [](bool value) { SetBoolConfigValue(kDisableBeat0FilmgrainBlitConfigKey, value, gDisableBeat0FilmgrainBlit); });
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Disable All Blits", gDisableAllBlits,
-            [](bool value) { SetBoolConfigValue(kDisableAllBlitsConfigKey, value, gDisableAllBlits); });
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Disable CreateCamera Depth", GetDisableCreateCameraDepth(),
-            [](bool value) { SetBoolConfigValue(kDisableCreateCameraDepthConfigKey, value, gDisableCreateCameraDepth); });
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Disable Custom Note Visuals", GetDisableCustomNoteVisuals(),
-            [](bool value) { SetBoolConfigValue(kDisableCustomNoteVisualsConfigKey, value, gDisableCustomNoteVisuals); });
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Disable Vivify Visuals In Multiplayer", GetDisableVisualsInMultiplayer(),
-            [](bool value) { SetBoolConfigValue(kDisableVisualsInMultiplayerConfigKey, value, gDisableVisualsInMultiplayer); });
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Disable VR Center Adjust Handling", GetDisableVRCenterAdjust(),
-            [](bool value) { SetBoolConfigValue(kDisableVRCenterAdjustConfigKey, value, gDisableVRCenterAdjust); });
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Convert PC Bundles On Device",
-            GetConvertPcBundlesOnDevice(),
-            [](bool value) {
-              SetBoolConfigValue(kConvertPcBundlesOnDeviceConfigKey, value, gConvertPcBundlesOnDevice);
-            });
-
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Stand-In Shading For Unsupported Shaders",
-            GetStandInShading(),
-            [](bool value) { SetBoolConfigValue(kStandInShadingConfigKey, value, gStandInShading); });
-
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Scene Depth For Map Shaders",
-            GetSceneDepthTexture(),
-            [](bool value) { SetBoolConfigValue(kSceneDepthConfigKey, value, gSceneDepth); });
-
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Translate Shaders On Conversion",
-            GetTranslateShadersOnConversion(),
-            [](bool value) { SetBoolConfigValue(kTranslateShadersConfigKey, value, gTranslateShaders); });
-
-        // "PC Shaders For Broken Quest Shaders" is no longer optional (0.14.10):
-        // empty Quest shaders always get their PC build.
-
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Map Realtime Shadows",
-            GetMapRealtimeShadows(),
-            [](bool value) { SetBoolConfigValue(kMapRealtimeShadowsConfigKey, value, gMapRealtimeShadows); });
-
-        // Converted maps with single-screen programs only, for replay and
-        // recording renderers. Kept in a cache of its own, so switching back
-        // and forth converts each map only once per mode.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Replay Render Mode (converted maps)",
-            GetReplayRenderMode(),
-            [](bool value) { SetBoolConfigValue(kReplayRenderModeConfigKey, value, gReplayRenderMode); });
-
-        // Experimental: a second, single-view build of a converted map's
-        // shaders for blits into screen textures. Off until seen working.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Blit Fix For Screen Textures (experimental)",
-            GetBlitScreenTextureFix(),
-            [](bool value) { SetBoolConfigValue(kBlitFixConfigKey, value, gBlitFix); });
-
-        // Compiles a converted map's shaders in the menu after selecting it,
-        // a little each frame, instead of all at once when the song starts.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Prepare Shaders Before Playing",
-            GetPrepareShadersBeforePlaying(),
-            [](bool value) { SetBoolConfigValue(kPrepareShadersConfigKey, value, gPrepareShaders); });
-
-        // Experimental: shaders with a geometry stage (wireframes, exploding
-        // triangles) are drawn without it instead of as grey stand-ins.
-        // Changing it reconverts the affected maps.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Draw Geometry-Shader Effects (experimental)",
-            GetDrawGeometryShaderEffects(),
-            [](bool value) { SetBoolConfigValue(kGeometryEffectsConfigKey, value, gGeometryEffects); });
-
-        // Wireframes, exploding triangles and generated grass on converted
-        // maps, drawn with their geometry stage's maths moved into the vertex
-        // stage (known shaders only; anything it cannot do keeps its
-        // stand-in). Changing it reconverts converted maps.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Emulate Geometry-Shader Effects",
-            GetEmulateGeometryShaderEffects(),
-            [](bool value) { SetBoolConfigValue(kEmulateGeometryConfigKey, value, gEmulateGeometry); });
-        // Particle systems whose particles hold still after one burst (743
-        // Aether's triangle explosions) are baked into one mesh so the
-        // emulated effect draws on them, as on PC. Off: they keep the
-        // stand-in colour.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Emulate Geometry Effects On Particles", gParticleGeometry,
-            [](bool value) { SetBoolConfigValue(kParticleGeometryConfigKey, value, gParticleGeometry); });
-
-        // Custom notes and cut debris reuse their copies instead of making a
-        // new one per note. Off makes a new copy every time, as before.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Reuse Note And Debris Copies",
-            GetPoolNoteReplacements(),
-            [](bool value) { SetBoolConfigValue(kPoolReplacementsConfigKey, value, gPoolReplacements); });
-
-        // Experimental, off by default: a converted map's scenery keeps its
-        // GPU instancing (many copies of one mesh in one draw), as on PC.
-        // Notes, debris and sabers keep it off. If scenery appears in the
-        // wrong place, turn this off. Changing it reconverts converted maps.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"GPU Instancing For Scenery (experimental)",
-            GetSceneryGpuInstancing(),
-            [](bool value) { SetBoolConfigValue(kSceneryInstancingConfigKey, value, gSceneryInstancing); });
-
-        // Renders map post-process effects (blits, screen textures) below eye
-        // resolution and scales the result up. Full-screen raymarchers cost
-        // per pixel: 50% is a quarter of the work.
-        BSML::Lite::CreateIncrementSetting(
-            container->get_transform(), u"Effect Resolution % (lower = less lag)", 0, 25.0f,
-            static_cast<float>(gEffectResolution), true, true, 25.0f, 100.0f, [](float value) {
-              int const percent = std::clamp(static_cast<int>(value + 0.5f), 25, 100);
-              SetIntConfigValue(kEffectResolutionConfigKey, percent, gEffectResolution);
-            });
-
-        // Plays the whole map from its converted PC build when the Quest
-        // bundle shipped shaders empty, instead of patching those shaders in.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Use Only PC Bundle For Missing Shaders", gPcBundleForMissingShaders,
-            [](bool value) {
-              SetBoolConfigValue(kPcBundleForMissingShadersConfigKey, value, gPcBundleForMissingShaders);
-            });
-
-        // After two loads of a converted map that never finish, it is
-        // reconverted without shader translation (grey stand-ins) so it can
-        // be played. Off: maps always keep their translated shaders.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Crash Guard (grey fallback after 2 freezes)", gCrashGuard,
-            [](bool value) { SetBoolConfigValue(kCrashGuardConfigKey, value, gCrashGuard); });
-
-        // Animators in the map's prefabs stop updating while nothing they
-        // draw is on screen; their animation resumes at the right time. Off by
-        // default: PC Vivify never culls, and an animator whose own animation
-        // is what brings its objects into view never resumes.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Offscreen Culling (less lag)", gOffscreenCulling,
-            [](bool value) { SetBoolConfigValue(kOffscreenCullingConfigKey, value, gOffscreenCulling); });
-
-        // Off by default: changes how heavy maps look. While a song runs over
-        // its frame budget, less of the eye buffers is drawn into (they are
-        // never reallocated mid-song, which is what blanked naomi.7), 2-5% a
-        // step down to the floor, and once the map turns out heavy,
-        // foveation HighTop and the GPU boost, kept until the song ends.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Performance Mode For Heavy Maps", gPerformanceMode,
-            [](bool value) { SetBoolConfigValue(kPerformanceModeConfigKey, value, gPerformanceMode); });
-        BSML::Lite::CreateIncrementSetting(
-            container->get_transform(), u"Performance Mode: Lowest Resolution %", 0, 5.0f,
-            static_cast<float>(gPerfFloor), true, true, 40.0f, 90.0f, [](float value) {
-              SetIntConfigValue(kPerfFloorConfigKey, std::clamp(static_cast<int>(value + 0.5f), 40, 90), gPerfFloor);
-            });
-        // The budget is one refresh (72/90/120 fps); on, two (36/45/60 fps).
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Performance Mode: Aim For Half The Refresh Rate", gPerfHalfRefresh,
-            [](bool value) { SetBoolConfigValue(kPerfHalfRefreshConfigKey, value, gPerfHalfRefresh); });
-        // Maps whose shaders read the scene depth texture keep full resolution
-        // unless this is on: at a smaller viewport their soft edges and depth
-        // effects can land in the wrong place.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Performance Mode: Also Scale Maps That Read Depth", gPerfDepthMaps,
-            [](bool value) { SetBoolConfigValue(kPerfDepthMapsConfigKey, value, gPerfDepthMaps); });
-        // Remembers per map and difficulty how heavy each second was, and on
-        // later plays eases down a little before the heavy parts.
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Performance Mode: Learn Each Map", gPerfLearn,
-            [](bool value) { SetBoolConfigValue(kPerfLearnConfigKey, value, gPerfLearn); });
-        BSML::Lite::CreateUIButton(container->get_transform(), u"Forget Learned Performance Profiles", []() {
-          std::error_code ec;
-          auto const removed = std::filesystem::remove_all(Vivify::PerfProfileDir(), ec);
-          SetConvertStatusText(ec ? "Could not remove the learned profiles"
-                                  : "Forgot " + std::to_string(removed > 0 ? removed - 1 : 0) + " learned profile(s)");
-        });
-        // Debug, for finding what the GPU time goes on: one category switched
-        // off for the whole song, so the [PERF] section lines show its cost.
-        // The map looks wrong while it is on: set it back to Nothing.
-        static std::array<std::string_view, Vivify::kCostTestCount> const costTests = {
-            "Nothing", "Skies", "Transparent effects and particles", "Depth pre-pass",
-            "Emulated geometry objects", "Post-processing blits", "Scenery"};
-        static std::vector<std::string_view> costTestValues(costTests.begin(), costTests.end());
-        BSML::Lite::CreateDropdown(
-            container->get_transform(), u"Debug: Switch Off For A Cost Test",
-            StringW(std::string(costTests[std::clamp(gDebugCostTest, 0, Vivify::kCostTestCount - 1)])),
-            std::span<std::string_view>(costTestValues), [](StringW value) {
-              std::string const chosen(value);
-              for (int i = 0; i < Vivify::kCostTestCount; i++) {
-                if (chosen == costTests[i]) SetIntConfigValue(kDebugCostTestConfigKey, i, gDebugCostTest);
-              }
-            });
-        // Debug, for A/B tests: the viewport at this scale for the whole song,
-        // whatever the map does. 0 is off.
-        BSML::Lite::CreateIncrementSetting(
-            container->get_transform(), u"Debug: Fixed Resolution % (0 = off)", 0, 5.0f,
-            static_cast<float>(gPerfFixedScale), true, true, 0.0f, 100.0f, [](float value) {
-              int percent = std::clamp(static_cast<int>(value + 0.5f), 0, 100);
-              if (percent > 0 && percent < 40) percent = 40;
-              SetIntConfigValue(kPerfFixedScaleConfigKey, percent == 100 ? 0 : percent, gPerfFixedScale);
-            });
-
-        // Draws nothing farther than this from the player. 0 is off: far
-        // scenery is part of many maps' look.
-        BSML::Lite::CreateIncrementSetting(
-            container->get_transform(), u"Far Culling Distance m (0 = off)", 0, 50.0f,
-            static_cast<float>(gFarCullingDistance), true, true, 0.0f, 1000.0f, [](float value) {
-              int const metres = std::clamp(static_cast<int>(value + 0.5f), 0, 1000);
-              SetIntConfigValue(kFarCullingConfigKey, metres, gFarCullingDistance);
-            });
-
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"AudioLink",
-            GetAudioLinkEnabled(),
-            [](bool value) { SetBoolConfigValue(kAudioLinkConfigKey, value, gAudioLink); });
-
-        BSML::Lite::CreateToggle(
-            container->get_transform(), u"Submit Scores On Vivify Maps",
-            GetSubmitScoresOnVivifyMaps(),
-            [](bool value) { SetBoolConfigValue(kSubmitScoresConfigKey, value, gSubmitScores); });
+        // Everyday (naomi.10): what a player changes from one session to the
+        // next, on one screen without scrolling. Everything else is under
+        // Advanced, and test switches under Debug; see SETTINGS.md.
+        AddToggle(parent, kPerformanceModeConfigKey, gPerformanceMode);
+        AddIncrement(parent, kEffectResolutionConfigKey, gEffectResolution);
+        AddToggle(parent, kDisableCustomNoteVisualsConfigKey, gDisableCustomNoteVisuals);
+        AddToggle(parent, kSubmitScoresConfigKey, gSubmitScores);
 
         // A map whose only asset bundle is a PC build has its play button
         // disabled, so it can never be selected into -- which also means the
         // per-level conversion that runs on level select can never fire for it.
         // This button converts every installed map in one pass instead, so
         // those levels become playable without having to be playable first.
-        gConvertStatusText = BSML::Lite::CreateText(container->get_transform(), u"Idle");
-        if (Vivify::IsBulkPcBundleConversionRunning()) SetConvertStatusText("Converting...");
-        // One progress callback for both buttons; they differ only in whether an
-        // already-cached conversion is reused or thrown away first.
+        //
+        // One progress callback for both conversion buttons; they differ only
+        // in whether an already-cached conversion is reused or thrown away
+        // first.
         static auto const startConversion = [](bool force) {
           if (Vivify::IsBulkPcBundleConversionRunning()) return;
           SetConvertStatusText(force ? "Reconverting..." : "Scanning...");
@@ -805,93 +672,172 @@ void RegisterModSettings() {
               },
               force);
         };
+        AddButton(parent, u"Convert All PC Bundles Now",
+                  "Converts every map that only has a PC bundle, so it can be played; converted maps are skipped.",
+                  []() { startConversion(false); });
+        gConvertStatusText = BSML::Lite::CreateText(parent, u"Idle");
 
-        BSML::Lite::CreateUIButton(
-            container->get_transform(), u"Convert All PC Bundles Now",
-            []() { startConversion(false); });
+        AddHeading(parent, "Advanced");
+        AddHeading(parent, "<size=80%>Performance Mode</size>");
+        AddIncrement(parent, kPerfFloorConfigKey, gPerfFloor);
+        AddToggle(parent, kPerfDepthMapsConfigKey, gPerfDepthMaps);
+        AddToggle(parent, kPerfLearnConfigKey, gPerfLearn);
+        AddButton(parent, u"Forget Learned Maps", "Deletes what Learn Each Map has remembered about every map.", []() {
+          std::error_code ec;
+          auto const removed = std::filesystem::remove_all(Vivify::PerfProfileDir(), ec);
+          SetConvertStatusText(ec ? "Could not remove the learned profiles"
+                                  : "Forgot " + std::to_string(removed > 0 ? removed - 1 : 0) + " learned profile(s)");
+        });
+        AddToggle(parent, kPerfHalfRefreshConfigKey, gPerfHalfRefresh);
 
+        AddHeading(parent, "<size=80%>How maps look</size>");
+        AddToggle(parent, kAudioLinkConfigKey, gAudioLink);
+        AddToggle(parent, kStandInShadingConfigKey, gStandInShading);
+        AddToggle(parent, kSceneDepthConfigKey, gSceneDepth);
+        AddToggle(parent, kEmulateGeometryConfigKey, gEmulateGeometry);
+        AddToggle(parent, kParticleGeometryConfigKey, gParticleGeometry);
+        AddToggle(parent, kGeometryEffectsConfigKey, gGeometryEffects);
+        AddToggle(parent, kBlitFixConfigKey, gBlitFix);
+        AddToggle(parent, kMapRealtimeShadowsConfigKey, gMapRealtimeShadows);
+        AddToggle(parent, kDisableAllBlitsConfigKey, gDisableAllBlits);
+        AddToggle(parent, kOffscreenCullingConfigKey, gOffscreenCulling);
+        AddIncrement(parent, kFarCullingConfigKey, gFarCullingDistance);
+        AddToggle(parent, kDisableVisualsInMultiplayerConfigKey, gDisableVisualsInMultiplayer);
+
+        AddHeading(parent, "<size=80%>PC maps</size>");
+        AddToggle(parent, kConvertPcBundlesOnDeviceConfigKey, gConvertPcBundlesOnDevice);
+        AddToggle(parent, kPrepareShadersConfigKey, gPrepareShaders);
+        AddToggle(parent, kPcBundleForMissingShadersConfigKey, gPcBundleForMissingShaders);
+        AddToggle(parent, kReplayRenderModeConfigKey, gReplayRenderMode);
+        AddToggle(parent, kCrashGuardConfigKey, gCrashGuard);
         // A cached conversion is keyed on the source bundle, so it is reused
         // even after the converter itself has been fixed. This is the way to
         // pick those fixes up without deleting the cache directory by hand.
-        // Two presses within five seconds: it sits next to Convert All, and it
-        // also clears every crash-guard strike.
-        BSML::Lite::CreateUIButton(
-            container->get_transform(), u"Force Reconvert All (ignore cache)",
-            []() {
-              static std::chrono::steady_clock::time_point armedUntil{};
-              auto const now = std::chrono::steady_clock::now();
-              if (now > armedUntil) {
-                armedUntil = now + std::chrono::seconds(5);
-                SetConvertStatusText("Press Force Reconvert again within 5 s: reconverts every PC map and "
-                                     "clears crash-guard strikes");
-                return;
-              }
-              armedUntil = {};
-              startConversion(true);
-            });
+        // It also clears every crash-guard strike.
+        AddButton(parent, u"Force Reconvert All (ignore cache)",
+                  "Converts every PC map again, ignoring what is cached, and clears crash-guard strikes.",
+                  PressTwice("Press Force Reconvert again within 5 s: reconverts every PC map and clears "
+                             "crash-guard strikes",
+                             []() { startConversion(true); }));
 
+        AddHeading(parent, "<size=80%>Other</size>");
+        AddToggle(parent, kPoolReplacementsConfigKey, gPoolReplacements);
+        gActionStatusText = BSML::Lite::CreateText(parent, u"");
+        AddButton(parent, u"Reset All Vivify Settings To Defaults",
+                  "Every Vivify setting back to its default. Maps and converted files are kept.",
+                  PressTwice("Press Reset Settings again within 5 s: every Vivify setting goes back to its default",
+                             []() {
+                               auto& config = getConfig();
+                               Vivify::Settings::ResetToDefaults(config.config);
+                               config.Write();
+                               ApplyConfigValues();
+                               PaperLogger.info("Vivify settings: all reset to their defaults from the menu");
+                               SetConvertStatusText("Settings reset to defaults. Reopen this menu to see them.");
+                             }));
         // Puts Vivify back to a fresh install's state, without touching the
         // maps: every converted bundle and crash-guard note, the PC bundles it
-        // downloaded into Quest maps' folders, and its settings. Two presses
-        // within five seconds, since it cannot be undone.
-        BSML::Lite::CreateUIButton(
-            container->get_transform(), u"Reset Vivify (clean slate)",
-            []() {
-              static std::chrono::steady_clock::time_point armedUntil{};
-              auto const now = std::chrono::steady_clock::now();
-              if (now > armedUntil) {
-                armedUntil = now + std::chrono::seconds(5);
-                SetConvertStatusText("Press Reset again within 5 s: deletes converted maps and downloaded PC "
-                                     "bundles, resets settings");
-                return;
-              }
-              armedUntil = {};
-              if (Vivify::IsBulkPcBundleConversionRunning()) {
-                SetConvertStatusText("A conversion pass is running; reset after it finishes");
-                return;
-              }
-              EnsureConfigObject();
-              getConfig().config.RemoveAllMembers();
-              EnsureConfigDefaults();
-              SetConvertStatusText("Resetting...");
-              Vivify::ResetToCleanSlate([](std::string const& summary) {
-                SetConvertStatusText(summary + ". Reopen this menu to see the settings.");
-              });
-            });
-
+        // downloaded into Quest maps' folders, and its settings.
+        AddButton(parent, u"Reset Vivify (clean slate)",
+                  "Deletes converted maps and downloaded PC bundles and resets settings. Maps are kept.",
+                  PressTwice("Press Reset again within 5 s: deletes converted maps and downloaded PC bundles, "
+                             "resets settings",
+                             []() {
+                               if (Vivify::IsBulkPcBundleConversionRunning()) {
+                                 SetConvertStatusText("A conversion pass is running; reset after it finishes");
+                                 return;
+                               }
+                               auto& config = getConfig();
+                               Vivify::Settings::ResetToDefaults(config.config);
+                               config.Write();
+                               ApplyConfigValues();
+                               SetConvertStatusText("Resetting...");
+                               Vivify::ResetToCleanSlate([](std::string const& summary) {
+                                 SetConvertStatusText(summary + ". Reopen this menu to see the settings.");
+                               });
+                             }));
         // Lists every Vivify map in VivifyMaps.txt, then replaces each with a
         // fresh BeatSaver download, for maps whose folders were changed by an
-        // earlier version. Two presses within five seconds.
-        BSML::Lite::CreateUIButton(
-            container->get_transform(), u"Redownload All Vivify Maps",
-            []() {
-              static std::chrono::steady_clock::time_point armedUntil{};
-              auto const now = std::chrono::steady_clock::now();
-              if (now > armedUntil) {
-                armedUntil = now + std::chrono::seconds(5);
-                SetConvertStatusText("Press Redownload again within 5 s: lists Vivify maps in VivifyMaps.txt, "
-                                     "then replaces each with a fresh BeatSaver download");
-                return;
-              }
-              armedUntil = {};
-              SetConvertStatusText("Finding Vivify maps...");
-              Vivify::RedownloadVivifyMaps([](std::string const& text) { SetConvertStatusText(text); });
-            });
+        // earlier version.
+        AddButton(parent, u"Redownload All Vivify Maps",
+                  "Lists Vivify maps in VivifyMaps.txt, then replaces each with a fresh BeatSaver download.",
+                  PressTwice("Press Redownload again within 5 s: lists Vivify maps in VivifyMaps.txt, then "
+                             "replaces each with a fresh BeatSaver download",
+                             []() {
+                               SetConvertStatusText("Finding Vivify maps...");
+                               Vivify::RedownloadVivifyMaps(
+                                   [](std::string const& text) { SetConvertStatusText(text); });
+                             }));
 
         // paperlog output is not reachable without adb, so Vivify writes its own
         // plain-text report next to its data. Showing the path here means the
         // file can be found without being told where to look.
-        BSML::Lite::CreateText(container->get_transform(),
-                               u"Diagnostics (both plain .txt, same folder):");
+        BSML::Lite::CreateText(parent, u"Diagnostics (both plain .txt, same folder):");
+        BSML::Lite::CreateText(parent, StringW("<size=70%>" + Vivify::Report::FilePath() + "</size>"));
+        BSML::Lite::CreateText(parent, StringW("<size=70%>" + std::string(kVivifyLogPath) + "</size>"));
         BSML::Lite::CreateText(
-            container->get_transform(),
-            StringW("<size=70%>" + Vivify::Report::FilePath() + "</size>"));
-        BSML::Lite::CreateText(
-            container->get_transform(),
-            StringW("<size=70%>" + std::string(kVivifyLogPath) + "</size>"));
-        BSML::Lite::CreateText(
-            container->get_transform(),
-            StringW("<size=70%>" + std::string(kVivifyLogDir) + "/vivify_global.txt (every session)</size>"));
+            parent, StringW("<size=70%>" + std::string(kVivifyLogDir) + "/vivify_global.txt (every session)</size>"));
+
+        AddToggle(parent, kShowDeveloperOptionsConfigKey, gShowDeveloperOptions,
+                  [](bool show) { ShowDebugSection(show); });
+        gDeveloperNote = BSML::Lite::CreateText(parent, u"");
+
+        // Debug: test and diagnostic switches, hidden unless "Show Developer
+        // Options" is on. New test-only switches go here.
+        // The whole row is hidden: its ancestor directly under the container,
+        // whichever object of the control BSML put the component on.
+        auto debug = [parent](UnityEngine::GameObject* object) {
+          if (object == nullptr) return;
+          UnityEngine::Transform* row = object->get_transform().ptr();
+          while (row != nullptr && row->get_parent().ptr() != nullptr && row->get_parent().ptr() != parent) {
+            row = row->get_parent().ptr();
+          }
+          if (row != nullptr && row->get_parent().ptr() == parent) gDebugObjects.emplace_back(row->get_gameObject());
+        };
+        debug(AddHeading(parent, "Debug"));
+        debug(AddHeading(parent, "<size=80%>Diagnostics</size>"));
+        debug(AddToggle(parent, kVivifyDebugLoggingConfigKey, gVivifyDebugLogging));
+        // Changes nothing on screen: during a frame that takes over 100 ms,
+        // where the main and render threads are, summed up per section of the
+        // song in the session log. Costs nothing while frames are fast.
+        debug(AddToggle(parent, kSlowFrameSamplerConfigKey, gSlowFrameSampler));
+        // For A/B tests: the viewport at this scale for the whole song,
+        // whatever the map does. 0 is off; 1-39 snaps to 40, 100 to off.
+        {
+          auto* setting = BSML::Lite::CreateIncrementSetting(
+              parent, SettingLabel(kPerfFixedScaleConfigKey), 0, 5.0f, static_cast<float>(gPerfFixedScale), true,
+              true, 0.0f, 100.0f, [](float value) {
+                int percent = std::clamp(static_cast<int>(value + 0.5f), 0, 100);
+                if (percent > 0 && percent < 40) percent = 40;
+                SetIntConfigValue(kPerfFixedScaleConfigKey, percent == 100 ? 0 : percent, gPerfFixedScale);
+              });
+          if (setting != nullptr) debug(WithSettingHint(setting->get_gameObject(), kPerfFixedScaleConfigKey));
+        }
+        // For finding what the GPU time goes on: one category switched off for
+        // the whole song, so the [PERF] section lines show its cost. The map
+        // looks wrong while it is on: set it back to Nothing.
+        {
+          static std::array<std::string_view, Vivify::kCostTestCount> const costTests = {
+              "Nothing", "Skies", "Transparent effects and particles", "Depth pre-pass",
+              "Emulated geometry objects", "Post-processing blits", "Scenery"};
+          static std::vector<std::string_view> costTestValues(costTests.begin(), costTests.end());
+          auto* dropdown = BSML::Lite::CreateDropdown(
+              parent, SettingLabel(kDebugCostTestConfigKey),
+              StringW(std::string(costTests[std::clamp(gDebugCostTest, 0, Vivify::kCostTestCount - 1)])),
+              std::span<std::string_view>(costTestValues), [](StringW value) {
+                std::string const chosen(value);
+                for (int i = 0; i < Vivify::kCostTestCount; i++) {
+                  if (chosen == costTests[i]) SetIntConfigValue(kDebugCostTestConfigKey, i, gDebugCostTest);
+                }
+              });
+          if (dropdown != nullptr) debug(WithSettingHint(dropdown->get_gameObject(), kDebugCostTestConfigKey));
+        }
+        debug(AddToggle(parent, kSceneryInstancingConfigKey, gSceneryInstancing));
+        debug(AddHeading(parent, "<size=80%>Switches for isolating a problem</size>"));
+        debug(AddToggle(parent, kTranslateShadersConfigKey, gTranslateShaders));
+        debug(AddToggle(parent, kDisableBeat0FilmgrainBlitConfigKey, gDisableBeat0FilmgrainBlit));
+        debug(AddToggle(parent, kDisableCreateCameraDepthConfigKey, gDisableCreateCameraDepth));
+        debug(AddToggle(parent, kDisableVRCenterAdjustConfigKey, gDisableVRCenterAdjust));
+        ShowDebugSection(gShowDeveloperOptions);
         } catch (std::exception const& e) {
           PaperLogger.error("Vivify settings menu: construction threw ({}); the controls after the "
                             "failure are missing", e.what());
@@ -910,8 +856,8 @@ Configuration &getConfig() {
 }
 
 bool GetMultipassRenderingEnabled() {
-  // Hard-disabled regardless of gMultipassRenderingEnabled / the stored config
-  // value. When enabled, MultipassKeywordController::OnPreRender() (see
+  // Hard-disabled; the setting that once switched it was removed in naomi.10,
+  // its saved value long unread. When enabled, MultipassKeywordController::OnPreRender() (see
   // VivifyComponents.cpp) calls Shader::SetGlobalInt("_StereoActiveEye", eye)
   // every frame a level is active, using Camera::get_stereoActiveEye(). That
   // value is only meaningful under legacy multi-pass XR rendering; Quest
@@ -1014,10 +960,6 @@ bool GetSceneryGpuInstancing() {
   return gSceneryInstancing;
 }
 
-bool GetUsePcShadersForEmptyShaders() {
-  return gPcShadersForEmpty;
-}
-
 bool GetCrashGuard() {
   return gCrashGuard;
 }
@@ -1084,53 +1026,12 @@ std::string GetStandInShaderName() {
 
 void EnsureConfigDefaults() {
   auto& config = getConfig();
-  auto& doc = config.config;
-  EnsureConfigObject();
-  bool needsWrite = false;
-
-  needsWrite |= EnsureBoolConfigValue(kMultipassRenderingConfigKey, false, gMultipassRenderingEnabled);
-
-  needsWrite |= EnsureBoolConfigValue(kVivifyDebugLoggingConfigKey, false, gVivifyDebugLogging);
-  needsWrite |= EnsureBoolConfigValue(kDisableBeat0FilmgrainBlitConfigKey, false, gDisableBeat0FilmgrainBlit);
-  needsWrite |= EnsureBoolConfigValue(kDisableAllBlitsConfigKey, false, gDisableAllBlits);
-  needsWrite |= EnsureBoolConfigValue(kDisableCreateCameraDepthConfigKey, false, gDisableCreateCameraDepth);
-  needsWrite |= EnsureBoolConfigValue(kDisableCustomNoteVisualsConfigKey, false, gDisableCustomNoteVisuals);
-  needsWrite |= EnsureBoolConfigValue(kDisableVisualsInMultiplayerConfigKey, true, gDisableVisualsInMultiplayer);
-  needsWrite |= EnsureBoolConfigValue(kDisableVRCenterAdjustConfigKey, false, gDisableVRCenterAdjust);
-  needsWrite |= EnsureBoolConfigValue(kConvertPcBundlesOnDeviceConfigKey, true, gConvertPcBundlesOnDevice);
-  needsWrite |= EnsureBoolConfigValue(kStandInShadingConfigKey, true, gStandInShading);
-  needsWrite |= EnsureBoolConfigValue(kSceneDepthConfigKey, true, gSceneDepth);
-  needsWrite |= EnsureBoolConfigValue(kSubmitScoresConfigKey, true, gSubmitScores);
-  needsWrite |= EnsureBoolConfigValue(kTranslateShadersConfigKey, true, gTranslateShaders);
-  needsWrite |= EnsureBoolConfigValue(kAudioLinkConfigKey, true, gAudioLink);
-  needsWrite |= EnsureBoolConfigValue(kMapRealtimeShadowsConfigKey, false, gMapRealtimeShadows);
-  needsWrite |= EnsureBoolConfigValue(kReplayRenderModeConfigKey, false, gReplayRenderMode);
-  needsWrite |= EnsureBoolConfigValue(kBlitFixConfigKey, false, gBlitFix);
-  needsWrite |= EnsureBoolConfigValue(kPrepareShadersConfigKey, false, gPrepareShaders);
-  needsWrite |= EnsureBoolConfigValue(kGeometryEffectsConfigKey, false, gGeometryEffects);
-  needsWrite |= EnsureBoolConfigValue(kEmulateGeometryConfigKey, true, gEmulateGeometry);
-  needsWrite |= EnsureBoolConfigValue(kPoolReplacementsConfigKey, true, gPoolReplacements);
-  needsWrite |= EnsureBoolConfigValue(kSceneryInstancingConfigKey, false, gSceneryInstancing);
-  needsWrite |= EnsureBoolConfigValue(kPcShadersForEmptyConfigKey, true, gPcShadersForEmpty);
-  needsWrite |= EnsureStringConfigValue(kStandInShaderNameConfigKey, std::string(),
-                                        gStandInShaderName);
-  needsWrite |= EnsureIntConfigValue(kEffectResolutionConfigKey, 100, 25, 100, gEffectResolution);
-  needsWrite |= EnsureBoolConfigValue(kOffscreenCullingConfigKey, false, gOffscreenCulling);
-  needsWrite |= EnsureBoolConfigValue(kCrashGuardConfigKey, true, gCrashGuard);
-  needsWrite |= EnsureBoolConfigValue(kPcBundleForMissingShadersConfigKey, false, gPcBundleForMissingShaders);
-  needsWrite |= EnsureIntConfigValue(kFarCullingConfigKey, 0, 0, 1000, gFarCullingDistance);
-  needsWrite |= EnsureBoolConfigValue(kSlowFrameSamplerConfigKey, true, gSlowFrameSampler);
-  needsWrite |= EnsureBoolConfigValue(kParticleGeometryConfigKey, true, gParticleGeometry);
-  needsWrite |= EnsureBoolConfigValue(kPerformanceModeConfigKey, false, gPerformanceMode);
-  needsWrite |= EnsureIntConfigValue(kPerfFloorConfigKey, 60, 40, 90, gPerfFloor);
-  needsWrite |= EnsureBoolConfigValue(kPerfHalfRefreshConfigKey, false, gPerfHalfRefresh);
-  needsWrite |= EnsureBoolConfigValue(kPerfDepthMapsConfigKey, false, gPerfDepthMaps);
-  needsWrite |= EnsureBoolConfigValue(kPerfLearnConfigKey, false, gPerfLearn);
-  needsWrite |= EnsureIntConfigValue(kPerfFixedScaleConfigKey, 0, 0, 100, gPerfFixedScale);
-  needsWrite |= EnsureIntConfigValue(kDebugCostTestConfigKey, 0, 0, Vivify::kCostTestCount - 1, gDebugCostTest);
-  if (needsWrite) {
+  // Missing, mistyped and out-of-range values become defaults; saved ones
+  // carry over by key; keys nothing reads any more are dropped (naomi.10).
+  if (Vivify::Settings::Load(config.config)) {
     config.Write();
   }
+  ApplyConfigValues();
 }
 
 MOD_EXTERN_FUNC void setup(CModInfo *info) noexcept {
@@ -1155,7 +1056,7 @@ MOD_EXTERN_FUNC void setup(CModInfo *info) noexcept {
     PaperLogger.warn("Vivify: config defaults could not be written ({})", ex.what());
   } catch (...) {
   }
-  // Note: gMultipassRenderingEnabled / gVivifyDebugLogging are intentionally NOT
+  // Note: the settings are intentionally NOT
   // reset here. EnsureConfigDefaults() above already loaded the saved values (or
   // wrote the defaults on first run); hardcoding them back to a fixed value here
   // would silently discard the player's saved settings-menu choice on every launch.
