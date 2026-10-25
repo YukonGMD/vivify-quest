@@ -11,7 +11,21 @@ conversion cache version, and cached conversions are redone automatically.
 
 ## [Unreleased]
 
-Test builds report themselves as 0.14.25-naomi.N.
+Test builds report themselves as 0.14.25-naomi.N. Each version has a
+codename (CODENAMES.md), shown in the settings menu and the session log:
+
+| Version | Codename |
+|---|---|
+| naomi.1 | Cheerilee |
+| naomi.2 | Shining Armor |
+| naomi.3 | Zecora |
+| naomi.4 | Spitfire |
+| naomi.5 | Starlight Glimmer |
+| naomi.6 | Nurse Redheart |
+| naomi.7 | Rainbow Dash |
+| naomi.8 | Maud Pie |
+| naomi.9 | Fluttershy |
+| naomi.10 ("Version X", with its betas) | Twilight Sparkle |
 
 ### Changed
 - **The settings menu is in three parts** (naomi.10). Everyday (Performance

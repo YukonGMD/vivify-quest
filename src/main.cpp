@@ -22,6 +22,7 @@
 #include "bsml/shared/BSML/Components/Settings/ToggleSetting.hpp"
 #include "UnityEngine/UI/Button.hpp"
 #include "VivifySettings.hpp"
+#include "VivifyVersion.hpp"
 #include <algorithm>
 #include <array>
 #include "beatsaber-hook/shared/utils/typedefs-wrappers.hpp"
@@ -639,7 +640,8 @@ void RegisterModSettings() {
         // Built as a StringW from a std::string, the way every other text in
         // this menu is: the std::u16string this used to assemble by hand is
         // what took the menu down.
-        BSML::Lite::CreateText(parent, StringW(std::string("Vivify ") + VERSION));
+        BSML::Lite::CreateText(parent, StringW(std::string("Vivify ") + VERSION + " \u00b7 " +
+                                               std::string(Vivify::kCodename)));
 
         // Everyday (naomi.10): what a player changes from one session to the
         // next, on one screen without scrolling. Everything else is under
