@@ -27,6 +27,11 @@ codename (CODENAMES.md), shown in the settings menu and the session log:
 | naomi.9 | Fluttershy |
 | naomi.10 ("Version X", with its betas) | Twilight Sparkle |
 
+naomi.10 ships as pre-releases first: 0.14.25-naomi.10-beta.1 (crash fixes,
+gray ledger and shader audit, settings menu, logging), further betas per
+VERSION_X.md, then 0.14.25-naomi.10-release once its tests pass. The release
+says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
+
 ### Changed
 - **The settings menu is in three parts** (naomi.10). Everyday (Performance
   Mode, Effect Resolution %, Plain Notes And Sabers, Submit Scores, and

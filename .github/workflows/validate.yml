@@ -35,6 +35,9 @@ jobs:
           exit 1
         fi
 
+    - name: Check the version scheme (SemVer order, betas below the release)
+      run: python3 tools/version/check_versions.py
+
   bundle-converter-tests:
     runs-on: ubuntu-latest
     steps:

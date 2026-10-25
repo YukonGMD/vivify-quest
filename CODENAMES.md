@@ -13,6 +13,15 @@ codename. Rules:
   version string, a file name or a tag. The code holds it in
   `include/VivifyVersion.hpp`.
 
+## Version strings
+
+Betas are `0.14.25-naomi.N-beta.M`; a release is `0.14.25-naomi.N-release`.
+A bare `0.14.25-naomi.N` would sort *below* its own betas under SemVer (a
+numeric identifier ranks below an alphanumeric one), which is how
+ModsBeforeFriday compares versions; `-release` sorts above every `-beta.M`
+and below the next version's betas. `tools/version/check_versions.py`
+checks this.
+
 ## Given
 
 | Version | Codename | Why |
