@@ -73,6 +73,7 @@ constexpr std::string_view kPerfHalfRefreshConfigKey = "performanceModeHalfRefre
 constexpr std::string_view kPerfDepthMapsConfigKey = "performanceModeScaleDepthMaps";
 constexpr std::string_view kPerfLearnConfigKey = "performanceModeLearnedProfiles";
 constexpr std::string_view kPerfFixedScaleConfigKey = "performanceModeFixedScalePercent";
+constexpr std::string_view kDebugCostTestConfigKey = "debugCostTest";
 bool gMultipassRenderingEnabled = true;
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
@@ -157,6 +158,7 @@ bool gPerfHalfRefresh = false;  // budget: two refreshes instead of one
 bool gPerfDepthMaps = false;    // scale maps whose shaders read scene depth too
 bool gPerfLearn = false;        // learned profiles per map and difficulty
 int gPerfFixedScale = 0;        // debug: a fixed viewport scale, percent; 0 off
+int gDebugCostTest = 0;         // debug: what is switched off for a cost test (Vivify::CostTest)
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
 //
@@ -558,7 +560,7 @@ void RegisterModSettings() {
             container->get_transform(), u"Disable Beat 0 Filmgrain Blit", GetDisableBeat0FilmgrainBlit(),
             [](bool value) { SetBoolConfigValue(kDisableBeat0FilmgrainBlitConfigKey, value, gDisableBeat0FilmgrainBlit); });
         BSML::Lite::CreateToggle(
-            container->get_transform(), u"Disable All Blits", GetDisableAllBlits(),
+            container->get_transform(), u"Disable All Blits", gDisableAllBlits,
             [](bool value) { SetBoolConfigValue(kDisableAllBlitsConfigKey, value, gDisableAllBlits); });
         BSML::Lite::CreateToggle(
             container->get_transform(), u"Disable CreateCamera Depth", GetDisableCreateCameraDepth(),
@@ -724,6 +726,22 @@ void RegisterModSettings() {
           SetConvertStatusText(ec ? "Could not remove the learned profiles"
                                   : "Forgot " + std::to_string(removed > 0 ? removed - 1 : 0) + " learned profile(s)");
         });
+        // Debug, for finding what the GPU time goes on: one category switched
+        // off for the whole song, so the [PERF] section lines show its cost.
+        // The map looks wrong while it is on: set it back to Nothing.
+        static std::array<std::string_view, Vivify::kCostTestCount> const costTests = {
+            "Nothing", "Skies", "Transparent effects and particles", "Depth pre-pass",
+            "Emulated geometry objects", "Post-processing blits", "Scenery"};
+        static std::vector<std::string_view> costTestValues(costTests.begin(), costTests.end());
+        BSML::Lite::CreateDropdown(
+            container->get_transform(), u"Debug: Switch Off For A Cost Test",
+            StringW(std::string(costTests[std::clamp(gDebugCostTest, 0, Vivify::kCostTestCount - 1)])),
+            std::span<std::string_view>(costTestValues), [](StringW value) {
+              std::string const chosen(value);
+              for (int i = 0; i < Vivify::kCostTestCount; i++) {
+                if (chosen == costTests[i]) SetIntConfigValue(kDebugCostTestConfigKey, i, gDebugCostTest);
+              }
+            });
         // Debug, for A/B tests: the viewport at this scale for the whole song,
         // whatever the map does. 0 is off.
         BSML::Lite::CreateIncrementSetting(
@@ -909,7 +927,8 @@ bool GetDisableBeat0FilmgrainBlit() {
 }
 
 bool GetDisableAllBlits() {
-  return gDisableAllBlits;
+  // Also while the cost test switches blits off (naomi.8, debug).
+  return gDisableAllBlits || gDebugCostTest == Vivify::kCostTestBlits;
 }
 
 bool GetDisableCreateCameraDepth() {
@@ -1024,6 +1043,10 @@ bool GetPerformanceModeLearn() {
   return gPerfLearn;
 }
 
+int GetDebugCostTest() {
+  return std::clamp(gDebugCostTest, 0, Vivify::kCostTestCount - 1);
+}
+
 int GetPerformanceModeFixedScale() {
   return gPerfFixedScale >= 40 && gPerfFixedScale < 100 ? gPerfFixedScale : 0;
 }
@@ -1088,6 +1111,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureBoolConfigValue(kPerfDepthMapsConfigKey, false, gPerfDepthMaps);
   needsWrite |= EnsureBoolConfigValue(kPerfLearnConfigKey, false, gPerfLearn);
   needsWrite |= EnsureIntConfigValue(kPerfFixedScaleConfigKey, 0, 0, 100, gPerfFixedScale);
+  needsWrite |= EnsureIntConfigValue(kDebugCostTestConfigKey, 0, 0, Vivify::kCostTestCount - 1, gDebugCostTest);
   if (needsWrite) {
     config.Write();
   }

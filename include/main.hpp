@@ -80,6 +80,9 @@ bool GetPerformanceModeHalfRefresh();
 bool GetPerformanceModeScaleDepthMaps();
 bool GetPerformanceModeLearn();
 int GetPerformanceModeFixedScale();
+// Cost test (naomi.8, debug): the Vivify::CostTest category switched off for
+// whole songs; 0 is off.
+int GetDebugCostTest();
 // Empty when the stand-in shader should be chosen automatically.
 std::string GetStandInShaderName();
 // Whether a map carrying the Vivify requirement still submits its score.

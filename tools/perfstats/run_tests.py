@@ -94,6 +94,12 @@ check("live samples averaged, peaks kept", "live: 1074 renderers (250 in view, p
 check("draw calls only from samples that had them", "draw calls 410 (peak 410), batches 380, triangles 210000" in amb,
       amb)
 check("the share at 60 fps counts frames of 16 ms", "60 fps in 97%" in amb, amb)
+lines = run(120, ["S 0 heavy"] + ["F 25 0.1 %.2f %.1f 98" % (i / 40, 20 + i % 10) for i in range(100)] +
+            ["S 3 light", "F 8.3 0.1 3.1"])
+heavy = find(lines, "  'heavy'")
+check("sections: GPU time and GPU busy from the OVR plugin", "GPU time (OVR plugin) median 25 ms, 95th 29, max 29" in
+      heavy and "GPU busy 98%" in heavy, heavy)
+check("sections: no GPU numbers where none were given", "GPU" not in find(lines, "  'light'"), find(lines, "  'light'"))
 lines = run(90, ["S %d s%d" % (i, i) for i in range(40)] + ["F 10 0 1"])
 check("sections past the limit fold into the last", find(lines, "by section").startswith("by section (32)") and
       find(lines, "  'later sections'"), [l for l in lines if "section" in l][:3])

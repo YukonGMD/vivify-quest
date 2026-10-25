@@ -741,6 +741,7 @@ void Runtime::InstantiatePrefab(CustomJSONData::CustomEventData* customEventData
   }
 
   int const culledAnimators = CullOffscreenAnimators(instance);
+  ApplyCostTest(instance, storageId);
   VIVIFY_DEBUG("Vivify InstantiatePrefab spawned: id='{}' asset='{}' tracks={} animators={} offscreenCulled={}",
                storageId, data.asset, data.tracks.size(), animators.size(), culledAnimators);
   _livePrefabs[storageId] = LivePrefab{

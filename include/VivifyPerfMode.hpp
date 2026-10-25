@@ -133,6 +133,20 @@ class PerfProfile {
   int _seconds = 0;
 };
 
+// The cost test's categories (a debug setting): what is switched off for a
+// whole song so its cost shows in the [PERF] lines.
+enum CostTest : int {
+  kCostTestNone = 0,
+  kCostTestSkies = 1,
+  kCostTestTransparent = 2,
+  kCostTestDepth = 3,
+  kCostTestEmulated = 4,
+  kCostTestBlits = 5,
+  kCostTestScenery = 6,
+  kCostTestCount = 7,
+};
+char const* CostTestName(int test);  // the runtime only
+
 // Where learned profiles are kept (VivifyPerformanceMode.cpp; the runtime
 // only).
 std::string PerfProfileDir();

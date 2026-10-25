@@ -793,7 +793,7 @@ void Runtime::RecordPerfFrame(std::chrono::steady_clock::time_point frameStart) 
                    [this](char* buffer, size_t size) { WritePerfLabel(buffer, size); });
     float gpuMs = -1.0f, gpuBusy = -1.0f;
     ReadGpuMetrics(gpuMs, gpuBusy);
-    _perfSections.AddFrame(frameMs, static_cast<float>(_perfVivifyMs), CurrentSongTime());
+    _perfSections.AddFrame(frameMs, static_cast<float>(_perfVivifyMs), CurrentSongTime(), gpuMs, gpuBusy);
     PerformanceModeFrame(frameMs, gpuMs, std::chrono::duration<double>(frameStart - _perfStartWall).count());
   }
   _perfVivifyMs = 0.0;
@@ -900,6 +900,10 @@ void Runtime::WritePerfSummary() {
   context.lightsEnd = _perfLightsNow;
   context.lightsPeak = _perfLightsPeak;
   for (auto const& line : _perf.Summary(context)) VivifyWriteFlushedLine("[PERF] " + line);
+  if (GetDebugCostTest() != kCostTestNone) {
+    VivifyWriteFlushedLine(std::string("[PERF] cost test: ") + CostTestName(GetDebugCostTest()) +
+                           " switched off for this song (debug setting); the section lines show what is left");
+  }
   for (auto const& line : _perfSections.Summary(_perf.BudgetMs())) VivifyWriteFlushedLine("[PERF] " + line);
   if (GetSlowFrameSampler()) {
     for (auto const& line : VivifySlowFrameSummary([this](int section) { return _perfSections.Describe(section); })) {

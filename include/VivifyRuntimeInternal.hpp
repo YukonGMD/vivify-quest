@@ -678,6 +678,9 @@ private:
   void ApplyHeavyMapSettings(char const* reason);
   void TurnOffPerfMechanism(PerfMechanism mechanism, char const* why);
   char const* PerformanceHoldReason();
+  // Cost test (naomi.8, debug): the renderers of one category switched off.
+  void ApplyCostTest(UnityEngine::GameObject* root, std::string_view id);
+  bool CostTestMatches(int test, UnityEngine::Renderer* renderer);
   ViewportController _viewport;
   std::unique_ptr<PerfModeChangeLog> _perfChanges;
   std::unique_ptr<PerfProfile> _perfPlayProfile;

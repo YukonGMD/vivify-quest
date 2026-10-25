@@ -75,6 +75,7 @@ All settings are in **Mod Settings → Vivify**.
 | Performance Mode: Also Scale Maps That Read Depth | off | Lets maps whose shaders read the scene depth texture scale too; their soft edges and depth effects can land in the wrong place. |
 | Performance Mode: Learn Each Map | off | Remembers how heavy each second of a map was and eases down before those parts on later plays. "Forget Learned Performance Profiles" deletes what it learned. |
 | Debug: Fixed Resolution % | 0 (off) | Holds one viewport scale for whole songs, for A/B checks. |
+| Debug: Switch Off For A Cost Test | Nothing | Switches one category (skies, transparent effects and particles, depth pre-pass, emulated geometry, blits, scenery) off for whole songs, so the `[PERF]` lines show its cost. The map looks wrong while it is on. |
 | Slow-Frame Sampler (diagnostics) | on | During frames over 100 ms, samples where the main and render threads are and sums it up per section in the session log's `[PERF]` lines. Changes nothing on screen. |
 | AudioLink | on | Runs AudioLink for maps that use it. |
 | Map Realtime Shadows | off | Lets maps turn on realtime shadows. Expensive; can blacken note bodies. |

@@ -13,11 +13,17 @@
 #include "main.hpp"
 
 #include "GlobalNamespace/OVRManager.hpp"
+#include "UnityEngine/GameObject.hpp"
+#include "UnityEngine/Material.hpp"
+#include "UnityEngine/ParticleSystemRenderer.hpp"
+#include "UnityEngine/Renderer.hpp"
+#include "UnityEngine/Shader.hpp"
 #include "UnityEngine/XR/XRSettings.hpp"
 
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -377,6 +383,92 @@ void Runtime::EndPerformanceMode(bool writeLog) {
     } else {
       PaperLogger.warn("Vivify performance mode: could not write the learned profile {}", path);
     }
+  }
+}
+
+}  // namespace Vivify
+
+// ---------------------------------------------------------------------------
+// Cost test (naomi.8, a debug setting, off by default): one category of what a
+// map draws is switched off for a whole song, so the [PERF] section lines --
+// frame times, GPU time and GPU busy -- show what that category costs, one
+// play per category.
+
+namespace Vivify {
+
+namespace {
+
+constexpr char const* kCostTestNames[] = {
+    "nothing", "skies", "transparent effects and particles", "the depth pre-pass", "emulated geometry objects",
+    "post-processing blits", "scenery (opaque, not sky)"};
+bool gCostTestUsed = false;  // renderers once switched off are switched back on afterwards
+
+std::string Lowercase(std::string text) {
+  for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return text;
+}
+
+}  // namespace
+
+char const* CostTestName(int test) {
+  return test >= 0 && test < kCostTestCount ? kCostTestNames[test] : "?";
+}
+
+bool Runtime::CostTestMatches(int test, UnityEngine::Renderer* renderer) {
+  bool const particle = il2cpp_utils::try_cast<UnityEngine::ParticleSystemRenderer>(renderer).has_value();
+  UnityEngine::Material* material = renderer->get_sharedMaterial().unsafePtr();
+  int queue = 2000;
+  std::string shaderName;
+  if (IsAlive(material)) {
+    queue = material->get_renderQueue();
+    UnityEngine::Shader* shader = material->get_shader().unsafePtr();
+    if (IsAlive(shader)) shaderName = std::string(shader->get_name());
+  }
+  bool const sky = Lowercase(shaderName).find("sky") != std::string::npos;
+  bool const transparent = particle || queue > 2500;
+  switch (test) {
+    case kCostTestSkies: return sky;
+    case kCostTestTransparent: return transparent && !sky;
+    case kCostTestEmulated: {
+      if (_emulationList.plans.contains(shaderName)) return true;
+      for (auto const& [original, copy] : _emulationStandIns) {
+        if (copy.ptr() == material) return true;  // a stand-in for an emulated shader
+      }
+      return false;
+    }
+    case kCostTestScenery: return !sky && !transparent;
+    default: return false;
+  }
+}
+
+void Runtime::ApplyCostTest(UnityEngine::GameObject* root, std::string_view id) {
+  int const test = GetDebugCostTest();
+  if (test == kCostTestNone && !gCostTestUsed) return;
+  // The depth pre-pass and blits are switched off elsewhere.
+  bool const byRenderer = test == kCostTestSkies || test == kCostTestTransparent || test == kCostTestEmulated ||
+                          test == kCostTestScenery;
+  if (test != kCostTestNone) gCostTestUsed = true;
+  if (!IsAlive(root)) return;
+  // forceRenderingOff: an animation that switches the renderer on again does
+  // not switch it back.
+  static auto* const setForceOff = reinterpret_cast<void (*)(UnityEngine::Renderer*, bool)>(
+      ResolveEngineIcall("UnityEngine.Renderer::set_forceRenderingOff"));
+  int matched = 0, total = 0;
+  for (auto* renderer : root->GetComponentsInChildren<UnityEngine::Renderer*>(true)) {
+    if (!IsAlive(renderer)) continue;
+    total++;
+    bool const match = byRenderer && CostTestMatches(test, renderer);
+    if (match) matched++;
+    if (setForceOff != nullptr) {
+      setForceOff(renderer, match);
+    } else if (match) {
+      renderer->set_enabled(false);
+    }
+  }
+  if (byRenderer) {
+    PaperLogger.info("Vivify cost test ({} off): {} of {} renderer(s) switched off in prefab '{}'{}",
+                     CostTestName(test), matched, total, id,
+                     setForceOff == nullptr ? " (disabled: forceRenderingOff is missing in this build)" : "");
   }
 }
 

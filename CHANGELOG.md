@@ -60,6 +60,17 @@ Test builds report themselves as 0.14.25-naomi.N.
   headset.
 
 ### Added
+- **Cost test** (naomi.8, debug setting "Debug: Switch Off For A Cost
+  Test", Nothing by default). Switches one category off for whole songs:
+  skies (shaders named "sky"), transparent effects and particles (render
+  queue over 2500, and every particle system), the depth pre-pass,
+  emulated geometry objects, post-processing blits, or scenery (opaque, not
+  sky). Renderers are switched off with `forceRenderingOff` as each prefab
+  goes live, so animations cannot switch them back. The `[PERF]` summary
+  names the test, and one play per category shows what each costs.
+- **GPU time and GPU busy per section** (naomi.8). The `[PERF]` section
+  lines add the app's GPU time (median, 95th percentile, maximum) and the
+  GPU's busy percentage, as the OVR plugin reports them each frame.
 - **Performance by section** (naomi.7). The `[PERF]` summary at the end of
   each level now also splits the song into sections -- from one set of live
   prefabs to the next, which in 743 Aether are its intro, drop, ambient,

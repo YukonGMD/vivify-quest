@@ -4,7 +4,7 @@
 //     reads frames from stdin, one per line: "<ms> <songTime> <gcDelta> [label]",
 //     or "skip" for a frame left out; prints the summary, one line each.
 //     PerfSections (naomi.7): "S <songTime> <label>" begins a section,
-//     "F <ms> <vivifyMs> <songTime>" adds a frame to it, and
+//     "F <ms> <vivifyMs> <songTime> [gpuMs [gpuBusy]]" adds a frame to it, and
 //     "L <renderers> <visible> <systems> <particles> <drawCalls> <batches> <triangles>"
 //     a live sample; their summary follows the song's. "D <index>" prints how
 //     other summaries name that section, after everything else.
@@ -68,9 +68,11 @@ int main(int argc, char** argv) {
     if (line.rfind("F ", 0) == 0) {
       std::istringstream in(line.substr(2));
       std::string msText;
-      float vivify = 0, songTime = 0;
+      float vivify = 0, songTime = 0, gpu = -1, busy = -1;
       in >> msText >> vivify >> songTime;
-      sections->AddFrame(std::strtof(msText.c_str(), nullptr), vivify, songTime);
+      if (!(in >> gpu)) gpu = -1;
+      if (!(in >> busy)) busy = -1;
+      sections->AddFrame(std::strtof(msText.c_str(), nullptr), vivify, songTime, gpu, busy);
       continue;
     }
     if (line.rfind("V ", 0) == 0) {

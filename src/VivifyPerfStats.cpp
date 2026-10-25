@@ -134,9 +134,18 @@ std::string PerfSections::Describe(int index) const {
   return "'" + section.label + "'" + range;
 }
 
-void PerfSections::AddFrame(float frameMs, float vivifyMs, float songTime) {
+void PerfSections::AddFrame(float frameMs, float vivifyMs, float songTime, float gpuMs, float gpuBusy) {
   if (_sections.empty() || !(frameMs >= 0.0f)) return;
   Section& section = _sections.back();
+  if (gpuMs >= 0.0f) {
+    section.gpuFrames++;
+    section.maxGpuMs = std::max(section.maxGpuMs, gpuMs);
+    section.gpuBins[std::min(static_cast<int>(gpuMs), kBins - 1)]++;
+  }
+  if (gpuBusy >= 0.0f) {
+    section.busyFrames++;
+    section.sumBusy += gpuBusy;
+  }
   if (section.frames == 0) section.startSong = songTime;
   section.endSong = songTime;
   section.frames++;
@@ -177,6 +186,18 @@ void PerfSections::AddLive(Live const& live) {
   }
 }
 
+// The upper edge of the bin holding that fraction of the frames, at most max.
+float PerfSections::Percentile(uint32_t const* bins, int count, double fraction) {
+  if (count == 0) return 0.0f;
+  uint64_t const wanted = std::max<uint64_t>(static_cast<uint64_t>(std::ceil(fraction * count)), 1);
+  uint64_t seen = 0;
+  for (int bin = 0; bin < kBins; bin++) {
+    seen += bins[bin];
+    if (seen >= wanted) return static_cast<float>(bin + 1);
+  }
+  return static_cast<float>(kBins);
+}
+
 float PerfSections::PercentileMs(Section const& section, double fraction) const {
   if (section.frames == 0) return 0.0f;
   uint64_t const wanted = std::max<uint64_t>(static_cast<uint64_t>(std::ceil(fraction * section.frames)), 1);
@@ -209,6 +230,12 @@ std::vector<std::string> PerfSections::Summary(float budgetMs) const {
         median > 0.0f ? 1000.0f / median : 0.0f, PercentileMs(section, 0.95), section.maxMs,
         100.0 * held60 / section.frames, 100.0 * missed / section.frames, section.sumVivifyMs / section.frames,
         section.maxVivifyMs);
+    if (section.gpuFrames > 0) {
+      line += Format("; GPU time (OVR plugin) median %.0f ms, 95th %.0f, max %.0f",
+                     std::min(Percentile(section.gpuBins, section.gpuFrames, 0.5), section.maxGpuMs),
+                     std::min(Percentile(section.gpuBins, section.gpuFrames, 0.95), section.maxGpuMs), section.maxGpuMs);
+    }
+    if (section.busyFrames > 0) line += Format("; GPU busy %.0f%%", section.sumBusy / section.busyFrames);
     if (section.liveSamples > 0) {
       line += Format("; live: %.0f renderers (%.0f in view, peak %d), peak %d particle systems with %d particles",
                      section.sumRenderers / section.liveSamples, section.sumVisible / section.liveSamples,

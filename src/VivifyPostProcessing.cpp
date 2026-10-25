@@ -1446,7 +1446,16 @@ void Runtime::RefreshCameraComponents(bool allowCameraApplier) {
       _sceneDepthSkipLogged = true;
       PaperLogger.info("Vivify main camera: no shader in this map reads the scene depth texture; not rendering it");
     }
-    if (GetSceneDepthTexture() && mapNeedsDepth.value_or(true) && _currentBeatmapData != nullptr &&
+    // Cost test (debug, naomi.8): the depth pre-pass switched off for the song.
+    if (GetDebugCostTest() == kCostTestDepth && _currentBeatmapData != nullptr && !_isResetting) {
+      int const mode = mainCamPtr->get_depthTextureMode().value__;
+      if ((mode & UnityEngine::DepthTextureMode::Depth.value__) != 0) {
+        CaptureMainCameraOriginals(mainCamPtr, mainCamGO);
+        mainCamPtr->set_depthTextureMode(
+            UnityEngine::DepthTextureMode(mode & ~UnityEngine::DepthTextureMode::Depth.value__));
+        PaperLogger.info("Vivify cost test: the main camera's depth pre-pass switched off for this song");
+      }
+    } else if (GetSceneDepthTexture() && mapNeedsDepth.value_or(true) && _currentBeatmapData != nullptr &&
         !_isResetting) {
       int const mode = mainCamPtr->get_depthTextureMode().value__;
       if ((mode & UnityEngine::DepthTextureMode::Depth.value__) == 0) {

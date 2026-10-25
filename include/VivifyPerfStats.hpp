@@ -141,8 +141,10 @@ class PerfSections {
   // From now on, a section called `label`; nothing happens when it is the
   // current one.
   void Begin(std::string const& label, float songTime);
-  // One frame (its duration and Vivify's own share of it) at that song time.
-  void AddFrame(float frameMs, float vivifyMs, float songTime);
+  // One frame (its duration and Vivify's own share of it) at that song time;
+  // from naomi.8 also the app's GPU time and the GPU's busy percentage as the
+  // OVR plugin reports them (negative: not known).
+  void AddFrame(float frameMs, float vivifyMs, float songTime, float gpuMs = -1.0f, float gpuBusy = -1.0f);
   void AddLive(Live const& live);
   int Count() const { return static_cast<int>(_sections.size()); }
   // "'label' (song 5.0-30.2s)", for other summaries of the same section.
@@ -161,11 +163,17 @@ class PerfSections {
     float maxMs = 0.0f;
     float maxVivifyMs = 0.0f;
     uint32_t bins[kBins] = {};
+    int gpuFrames = 0;
+    uint32_t gpuBins[kBins] = {};
+    float maxGpuMs = 0.0f;
+    int busyFrames = 0;
+    double sumBusy = 0.0;
     int liveSamples = 0;
     Live peak;
     double sumRenderers = 0.0, sumVisible = 0.0, sumDrawCalls = 0.0, sumBatches = 0.0, sumTriangles = 0.0;
     int drawCallSamples = 0;
   };
+  static float Percentile(uint32_t const* bins, int count, double fraction);
   float PercentileMs(Section const& section, double fraction) const;
   std::vector<Section> _sections;
 };
