@@ -104,7 +104,7 @@ double ParticleSignature(ArrayW<UnityEngine::ParticleSystem_Particle> const& par
 void Runtime::FindParticleBakes(UnityEngine::GameObject* instance, std::string const& prefabId) {
   if (!GetEmulateParticleGeometry() || _standInOriginals.empty() || !IsAlive(instance)) return;
   for (auto* renderer : instance->GetComponentsInChildren<UnityEngine::ParticleSystemRenderer*>(true)) {
-    if (!IsAlive(renderer) || renderer->get_renderMode() != UnityEngine::ParticleSystemRenderMode::Mesh) continue;
+    if (!IsAlive(renderer)) continue;
     UnityEngine::Material* material = renderer->get_sharedMaterial().unsafePtr();
     if (!IsAlive(material)) continue;
     auto original = _standInOriginals.find(material->GetInstanceID());
@@ -115,6 +115,14 @@ void Runtime::FindParticleBakes(UnityEngine::GameObject* instance, std::string c
     if (plan == _emulationList.plans.end() || plan->second.mode != GeometryEmulation::Mode::Triangle) continue;
     auto* system = renderer->GetComponent<UnityEngine::ParticleSystem*>();
     if (!IsAlive(system)) continue;
+    // naomi.10: these were skipped without a word, which left 743 Aether's
+    // 'Ground Fog' unexplained in the gray ledger.
+    if (auto const mode = renderer->get_renderMode(); mode != UnityEngine::ParticleSystemRenderMode::Mesh) {
+      PaperLogger.info("Vivify particle emulation: '{}' keeps the stand-in: its particles are drawn as billboards "
+                       "(render mode {}), and only mesh particles can be baked",
+                       ToStdString(system->get_gameObject()->get_name()), static_cast<int>(mode.value__));
+      continue;
+    }
     auto bake = std::make_unique<ParticleBake>();
     bake->system = system;
     bake->renderer = renderer;
@@ -168,6 +176,15 @@ void Runtime::UpdateParticleBakes() {
       bake.count = got;
       bake.signature = signature;
       bake.stableChecks = 0;
+      // Ten seconds of drawing without holding still: 743 Aether's 'Extending
+      // Arrows' move for as long as they live. Each look allocates an array
+      // of every particle, so stop looking.
+      if (++bake.movingChecks >= 40) {
+        bake.state = ParticleBake::kGaveUp;
+        PaperLogger.info("Vivify particle emulation: '{}' keeps the stand-in: its particles were still changing "
+                         "after 10 s, and only particles that hold still can be baked",
+                         bake.name);
+      }
       continue;
     }
     if (++bake.stableChecks < 2) continue;  // held still for half a second

@@ -1903,6 +1903,12 @@ bool GlslEmitter::BuildSignatures() {
         return false;
     }
 
+    if (isPixel && element.registerIndex == 0xFFFFFFFFu) {
+      // oDepth / oMask carry no register; some compilers mark them only so,
+      // with no system value. Written through operand types like the cases
+      // above; a colour output at location 4294967295 fails to link.
+      continue;
+    }
     if (isPixel) {
       _declarations += "layout(location = " + std::to_string(element.registerIndex) +
                        ") out vec4 " + element.semanticName +

@@ -659,6 +659,7 @@ private:
     int count = -1;
     double signature = 0.0;
     int stableChecks = 0;
+    int movingChecks = 0;  // looks that found the particles changing
     double lastCheck = 0.0;
     SafePtrUnity<UnityEngine::GameObject> baked;
     SafePtrUnity<UnityEngine::Mesh> mesh;

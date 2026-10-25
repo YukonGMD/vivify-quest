@@ -48,6 +48,8 @@ int main(int argc, char** argv) {
         std::string code;
         for (uint8_t c : program.code) {
           if (c == '\n') code += "\\n";
+          else if (c == '\t') code += ' ';  // Unity's own GLSL is indented with tabs
+          else if (c == '\r') continue;
           else if (c < 0x20 || c > 0x7e || c == '\\') code += '.';
           else code += static_cast<char>(c);
         }

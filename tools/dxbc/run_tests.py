@@ -608,6 +608,27 @@ check("nointerpolation becomes flat", "flat in vec4 vs_TEXCOORD0;" in source, so
 proc, fields, _, source = run("glsl", pixel_with_dcl_ps_mode(3))
 check("centroid survives", "centroid in vec4 vs_TEXCOORD0;" in source, source)
 
+# A depth-only pixel program (AreaLit's LightMeshClear in map 43a5d): its
+# signature gives SV_Depth no system value, only register 0xFFFFFFFF, and the
+# translation once declared it as a colour output at that location, which
+# fails to link.
+depth_only = m.container([
+    globals_cbuffer([variable("_Color", 0, 16, VECTOR4)], 16),
+    m.signature_chunk([
+        {"name": "TEXCOORD", "index": 0, "register": 0, "mask": 0x3, "rw_mask": 0x3}], b"ISGN"),
+    m.signature_chunk([
+        {"name": "SV_Depth", "index": 0, "register": 0xFFFFFFFF, "mask": 0x1, "rw_mask": 0xE}], b"OSGN"),
+    m.shex_chunk([m.insn(DCL_INPUT_PS, m.dest(INPUT, 0, 0x3), controls=2)
+                  + m.insn(DCL_OUTPUT, m._operand(m.OPERAND_OUTPUT_DEPTH, [], four_component=False))
+                  + m.insn(MOV, m._operand(m.OPERAND_OUTPUT_DEPTH, [], four_component=False),
+                           m.src(INPUT, 0, (X, X, X, X)))
+                  + m.insn(RET)], stage=0),
+])
+proc, fields, _, source = run("glsl", depth_only)
+check("depth-only program translates", fields.get("ok") == "1", fields.get("error", ""))
+check("depth-only program writes gl_FragDepth", "gl_FragDepth" in source, source)
+check("depth-only program declares no colour output", " out " not in source, source)
+
 # Depth comparison needs a shadow sampler, and the comparison value folds into
 # the coordinate.
 body = m.insn(SAMPLE_C_LZ, m.dest(OUTPUT, 0), m.src(INPUT, 0), m.src(RESOURCE, 0),

@@ -196,6 +196,20 @@ Test builds report themselves as 0.14.25-naomi.N.
   the previous level.
 
 ### Fixed
+- **A depth-only shader failed to link and drew as a stand-in** (naomi.10).
+  A converted fragment program that writes only depth declared its depth
+  output as a colour output at location 4294967295 as well, which GLES
+  refuses to link: 12 programs of AreaLit/LightMeshClear in Through The
+  Screen. Conversion version 23, so converted maps are redone on their next
+  load. Found by the new offline shader audit (`tools/shaderaudit`), which
+  converts every PC bundle in a library and compiles and links every GLES
+  program with glslang: all 15,946 programs in the tester's 25 maps now
+  link. GRAY.md lists what is still gray and why.
+- **Particle emulation says why a system keeps its stand-in** (naomi.10).
+  Billboard particles and particles that never hold still were skipped
+  without a word, which left 743 Aether's gray 'Ground Fog' and 'Extending
+  Arrows' unexplained. A system still moving after 10 s is no longer
+  checked four times a second; each check copied every particle.
 - **Random crashes when a level ended or another was selected** (naomi.10).
   Vivify kept Unity objects -- its prefab instances, the note renderers it
   hides, the copies it spawns, bundle assets -- as plain pointers in its

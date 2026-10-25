@@ -141,7 +141,11 @@ namespace {
 //      rebuilt: 743 Aether's cracked paths, tower and note wireframes
 //  22  counted loops are emitted as for loops, so the GPU compiler can unroll
 //      them (Aether's voronoi skies: 304 of 314 loops); same results
-constexpr int kBundleConversionVersion = 22;
+//  23  a fragment program that writes only depth no longer declares its depth
+//      output as a colour output at location 4294967295, which failed to link
+//      and left the material on the stand-in (43a5d Through The Screen's
+//      AreaLit/LightMeshClear, found by tools/shaderaudit; naomi.10)
+constexpr int kBundleConversionVersion = 23;
 
 // Whether Beat Saber's own shaders use STEREO_MULTIVIEW_ON: -1 not looked yet,
 // 0 no, 1 yes. Unity registers every keyword a loaded shader declares, so the
