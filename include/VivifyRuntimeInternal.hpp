@@ -9,7 +9,9 @@
 #include <optional>
 #include <mutex>
 #include "VivifyTypes.hpp"
+#include "VivifyPerfMode.hpp"
 #include "VivifyPerfStats.hpp"
+#include <memory>
 #include "VivifyGeometryEmulation.hpp"
 #include <map>
 #include <tuple>
@@ -659,19 +661,52 @@ private:
   double _perfVivifyMs = 0.0;
   float _perfLiveDue = 0.0f;
   void SamplePerfLive();
-  // Performance mode for heavy maps (naomi.7, a setting, off by default):
-  // the governor picks a level from frame times, ApplyPerformanceLevel sets
-  // it, and RestorePerformanceMode puts back the game's own values, which are
-  // saved before the first change.
-  void ApplyPerformanceLevel(int level);
-  void RestorePerformanceMode();
-  PerformanceGovernor _governor;
-  bool _perfModeUsed = false;   // this song
-  bool _perfModeSaved = false;  // the game's values below are saved
-  float _perfModeScale = 1.0f;
-  int _perfModeFoveation = 0;
-  int _perfModeGpuLevel = 0;  // suggested
-  int _perfModeGpuFixed = -1;
+  // Performance mode for heavy maps (naomi.8, VivifyPerformanceMode.cpp; a
+  // setting, off by default). The eye buffers are never reallocated during a
+  // song: only the viewport rendered into shrinks.
+  void BeginPerformanceMode(float refreshHz);
+  // Once a measured frame, at the start of Vivify's frame: no allocation.
+  void PerformanceModeFrame(float frameMs, float gpuMs, double wallSeconds);
+  void ReadGpuMetrics(float& gpuMs, float& gpuBusy);
+  bool _gpuMetricsChecked = false;
+  bool _gpuTimeSupported = false;
+  bool _gpuBusySupported = false;
+  // Puts back everything performance mode changed and writes its log; safe to
+  // call more than once.
+  void EndPerformanceMode(bool writeLog);
+  void SetViewportScale(float scale, char const* reason);
+  void ApplyHeavyMapSettings(char const* reason);
+  void TurnOffPerfMechanism(PerfMechanism mechanism, char const* why);
+  char const* PerformanceHoldReason();
+  ViewportController _viewport;
+  std::unique_ptr<PerfModeChangeLog> _perfChanges;
+  std::unique_ptr<PerfProfile> _perfPlayProfile;
+  std::unique_ptr<PerfProfile> _perfStoredProfile;
+  std::string _selectedProfileKey;  // map folder, characteristic, difficulty
+  std::string _perfProfileKey;      // of the song playing
+  bool _perfModeOn = false;         // this song
+  bool _perfProfileLoaded = false;
+  bool _perfGameSaved = false;      // the game's values below are saved
+  float _perfGameViewportScale = 1.0f;
+  int _perfGameFoveation = 0;
+  int _perfGameGpuLevel = 0;  // suggested
+  int _perfGameGpuFixed = -1;
+  float _perfScale = 1.0f;          // the viewport scale applied
+  float _perfFixedScale = 0.0f;     // debug: a fixed scale for the song, 0 = off
+  bool _perfOff[static_cast<int>(PerfMechanism::Count)] = {};  // turned off for the song
+  bool _perfHeavyApplied = false;
+  double _perfOverSince = -1.0;
+  bool _perfGpuTime = false;        // the OVR plugin reports the app's GPU time
+  int _perfGpuReadings = 0;
+  float _perfGpuUnit = 1.0f;        // to milliseconds
+  char const* _perfHold = nullptr;  // why the scale is held at full size, if it is
+  double _perfHeldSeconds = 0.0;
+  double _perfLastWall = 0.0;
+  float _perfMinScale = 1.0f;
+  double _perfScaleSum = 0.0;
+  int _perfScaleFrames = 0;
+  double _perfDepthCheckedAt = -1e9;
+  bool _perfMapReadsDepth = true;
   // Adds the time it lives to _perfVivifyMs.
   struct PerfScope {
     Runtime& runtime;

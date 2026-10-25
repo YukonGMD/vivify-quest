@@ -14,6 +14,39 @@ conversion cache version, and cached conversions are redone automatically.
 Test builds report themselves as 0.14.25-naomi.N.
 
 ### Changed
+- **Performance mode no longer blanks the screen** (naomi.8, setting
+  "Performance Mode For Heavy Maps", still off). naomi.7 lowered the eye
+  resolution with `XRSettings.eyeTextureResolutionScale`, which reallocates
+  the eye buffers: while the game ran slowly the compositor showed white or
+  black for seconds at every step. Now the eye buffers are never reallocated
+  during a song. Only the part of them that is drawn into shrinks
+  (`XRSettings.renderViewportScale`, the path Meta's own dynamic resolution
+  takes in this game), and Unity's reading of it back says whether the
+  headset took it; if not, scaling turns itself off for the song.
+  - A small controller replaces the 1.5 s steps: 2-5% steps down at most
+    every 0.1 s (and three frames) while over the frame budget, 2% steps up
+    after a second of headroom, nothing in between. The budget is one
+    refresh, or two with "Aim For Half The Refresh Rate"; it works from the
+    app's GPU time as the OVR plugin reports it, or from frame times where
+    the plugin does not. "Lowest Resolution %" sets the floor (60).
+  - The scale holds at 100% while a Vivify blit, screen texture or camera is
+    active, and for maps whose shaders read the scene depth texture unless
+    "Also Scale Maps That Read Depth" is on: Unity keeps the camera's
+    textures full size with the smaller picture in one corner, which those
+    effects do not expect.
+  - Foveation HighTop and the GPU boost are set once, when the frame budget
+    has been missed for 2 s (or at the start, from a learned profile), and
+    stay until the song ends; never toggled mid-song.
+  - Safety: a change followed within three frames by one over 250 ms that is
+    also twice as long as those before turns that mechanism off for the
+    song, with a warning saying why.
+  - "Learn Each Map" (off) remembers per map and difficulty the scale each
+    second ended at and eases down a little before those parts on later
+    plays; "Forget Learned Performance Profiles" deletes them.
+  - "Debug: Fixed Resolution %" (0, off) holds one viewport scale for whole
+    songs, for A/B checks of how effects look at a smaller viewport.
+  - Every change is logged at the song's end with the five frame times
+    before and after it.
 - **Translated shaders write counted loops as `for` loops** (naomi.7, all
   converted maps). DirectX bytecode spells a loop such as "for i = -1 to 1"
   as an endless loop that tests and breaks at the top and adds one at the

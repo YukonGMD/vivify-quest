@@ -106,52 +106,99 @@ check("an unknown section is named by its number", find(lines, "describe 7:") ==
 lines = run(90, ["F 10 0 1", "L 1 1 1 1 1 1 1"])
 check("frames before any section are ignored", not find(lines, "by section"), lines)
 
-# Performance mode (naomi.7).
-def govern(hz, frames):
-    lines = run(90, ["G %s" % hz] + ["g %s %.4f" % f for f in frames])
-    return [l for l in lines if l.startswith("level ")], lines
+# Performance mode (naomi.8): the viewport controller.
+def control(floor, target, frames):
+    lines = run(90, ["V %s %s" % (floor, target)] + ["v %s %d %.4f %s %d" % f for f in frames])
+    return [l for l in lines if l.startswith("scale ")]
 
 
-def steady(ms, start, seconds):
+def steady(ms, gpu, start, seconds, cap=1.0, hold=0, step=None):
     out, t = [], start
+    dt = (step if step else max(ms, 8.33)) / 1000.0
     while t < start + seconds:
-        t += ms / 1000.0
-        out.append((ms, t))
+        t += dt
+        out.append((ms, gpu, t, cap, hold))
     return out
 
 
-changes, lines = govern(120, steady(8.33, 0, 20))
-check("governor: a map holding 120 fps is left alone", changes == [] and find(lines, "performance mode:") ==
-      "performance mode: lowest level 0 of 5 (as the game sets it)", (changes, find(lines, "performance mode:")))
-changes, lines = govern(120, steady(16.67, 0, 20))
-check("governor: exactly 60 fps is the goal, not a reason to step down", changes == [], changes)
-changes, lines = govern(120, steady(25.0, 0, 20))
-check("governor: 40 fps steps all the way down, one level at a time, 1.5 s apart",
-      [l.split(" at ")[0] for l in changes] == ["level %d" % i for i in range(1, 6)], changes)
+def scales(changes):
+    return [float(l.split()[1]) for l in changes]
+
+
+changes = control(0.6, 8.33, steady(5.0, 1, 0, 10))
+check("viewport: a light map stays at full size", changes == [], changes)
+changes = control(0.6, 8.33, steady(20.0, 1, 0, 10, step=8.33))
+values = scales(changes)
+check("viewport: an overloaded GPU steps down to the floor and stops there", values and values[-1] == 0.6 and
+      min(values) == 0.6, changes)
+check("viewport: steps of 2 to 5 percent", all(0.0199 <= a - b <= 0.0501 for a, b in zip([1.0] + values, values)),
+      values)
 times = [float(l.split(" at ")[1].split()[0]) for l in changes]
-check("governor: never sooner than 1.5 s after the last change", all(b - a >= 1.5 for a, b in zip(times, times[1:]))
-      and times and times[0] >= 1.5, times)
-check("governor: the first step is the clock boost alone", changes and changes[0].endswith(": GPU clock boost"), changes)
-check("governor: the median it decided on is reported", changes and "(median 25.0 ms)" in changes[0], changes)
-frames = steady(40.0, 0, 10) + steady(8.33, 10, 30)
-changes, lines = govern(120, frames)
-downs = [l for l in changes if int(l.split()[1]) >= 1]
-check("governor: back up a level at a time once frames hold the refresh rate", changes[-1].startswith("level 0 at")
-      and len(changes) == 10, changes)
-ups = [float(l.split(" at ")[1].split()[0]) for l in changes[5:]]
-check("governor: at least 3 s between steps up", all(b - a >= 3.0 for a, b in zip(ups, ups[1:])), ups)
-check("governor: time at each level adds up", abs(sum(float(l.rsplit(": ", 1)[1][:-1]) for l in lines
-                                                      if l.startswith("  level ")) - 40.0) < 0.2,
-      [l for l in lines if l.startswith("  level ")])
-changes, _ = govern(72, steady(13.9, 0, 6) + steady(40, 6, 4) + steady(13.9, 10, 30))
-check("governor: at 72 Hz, holding 72 fps counts as headroom", changes and changes[-1].startswith("level 0"), changes)
-changes, _ = govern(120, [(25.0, 0.025 * i) for i in range(1, 200)] + [(float("nan"), 5.1), (-1.0, 5.2)])
-check("governor: nonsense frame times are ignored", len(changes) >= 1, changes)
-settings = [l for l in lines if l.startswith("settings ")]
-check("governor: what each level applies", settings == [
-    "settings 0: boost=0 foveation=0 scale=1.00", "settings 1: boost=1 foveation=0 scale=1.00",
-    "settings 2: boost=1 foveation=1 scale=1.00", "settings 3: boost=1 foveation=1 scale=0.85",
-    "settings 4: boost=1 foveation=1 scale=0.75", "settings 5: boost=1 foveation=1 scale=0.65"], settings)
+check("viewport: down fast, at most every 0.1 s", all(b - a >= 0.099 for a, b in zip(times, times[1:])) and
+      times[-1] < 2.0, times)
+frames = steady(20.0, 1, 0, 3, step=8.33) + steady(4.0, 1, 3, 30, step=8.33)
+changes = control(0.6, 8.33, frames)
+ups = [l for l in changes if float(l.split(" at ")[1].split()[0]) > 3]
+check("viewport: up slowly, 2 percent at a time, once there is headroom", ups and all("(headroom)" in l for l in ups)
+      and scales(ups)[-1] == 1.0, ups[-3:])
+up_times = [float(l.split(" at ")[1].split()[0]) for l in ups]
+check("viewport: the first step up waits a second of headroom, then at least 0.5 s apart",
+      up_times and up_times[0] - 3 >= 0.99 and all(b - a >= 0.499 for a, b in zip(up_times, up_times[1:])), up_times[:4])
+changes = control(0.6, 8.33, steady(7.0, 1, 0, 10, step=8.33))
+check("viewport: between 75% and 95% of the budget nothing moves (hysteresis)", changes == [], changes)
+changes = control(0.6, 8.33, steady(20.0, 1, 0, 2, step=8.33) + steady(20.0, 1, 2, 1, hold=1, step=8.33))
+check("viewport: a hold goes straight back to full size", changes and changes[-1].startswith("scale 1.00") and
+      "held at full size" in changes[-1], changes[-2:])
+changes = control(0.6, 8.33, steady(5.0, 1, 0, 5, cap=0.8))
+check("viewport: a learned cap eases down ahead of a heavy part, 2 percent a step", scales(changes) ==
+      [0.98, 0.96, 0.94, 0.92, 0.9, 0.88, 0.86, 0.84, 0.82, 0.8] and "known to be heavy" in changes[0], changes)
+# Frame times (no GPU time): vsync makes them whole refreshes.
+changes = control(0.6, 8.33, [(16.67, 0, i * 0.01667, 1.0, 0) for i in range(1, 120)])
+check("viewport: frame times that miss refreshes step down too", changes and scales(changes)[-1] < 1.0, changes[:2])
+changes = control(0.6, 16.67, [(16.67, 0, i * 0.01667, 1.0, 0) for i in range(1, 300)])
+check("viewport: at half the refresh rate, 60 fps frames are within budget", changes == [], changes)
+changes = control(0.6, 8.33, [(float("nan"), 1, 0.1, 1.0, 0), (-3, 1, 0.2, 1.0, 0)])
+check("viewport: nonsense measurements change nothing", changes == [], changes)
+changes = control(0.6, 8.33, steady(150.0, 1, 0, 2, step=150))
+gaps = [b - a for a, b in zip([float(l.split(" at ")[1].split()[0]) for l in changes][:-1],
+                              [float(l.split(" at ")[1].split()[0]) for l in changes][1:])]
+check("viewport: at 150 ms a frame it waits three frames between steps (late GPU times)",
+      gaps and min(gaps) >= 0.449, gaps)
+
+# The change log and its safety check.
+lines = run(90, ["C 250"] + ["cf 30"] * 5 + ["cr 10.5 34.25 0 1.0 0.95 over the frame budget"] +
+            ["cf 31", "cf 300", "cf 32", "cf 30", "cf 30", "cf 30"])
+logged = [l for l in lines if l.startswith("change: ")]
+check("change log: the change with the five frames before and after it", logged and logged[0].startswith(
+    "change: song 34.25s (wall +10.500s): viewport scale 1.00 -> 0.95 (over the frame budget); frames before: 30.0 "
+    "30.0 30.0 30.0 30.0 | after: 31.0 300.0 32.0 30.0 30.0"), logged)
+check("change log: a 300 ms frame right after it is a hitch", "hitch 1" in lines and logged and
+      "turned off for the song" in logged[0], lines)
+lines = run(90, ["C 250"] + ["cf 280"] * 5 + ["cr 1 2 1 3 4 foveation once"] + ["cf 300"] * 5)
+check("change log: in a run of slow frames a slow frame is not a hitch", not any(l.startswith("hitch") for l in lines),
+      [l for l in lines if l.startswith("hitch") or l.startswith("change")])
+lines = run(90, ["C 250", "cr 1 2 2 0 3 boost"] + ["cf 20", "cf 20", "cf 20", "cf 400", "cf 20"])
+check("change log: a slow frame three frames later no longer counts", not any(l.startswith("hitch") for l in lines),
+      lines)
+lines = run(90, ["C 250", "cr 1 2 2 0 3 boost", "cf 400"])
+check("change log: with no frames before it, any frame over the limit counts", "hitch 4" in lines, lines)
+
+# The learned profile.
+profile = ["P note %.1f %.2f %d" % (t / 10, 1.0 if t < 300 else 0.7, 120) for t in range(0, 600)]
+lines = run(90, profile + ["P merge", "P cap 10 2 0.05", "P cap 28.5 2 0.05", "P cap 45 2 0.05", "P cap 100 2 0.05",
+                           "P heavy", "P roundtrip 743Aether/Standard/ExpertPlus", "P wrongkey a b"])
+check("profile: full size where it never scaled", find(lines, "cap 1.00") and lines[lines.index("cap 1.00")] ==
+      "cap 1.00", lines)
+caps = [l for l in lines if l.startswith("cap ")]
+check("profile: two seconds ahead of a heavy part the cap comes down, with a margin", caps == [
+    "cap 1.00", "cap 0.75", "cap 0.75", "cap 1.00"], caps)
+check("profile: heavy seconds counted", find(lines, "heavy") == "heavy 30 of 60", find(lines, "heavy"))
+check("profile: saved and read back the same, under a safe file name",
+      find(lines, "roundtrip") == "roundtrip parsed=1 same=1 lines=62 file=743Aether_Standard_ExpertPlus",
+      find(lines, "roundtrip"))
+check("profile: another map's file is refused", find(lines, "wrongkey") == "wrongkey parsed=0", find(lines, "wrongkey"))
+lines = run(90, ["P note 5 1.0 100", "P merge", "P note 5 0.6 200", "P merge", "P cap 5 0 0", "P roundtrip k"])
+check("profile: plays are blended", find(lines, "cap ") == "cap 0.80", find(lines, "cap "))
 
 print("\n%d failure(s)" % failures)
 sys.exit(1 if failures else 0)

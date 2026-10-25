@@ -8,11 +8,21 @@
 //     "L <renderers> <visible> <systems> <particles> <drawCalls> <batches> <triangles>"
 //     a live sample; their summary follows the song's. "D <index>" prints how
 //     other summaries name that section, after everything else.
-//     PerformanceGovernor (naomi.7): "G <refreshHz>" resets it, "g <ms>
-//     <seconds>" adds a frame and prints "level N at <seconds>" on a change;
-//     its summary is printed last.
+//     Performance mode (naomi.8, VivifyPerfMode.hpp):
+//     "V <floor> <targetMs>" resets the viewport controller; "v <ms> <gpu 0|1>
+//     <now> <cap> <hold 0|1>" runs one frame and prints "scale <s> at <now>
+//     (<reason>)" when the scale changes.
+//     "C <hitchMs>" resets the change log; "cf <ms>" adds a frame and prints
+//     "hitch <mask>" when a change caused one; "cr <wall> <song> <mechanism>
+//     <before> <after> <reason>" records a change. Its lines come last.
+//     "P note <song> <scale> <load>" notes into the play being recorded;
+//     "P merge" merges it into the stored profile; "P cap <t> <lead>
+//     <margin>", "P heavy", "P roundtrip <key>", "P wrongkey <key> <other>"
+//     print results.
+#include "VivifyPerfMode.hpp"
 #include "VivifyPerfStats.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -33,8 +43,13 @@ int main(int argc, char** argv) {
   std::string line;
   int labelCalls = 0;
   std::vector<int> describe;
-  Vivify::PerformanceGovernor governor;
-  bool governed = false;
+  Vivify::ViewportController controller;
+  auto changes = std::make_unique<Vivify::PerfModeChangeLog>();
+  bool changeLogUsed = false;
+  auto play = std::make_unique<Vivify::PerfProfile>();
+  auto stored = std::make_unique<Vivify::PerfProfile>();
+  play->Clear();
+  stored->Clear();
   while (std::getline(std::cin, line)) {
     if (line == "skip") {
       stats->SkipFrame();
@@ -58,19 +73,77 @@ int main(int argc, char** argv) {
       sections->AddFrame(std::strtof(msText.c_str(), nullptr), vivify, songTime);
       continue;
     }
-    if (line.rfind("G ", 0) == 0) {
-      governor.Reset(std::strtof(line.c_str() + 2, nullptr));
-      governed = true;
+    if (line.rfind("V ", 0) == 0) {
+      std::istringstream in(line.substr(2));
+      Vivify::ViewportController::Config config;
+      in >> config.floor >> config.targetMs;
+      controller.Reset(config);
       continue;
     }
-    if (line.rfind("g ", 0) == 0) {
+    if (line.rfind("v ", 0) == 0) {
       std::istringstream in(line.substr(2));
-      float ms = 0;
-      double seconds = 0;
-      in >> ms >> seconds;
-      if (governor.AddFrame(ms, seconds)) {
-        std::printf("level %d at %.2f (median %.1f ms): %s\n", governor.Level(), seconds, governor.LastMedianMs(),
-                    Vivify::PerformanceGovernor::Describe(governor.Level()));
+      std::string msText;
+      int gpu = 0, hold = 0;
+      double now = 0;
+      float cap = 1;
+      in >> msText >> gpu >> now >> cap >> hold;
+      float const before = controller.Scale();
+      float const after = controller.Update(std::strtof(msText.c_str(), nullptr), gpu != 0, now, cap, hold != 0);
+      if (after != before) std::printf("scale %.2f at %.3f (%s)\n", after, now, controller.Reason());
+      continue;
+    }
+    if (line.rfind("C ", 0) == 0) {
+      changes->Reset(std::strtof(line.c_str() + 2, nullptr));
+      changeLogUsed = true;
+      continue;
+    }
+    if (line.rfind("cf ", 0) == 0) {
+      unsigned const hitched = changes->AddFrame(std::strtof(line.c_str() + 3, nullptr));
+      if (hitched != 0) std::printf("hitch %u\n", hitched);
+      continue;
+    }
+    if (line.rfind("cr ", 0) == 0) {
+      std::istringstream in(line.substr(3));
+      double wall = 0;
+      float song = 0, before = 0, after = 0;
+      int mechanism = 0;
+      std::string reason;
+      in >> wall >> song >> mechanism >> before >> after;
+      std::getline(in >> std::ws, reason);
+      changes->Record(wall, song, static_cast<Vivify::PerfMechanism>(mechanism), before, after, reason.c_str());
+      continue;
+    }
+    if (line.rfind("P ", 0) == 0) {
+      std::istringstream in(line.substr(2));
+      std::string command;
+      in >> command;
+      if (command == "note") {
+        float song = 0, scale = 0, load = 0;
+        in >> song >> scale >> load;
+        play->Note(song, scale, load);
+      } else if (command == "merge") {
+        stored->MergeFrom(*play);
+        play->Clear();
+      } else if (command == "cap") {
+        float t = 0, lead = 0, margin = 0;
+        in >> t >> lead >> margin;
+        std::printf("cap %.2f\n", stored->CapAt(t, lead, margin));
+      } else if (command == "heavy") {
+        std::printf("heavy %d of %d\n", stored->HeavySeconds(), stored->Seconds());
+      } else if (command == "roundtrip") {
+        std::string key;
+        in >> key;
+        std::string const text = stored->Serialize(key);
+        auto back = std::make_unique<Vivify::PerfProfile>();
+        bool const parsed = back->Parse(text, key);
+        std::printf("roundtrip parsed=%d same=%d lines=%d file=%s\n", parsed, back->Serialize(key) == text,
+                    static_cast<int>(std::count(text.begin(), text.end(), '\n')),
+                    Vivify::PerfProfileFileName(key).c_str());
+      } else if (command == "wrongkey") {
+        std::string key, other;
+        in >> key >> other;
+        auto back = std::make_unique<Vivify::PerfProfile>();
+        std::printf("wrongkey parsed=%d\n", back->Parse(stored->Serialize(key), other));
       }
       continue;
     }
@@ -113,13 +186,8 @@ int main(int argc, char** argv) {
   for (auto const& text : sections->Summary(stats->BudgetMs())) std::printf("%s\n", text.c_str());
   std::printf("label calls: %d\n", labelCalls);
   for (int index : describe) std::printf("describe %d: %s\n", index, sections->Describe(index).c_str());
-  if (governed) {
-    for (auto const& text : governor.Summary()) std::printf("%s\n", text.c_str());
-    for (int level = 0; level < Vivify::PerformanceGovernor::kLevels; level++) {
-      auto const settings = Vivify::PerformanceGovernor::SettingsFor(level);
-      std::printf("settings %d: boost=%d foveation=%d scale=%.2f\n", level, settings.boost, settings.foveation,
-                  settings.resolutionScale);
-    }
+  if (changeLogUsed) {
+    for (auto const& text : changes->Lines()) std::printf("change: %s\n", text.c_str());
   }
   return 0;
 }

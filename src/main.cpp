@@ -1,5 +1,6 @@
 #include "main.hpp"
 #include "VivifyGlobalLog.hpp"
+#include "VivifyPerfMode.hpp"
 #include "VivifyWatchdog.hpp"
 #include <ctime>
 #include "VivifyRuntime.hpp"
@@ -67,6 +68,11 @@ constexpr std::string_view kPcBundleForMissingShadersConfigKey = "pcBundleForMis
 constexpr std::string_view kFarCullingConfigKey = "farCullingDistance";
 constexpr std::string_view kSlowFrameSamplerConfigKey = "slowFrameSampler";
 constexpr std::string_view kPerformanceModeConfigKey = "performanceModeHeavyMaps";
+constexpr std::string_view kPerfFloorConfigKey = "performanceModeFloorPercent";
+constexpr std::string_view kPerfHalfRefreshConfigKey = "performanceModeHalfRefresh";
+constexpr std::string_view kPerfDepthMapsConfigKey = "performanceModeScaleDepthMaps";
+constexpr std::string_view kPerfLearnConfigKey = "performanceModeLearnedProfiles";
+constexpr std::string_view kPerfFixedScaleConfigKey = "performanceModeFixedScalePercent";
 bool gMultipassRenderingEnabled = true;
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
@@ -142,9 +148,15 @@ int gFarCullingDistance = 0;
 // Stack samples of the main and render threads during frames over 100 ms,
 // summed up per section in the song's [PERF] summary (naomi.7).
 bool gSlowFrameSampler = true;
-// While a song runs slower than 60 fps, a GPU clock boost, then stronger
-// foveation, then lower eye resolution (naomi.7).
+// Performance mode for heavy maps (naomi.8): a smaller viewport while a song
+// runs over its frame budget, foveation HighTop and the GPU boost once it
+// turns out heavy.
 bool gPerformanceMode = false;
+int gPerfFloor = 60;            // lowest viewport scale, percent
+bool gPerfHalfRefresh = false;  // budget: two refreshes instead of one
+bool gPerfDepthMaps = false;    // scale maps whose shaders read scene depth too
+bool gPerfLearn = false;        // learned profiles per map and difficulty
+int gPerfFixedScale = 0;        // debug: a fixed viewport scale, percent; 0 off
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
 //
@@ -678,14 +690,49 @@ void RegisterModSettings() {
             container->get_transform(), u"Offscreen Culling (less lag)", gOffscreenCulling,
             [](bool value) { SetBoolConfigValue(kOffscreenCullingConfigKey, value, gOffscreenCulling); });
 
-        // Off by default: changes how heavy maps look. While a song runs
-        // slower than 60 fps it steps down -- a GPU clock boost (no change on
-        // screen), then stronger foveation (the edges of the view less
-        // sharp), then eye resolution 85%, 75%, 65% (the whole view softer)
-        // -- and back up while frames hold the refresh rate.
+        // Off by default: changes how heavy maps look. While a song runs over
+        // its frame budget, less of the eye buffers is drawn into (they are
+        // never reallocated mid-song, which is what blanked naomi.7), 2-5% a
+        // step down to the floor, and once the map turns out heavy,
+        // foveation HighTop and the GPU boost, kept until the song ends.
         BSML::Lite::CreateToggle(
             container->get_transform(), u"Performance Mode For Heavy Maps", gPerformanceMode,
             [](bool value) { SetBoolConfigValue(kPerformanceModeConfigKey, value, gPerformanceMode); });
+        BSML::Lite::CreateIncrementSetting(
+            container->get_transform(), u"Performance Mode: Lowest Resolution %", 0, 5.0f,
+            static_cast<float>(gPerfFloor), true, true, 40.0f, 90.0f, [](float value) {
+              SetIntConfigValue(kPerfFloorConfigKey, std::clamp(static_cast<int>(value + 0.5f), 40, 90), gPerfFloor);
+            });
+        // The budget is one refresh (72/90/120 fps); on, two (36/45/60 fps).
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Performance Mode: Aim For Half The Refresh Rate", gPerfHalfRefresh,
+            [](bool value) { SetBoolConfigValue(kPerfHalfRefreshConfigKey, value, gPerfHalfRefresh); });
+        // Maps whose shaders read the scene depth texture keep full resolution
+        // unless this is on: at a smaller viewport their soft edges and depth
+        // effects can land in the wrong place.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Performance Mode: Also Scale Maps That Read Depth", gPerfDepthMaps,
+            [](bool value) { SetBoolConfigValue(kPerfDepthMapsConfigKey, value, gPerfDepthMaps); });
+        // Remembers per map and difficulty how heavy each second was, and on
+        // later plays eases down a little before the heavy parts.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Performance Mode: Learn Each Map", gPerfLearn,
+            [](bool value) { SetBoolConfigValue(kPerfLearnConfigKey, value, gPerfLearn); });
+        BSML::Lite::CreateUIButton(container->get_transform(), u"Forget Learned Performance Profiles", []() {
+          std::error_code ec;
+          auto const removed = std::filesystem::remove_all(Vivify::PerfProfileDir(), ec);
+          SetConvertStatusText(ec ? "Could not remove the learned profiles"
+                                  : "Forgot " + std::to_string(removed > 0 ? removed - 1 : 0) + " learned profile(s)");
+        });
+        // Debug, for A/B tests: the viewport at this scale for the whole song,
+        // whatever the map does. 0 is off.
+        BSML::Lite::CreateIncrementSetting(
+            container->get_transform(), u"Debug: Fixed Resolution % (0 = off)", 0, 5.0f,
+            static_cast<float>(gPerfFixedScale), true, true, 0.0f, 100.0f, [](float value) {
+              int percent = std::clamp(static_cast<int>(value + 0.5f), 0, 100);
+              if (percent > 0 && percent < 40) percent = 40;
+              SetIntConfigValue(kPerfFixedScaleConfigKey, percent == 100 ? 0 : percent, gPerfFixedScale);
+            });
 
         // Draws nothing farther than this from the player. 0 is off: far
         // scenery is part of many maps' look.
@@ -961,6 +1008,26 @@ bool GetPerformanceMode() {
   return gPerformanceMode;
 }
 
+int GetPerformanceModeFloor() {
+  return std::clamp(gPerfFloor, 40, 90);
+}
+
+bool GetPerformanceModeHalfRefresh() {
+  return gPerfHalfRefresh;
+}
+
+bool GetPerformanceModeScaleDepthMaps() {
+  return gPerfDepthMaps;
+}
+
+bool GetPerformanceModeLearn() {
+  return gPerfLearn;
+}
+
+int GetPerformanceModeFixedScale() {
+  return gPerfFixedScale >= 40 && gPerfFixedScale < 100 ? gPerfFixedScale : 0;
+}
+
 int GetFarCullingDistance() {
   return std::clamp(gFarCullingDistance, 0, 1000);
 }
@@ -1016,6 +1083,11 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureIntConfigValue(kFarCullingConfigKey, 0, 0, 1000, gFarCullingDistance);
   needsWrite |= EnsureBoolConfigValue(kSlowFrameSamplerConfigKey, true, gSlowFrameSampler);
   needsWrite |= EnsureBoolConfigValue(kPerformanceModeConfigKey, false, gPerformanceMode);
+  needsWrite |= EnsureIntConfigValue(kPerfFloorConfigKey, 60, 40, 90, gPerfFloor);
+  needsWrite |= EnsureBoolConfigValue(kPerfHalfRefreshConfigKey, false, gPerfHalfRefresh);
+  needsWrite |= EnsureBoolConfigValue(kPerfDepthMapsConfigKey, false, gPerfDepthMaps);
+  needsWrite |= EnsureBoolConfigValue(kPerfLearnConfigKey, false, gPerfLearn);
+  needsWrite |= EnsureIntConfigValue(kPerfFixedScaleConfigKey, 0, 0, 100, gPerfFixedScale);
   if (needsWrite) {
     config.Write();
   }

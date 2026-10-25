@@ -69,7 +69,12 @@ All settings are in **Mod Settings → Vivify**.
 | Crash Guard | on | After two loads of a converted map that never finish, plays it with grey stand-ins instead. Turn off if maps go grey after crashes caused by other mods. |
 | Offscreen Culling (less lag) | off | Animators in a map's prefabs stop updating while nothing they draw is on screen. Can leave out scenery and particles that the animation itself grows, moves or spawns into view. |
 | Far Culling Distance | 0 (off) | Draws nothing farther than this many metres. Try 150-300 on heavy maps; far scenery may disappear. |
-| Performance Mode For Heavy Maps | off | While a song runs slower than 60 fps, steps down one level every 1.5 s: GPU clock boost (no change on screen), then foveation HighTop (edges of the view less sharp), then eye resolution 85%, 75%, 65% (the whole view softer). Steps back up while frames hold the refresh rate; the game's settings come back at the song's end. |
+| Performance Mode For Heavy Maps | off | While a song runs over its frame budget, draws into less of the eye buffers (never reallocating them), 2-5% a step down to the floor and back up when there is headroom; foveation HighTop and the GPU boost once the map turns out heavy. Holds full resolution while Vivify blits, screen textures or cameras are active, and for maps whose shaders read scene depth. |
+| Performance Mode: Lowest Resolution % | 60 | The floor for the viewport scale. |
+| Performance Mode: Aim For Half The Refresh Rate | off | The budget becomes two refreshes (60 fps at 120 Hz) instead of one. |
+| Performance Mode: Also Scale Maps That Read Depth | off | Lets maps whose shaders read the scene depth texture scale too; their soft edges and depth effects can land in the wrong place. |
+| Performance Mode: Learn Each Map | off | Remembers how heavy each second of a map was and eases down before those parts on later plays. "Forget Learned Performance Profiles" deletes what it learned. |
+| Debug: Fixed Resolution % | 0 (off) | Holds one viewport scale for whole songs, for A/B checks. |
 | Slow-Frame Sampler (diagnostics) | on | During frames over 100 ms, samples where the main and render threads are and sums it up per section in the session log's `[PERF]` lines. Changes nothing on screen. |
 | AudioLink | on | Runs AudioLink for maps that use it. |
 | Map Realtime Shadows | off | Lets maps turn on realtime shadows. Expensive; can blacken note bodies. |

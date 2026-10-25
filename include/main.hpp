@@ -71,8 +71,15 @@ bool GetUsePcBundleForMissingShaders();
 int GetFarCullingDistance();
 // Slow-frame sampler (naomi.7): diagnostics, on by default.
 bool GetSlowFrameSampler();
-// Performance mode for heavy maps (naomi.7): off by default; changes the look.
+// Performance mode for heavy maps (naomi.7, reworked in naomi.8): off by
+// default; changes the look. Floor and fixed scale are percent; the fixed
+// scale (a debug setting) is 0 when off.
 bool GetPerformanceMode();
+int GetPerformanceModeFloor();
+bool GetPerformanceModeHalfRefresh();
+bool GetPerformanceModeScaleDepthMaps();
+bool GetPerformanceModeLearn();
+int GetPerformanceModeFixedScale();
 // Empty when the stand-in shader should be chosen automatically.
 std::string GetStandInShaderName();
 // Whether a map carrying the Vivify requirement still submits its score.

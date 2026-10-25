@@ -953,6 +953,7 @@ void Runtime::HandleLevelSelected(SongCore::API::LevelSelect::LevelWasSelectedEv
 
   _activeSabers.clear();
   _selectedLevelPath.clear();
+  _selectedProfileKey.clear();
   _selectedBundlePath.clear();
   _selectedMapHasVivifyRequirement = false;
   CancelPendingDownload();
@@ -961,6 +962,18 @@ void Runtime::HandleLevelSelected(SongCore::API::LevelSelect::LevelWasSelectedEv
     return;
   }
   _selectedLevelPath = std::string(event.customBeatmapLevel->customLevelPath);
+  // The learned performance profile's key: map folder, characteristic and
+  // difficulty (naomi.8).
+  _selectedProfileKey = std::filesystem::path(_selectedLevelPath).filename().string();
+  try {
+    auto* characteristic = const_cast<GlobalNamespace::BeatmapCharacteristicSO*>(
+        event.beatmapKey.beatmapCharacteristic.unsafePtr());
+    if (characteristic != nullptr) {
+      _selectedProfileKey += "_" + std::string(characteristic->get_serializedName());
+    }
+  } catch (...) {
+  }
+  _selectedProfileKey += "_" + std::to_string(static_cast<int>(event.beatmapKey.difficulty.value__));
   if (GetVivifyDebugLogging()) {
     PaperLogger.info("Vivify level selected: path='{}' isCustom={} hasDetails={}",
                      _selectedLevelPath, BoolText(event.isCustom), BoolText(event.customLevelDetails.has_value()));
