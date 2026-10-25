@@ -69,6 +69,7 @@ All settings are in **Mod Settings → Vivify**.
 | Crash Guard | on | After two loads of a converted map that never finish, plays it with grey stand-ins instead. Turn off if maps go grey after crashes caused by other mods. |
 | Offscreen Culling (less lag) | off | Animators in a map's prefabs stop updating while nothing they draw is on screen. Can leave out scenery and particles that the animation itself grows, moves or spawns into view. |
 | Far Culling Distance | 0 (off) | Draws nothing farther than this many metres. Try 150-300 on heavy maps; far scenery may disappear. |
+| Emulate Geometry Effects On Particles | on | Particle systems whose particles hold still after one burst (743 Aether's triangle explosions) are baked into one mesh so the emulated geometry effect draws on them, as on PC. Off: they keep the stand-in colour. |
 | Performance Mode For Heavy Maps | off | While a song runs over its frame budget, draws into less of the eye buffers (never reallocating them), 2-5% a step down to the floor and back up when there is headroom; foveation HighTop and the GPU boost once the map turns out heavy. Holds full resolution while Vivify blits, screen textures or cameras are active, and for maps whose shaders read scene depth. |
 | Performance Mode: Lowest Resolution % | 60 | The floor for the viewport scale. |
 | Performance Mode: Aim For Half The Refresh Rate | off | The budget becomes two refreshes (60 fps at 120 Hz) instead of one. |

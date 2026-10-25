@@ -67,6 +67,7 @@ constexpr std::string_view kCrashGuardConfigKey = "crashGuard";
 constexpr std::string_view kPcBundleForMissingShadersConfigKey = "pcBundleForMissingShaders";
 constexpr std::string_view kFarCullingConfigKey = "farCullingDistance";
 constexpr std::string_view kSlowFrameSamplerConfigKey = "slowFrameSampler";
+constexpr std::string_view kParticleGeometryConfigKey = "emulateParticleGeometry";
 constexpr std::string_view kPerformanceModeConfigKey = "performanceModeHeavyMaps";
 constexpr std::string_view kPerfFloorConfigKey = "performanceModeFloorPercent";
 constexpr std::string_view kPerfHalfRefreshConfigKey = "performanceModeHalfRefresh";
@@ -149,6 +150,9 @@ int gFarCullingDistance = 0;
 // Stack samples of the main and render threads during frames over 100 ms,
 // summed up per section in the song's [PERF] summary (naomi.7).
 bool gSlowFrameSampler = true;
+// Static mesh particles on emulated geometry shaders baked into one mesh with
+// the emulation's corner data, as PC draws them (naomi.8).
+bool gParticleGeometry = true;
 // Performance mode for heavy maps (naomi.8): a smaller viewport while a song
 // runs over its frame budget, foveation HighTop and the GPU boost once it
 // turns out heavy.
@@ -642,6 +646,13 @@ void RegisterModSettings() {
             container->get_transform(), u"Emulate Geometry-Shader Effects",
             GetEmulateGeometryShaderEffects(),
             [](bool value) { SetBoolConfigValue(kEmulateGeometryConfigKey, value, gEmulateGeometry); });
+        // Particle systems whose particles hold still after one burst (743
+        // Aether's triangle explosions) are baked into one mesh so the
+        // emulated effect draws on them, as on PC. Off: they keep the
+        // stand-in colour.
+        BSML::Lite::CreateToggle(
+            container->get_transform(), u"Emulate Geometry Effects On Particles", gParticleGeometry,
+            [](bool value) { SetBoolConfigValue(kParticleGeometryConfigKey, value, gParticleGeometry); });
 
         // Custom notes and cut debris reuse their copies instead of making a
         // new one per note. Off makes a new copy every time, as before.
@@ -1023,6 +1034,10 @@ bool GetSlowFrameSampler() {
   return gSlowFrameSampler;
 }
 
+bool GetEmulateParticleGeometry() {
+  return gParticleGeometry;
+}
+
 bool GetPerformanceMode() {
   return gPerformanceMode;
 }
@@ -1105,6 +1120,7 @@ void EnsureConfigDefaults() {
   needsWrite |= EnsureBoolConfigValue(kPcBundleForMissingShadersConfigKey, false, gPcBundleForMissingShaders);
   needsWrite |= EnsureIntConfigValue(kFarCullingConfigKey, 0, 0, 1000, gFarCullingDistance);
   needsWrite |= EnsureBoolConfigValue(kSlowFrameSamplerConfigKey, true, gSlowFrameSampler);
+  needsWrite |= EnsureBoolConfigValue(kParticleGeometryConfigKey, true, gParticleGeometry);
   needsWrite |= EnsureBoolConfigValue(kPerformanceModeConfigKey, false, gPerformanceMode);
   needsWrite |= EnsureIntConfigValue(kPerfFloorConfigKey, 60, 40, 90, gPerfFloor);
   needsWrite |= EnsureBoolConfigValue(kPerfHalfRefreshConfigKey, false, gPerfHalfRefresh);

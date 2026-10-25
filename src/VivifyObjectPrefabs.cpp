@@ -742,6 +742,7 @@ void Runtime::InstantiatePrefab(CustomJSONData::CustomEventData* customEventData
 
   int const culledAnimators = CullOffscreenAnimators(instance);
   ApplyCostTest(instance, storageId);
+  FindParticleBakes(instance, storageId);
   VIVIFY_DEBUG("Vivify InstantiatePrefab spawned: id='{}' asset='{}' tracks={} animators={} offscreenCulled={}",
                storageId, data.asset, data.tracks.size(), animators.size(), culledAnimators);
   _livePrefabs[storageId] = LivePrefab{
@@ -764,6 +765,7 @@ bool Runtime::DestroyPrefabById(std::string const& id) {
   VIVIFY_DEBUG("Vivify DestroyObject: destroying live prefab id='{}'", id);
   auto prefab = std::move(it->second);
   _livePrefabs.erase(it);
+  ReleaseParticleBakes(id);
   UpdatePerfPrefabCounts();
   if (prefab.gameObject != nullptr) {
     UnregisterSyncedObject(prefab.gameObject);

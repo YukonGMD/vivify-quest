@@ -60,6 +60,21 @@ Test builds report themselves as 0.14.25-naomi.N.
   headset.
 
 ### Added
+- **Geometry-shader effects on static mesh particles** (naomi.8, setting
+  "Emulate Geometry Effects On Particles", on). A particle system's
+  vertices are built by Unity every frame without the corner data the
+  emulated programs need, so such systems kept a stand-in: in 743 Aether
+  the "Triangle Explosion" clouds (around 42 s, 200 Cube.001 particles) and
+  shards (around 54 s, Cone particles) came out light cyan instead of PC's
+  procedural rainbow flying apart. Those systems emit one burst and never
+  move a particle again, so once the burst has held still for half a second
+  the particles are baked into one mesh in the system's own space -- where
+  Unity draws a local-simulation system's particles on PC -- with the
+  corner data filled in, drawn with the original emulated material, and the
+  particle renderer is switched off. A system that simulates in world
+  space, has more than 400,000 vertices of particles, or whose particles
+  change later keeps (or gets back) its particle renderer and stand-in. The
+  bake is logged with its size and time.
 - **Cost test** (naomi.8, debug setting "Debug: Switch Off For A Cost
   Test", Nothing by default). Switches one category off for whole songs:
   skies (shaders named "sky"), transparent effects and particles (render

@@ -179,6 +179,7 @@ void Runtime::Update() {
     // Ten seconds into the song the converted bundle has loaded and drawn;
     // whatever happens after that is not what the crash guard is for.
     if (!_loadGuardPath.empty() && CurrentSongTime() > 10.0f) DisarmLoadGuard();
+    UpdateParticleBakes();
     UpdateMaterialAnimations();
     UpdateGlobalAnimations();
     UpdateAnimatorAnimations();
@@ -529,6 +530,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
   SetSongPlaying(false);
   if (_perfActive) WritePerfSummary();
   EndPerformanceMode(false);  // the game's display settings back, whatever happened
+  ReleaseParticleBakes("");
   if (_currentBeatmapData != nullptr) {
     LogLeakCheck("level end, before Vivify tears down");
     _leakCheckDueAt = UnityEngine::Time::get_realtimeSinceStartup() + 3.0f;

@@ -71,6 +71,8 @@ bool GetUsePcBundleForMissingShaders();
 int GetFarCullingDistance();
 // Slow-frame sampler (naomi.7): diagnostics, on by default.
 bool GetSlowFrameSampler();
+// Geometry emulation on static mesh particles (naomi.8): on by default.
+bool GetEmulateParticleGeometry();
 // Performance mode for heavy maps (naomi.7, reworked in naomi.8): off by
 // default; changes the look. Floor and fixed scale are percent; the fixed
 // scale (a debug setting) is 0 when off.

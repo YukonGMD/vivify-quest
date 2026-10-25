@@ -16,6 +16,8 @@
 #include <map>
 #include <tuple>
 #include "UnityEngine/Rendering/CommandBuffer.hpp"
+#include "UnityEngine/ParticleSystem.hpp"
+#include "UnityEngine/ParticleSystemRenderer.hpp"
 #include "UnityEngine/AssetBundleCreateRequest.hpp"
 #include "UnityEngine/AssetBundleRequest.hpp"
 #include "beatsaber-hook/shared/utils/typedefs-wrappers.hpp"
@@ -635,6 +637,32 @@ private:
   std::map<std::tuple<int, int, int>, SafePtrUnity<UnityEngine::Mesh>> _emulationMeshes;  // source, mode, vertices
   std::unordered_set<int> _emulationMeshSet;  // the rebuilt meshes
   std::unordered_map<int, SafePtrUnity<UnityEngine::Material>> _emulationStandIns;  // by original
+  std::unordered_map<int, SafePtrUnity<UnityEngine::Material>> _standInOriginals;  // by copy (naomi.8)
+  // Geometry emulation for static mesh particles (naomi.8,
+  // VivifyParticleEmulation.cpp): found when a prefab goes live, baked once its
+  // particles hold still.
+  struct ParticleBake {
+    enum State { kWaiting, kBaked, kGaveUp };
+    SafePtrUnity<UnityEngine::ParticleSystem> system;
+    SafePtrUnity<UnityEngine::ParticleSystemRenderer> renderer;
+    SafePtrUnity<UnityEngine::Material> original;  // the emulated material
+    std::string prefabId;
+    std::string name;
+    State state = kWaiting;
+    int count = -1;
+    double signature = 0.0;
+    int stableChecks = 0;
+    double lastCheck = 0.0;
+    SafePtrUnity<UnityEngine::GameObject> baked;
+    SafePtrUnity<UnityEngine::Mesh> mesh;
+  };
+  std::vector<std::unique_ptr<ParticleBake>> _particleBakes;
+  void FindParticleBakes(UnityEngine::GameObject* instance, std::string const& prefabId);
+  void UpdateParticleBakes();
+  bool BakeParticles(ParticleBake& bake, ArrayW<UnityEngine::ParticleSystem_Particle> const& particles, int count,
+                     std::string& reason);
+  void ReleaseParticleBake(ParticleBake& bake);
+  void ReleaseParticleBakes(std::string_view prefabId);  // empty: all
   // The list that came with the main bundle, read when the bundle was loaded:
   // a conversion can rewrite the files beside a bundle that stays loaded
   // (naomi.6).

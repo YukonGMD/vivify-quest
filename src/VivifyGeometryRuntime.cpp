@@ -488,6 +488,8 @@ void Runtime::ReleaseDecodedTextures() {
 }
 
 void Runtime::ReleaseGeometryEmulation() {
+  ReleaseParticleBakes("");
+  _standInOriginals.clear();
   for (auto& [key, mesh] : _emulationMeshes) {
     if (mesh) UnityEngine::Object::Destroy(mesh.ptr());
   }

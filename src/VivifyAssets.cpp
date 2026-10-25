@@ -3110,6 +3110,7 @@ UnityEngine::Material* Runtime::StandInCopyFor(UnityEngine::Material* material) 
   _fallbackShadedMaterials.emplace(copy);
   _repairedMaterials.emplace(copy);
   _emulationStandIns[materialId] = copy;
+  _standInOriginals[copy->GetInstanceID()] = material;  // for particle emulation (naomi.8)
   return copy;
 }
 
