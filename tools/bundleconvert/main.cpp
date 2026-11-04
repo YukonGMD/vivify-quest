@@ -79,6 +79,8 @@ int main(int argc, char** argv) {
     std::printf("parsed=%d\nunity=%s\nshaders=%d\nprograms=%d\nsamplesCameraDepth=%d\n", scan.parsed ? 1 : 0,
                 scan.unityVersion.c_str(), scan.shaderObjects, scan.programs, scan.samplesCameraDepth ? 1 : 0);
     for (auto const& name : scan.cameraDepthShaderNames) std::printf("depthShader=%s\n", name.c_str());
+    for (auto const& entry : scan.screenTextureAs2D) std::printf("screenAs2D=%s\n", entry.c_str());
+    for (auto const& name : scan.mainTexAs2DShaderNames) std::printf("mainTexAs2D=%s\n", name.c_str());
     return scan.parsed ? 0 : 1;
   }
   // --merge <quest> <converted-pc> <dst> <name>... puts the named shaders of
@@ -130,6 +132,7 @@ int main(int argc, char** argv) {
     options.skipQuestUnusedVariants = std::getenv("VIVIFY_SKIP_UNUSED") != nullptr;
     options.emulateGeometry = std::getenv("VIVIFY_EMULATE_GEOMETRY") != nullptr;
     options.keepInstancingVariants = std::getenv("VIVIFY_KEEP_INSTANCING") != nullptr;
+    options.screenTexturesAsArrays = std::getenv("VIVIFY_LEGACY_SCREEN_2D") == nullptr;
     ShaderConversion c = ConvertShadersToGles(src, dst, options);
     std::printf("status=%s\nmessage=%s\nseen=%d translated=%d leftAlone=%d refused=%d "
                 "programs=%d outBytes=%llu\ntexSeen=%d texReadable=%d texStreamed=%d\n"

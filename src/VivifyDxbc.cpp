@@ -7,6 +7,7 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <functional>
 #include <set>
 
 namespace Vivify::Dxbc {
@@ -1170,6 +1171,10 @@ struct MappedTexture {
   int coordinateComponents = 0;
   bool comparison = false;  // declared as a shadow sampler
   bool multisample = false;
+  // A 2D screen texture read as the eye buffer's two-layer array at layer
+  // gl_ViewID_OVR (GlslOptions::screenTexturesAsArrays). Its coordinates
+  // keep two components; the layer is added where it is sampled.
+  bool screenArray = false;
 };
 
 // A read/write resource: a D3D UAV, or a structured/raw shader resource. These
@@ -1216,6 +1221,11 @@ class GlslEmitter {
   }
 
   bool BuildConstantBuffers();
+  // Screen-space textures (GlslOptions::screenTexturesAsArrays): the t#
+  // registers sampled at coordinates derived from unity_StereoScaleOffset.
+  void FindScreenSpaceTextures();
+  bool IsStereoScaleOffset(uint32_t bindPoint, uint64_t row) const;
+  bool ScreenArraysEnabled() const { return _options.multiview && _options.screenTexturesAsArrays; }
   bool BuildResources();
   bool BuildSignatures();
   bool BuildStageDeclarations();
@@ -1318,6 +1328,8 @@ class GlslEmitter {
   // single-pass instanced stereo) and written by a vertex one.
   bool _usedRTArrayIndexIn = false;
   std::string _stereoEyeIndexType;  // set when unity_StereoEyeIndex is fed from the view
+  std::set<uint32_t> _screenSpaceTextures;   // t# registers (FindScreenSpaceTextures)
+  std::vector<std::string> _screenArrayNames;
   bool _writesRTArrayIndex = false;
   bool _stereoInstanced = false;
   bool _declaredRuntimeInstancingSize = false;
@@ -1571,7 +1583,92 @@ bool GlslEmitter::BuildConstantBuffers() {
   return !_failed;
 }
 
+// Unity's camera textures: screen-space whatever coordinates read them.
+bool IsCameraTextureName(std::string const& name) {
+  return name == "_CameraDepthTexture" || name == "_LastCameraDepthTexture" ||
+         name == "_CameraDepthNormalsTexture" || name == "_CameraOpaqueTexture" ||
+         name == "_CameraMotionVectorsTexture";
+}
+
+bool GlslEmitter::IsStereoScaleOffset(uint32_t bindPoint, uint64_t row) const {
+  for (auto const& buffer : _program.constantBuffers) {
+    if (buffer.bindPoint != bindPoint) continue;
+    for (auto const& variable : buffer.variables) {
+      if (variable.name != "unity_StereoScaleOffset") continue;
+      uint64_t const first = variable.startOffset / 16u;
+      uint64_t const rows = std::max<uint64_t>(1, (variable.size + 15u) / 16u);
+      return row >= first && row < first + rows;
+    }
+  }
+  return false;
+}
+
+// Single-pass double-wide stereo (a PC map's Unity 2019 build) maps a
+// screen-space UV to an eye's half of the wide screen texture with
+// UnityStereoTransformScreenSpaceTex: uv * unity_StereoScaleOffset[eye].xy +
+// .zw. A texture sampled at a coordinate that went through that is a screen
+// texture. Found by following the registers written from those constant reads
+// through every instruction (per register, to a fixed point, so loops are
+// covered); a coordinate computed in the vertex stage is not seen here, which
+// is why Unity's camera textures are also recognised by name.
+void GlslEmitter::FindScreenSpaceTextures() {
+  auto key = [](Operand const& operand) -> int64_t {
+    if (operand.indices.empty()) return -1;
+    if (operand.type == kOperandTemp) return static_cast<int64_t>(operand.indices[0].immediate);
+    if (operand.type == kOperandIndexableTemp) return 1000000 + static_cast<int64_t>(operand.indices[0].immediate);
+    return -1;
+  };
+  std::set<int64_t> tainted;
+  std::function<bool(Operand const&)> reads = [&](Operand const& operand) -> bool {
+    if (operand.type == kOperandConstantBuffer && operand.indices.size() >= 2 &&
+        IsStereoScaleOffset(static_cast<uint32_t>(operand.indices[0].immediate), operand.indices[1].immediate)) {
+      return true;
+    }
+    int64_t const k = key(operand);
+    if (k >= 0 && tainted.count(k)) return true;
+    for (auto const& index : operand.indices) {
+      if (index.hasRelative && index.relative && reads(*index.relative)) return true;
+    }
+    return false;
+  };
+  auto isFetch = [](uint32_t opcode) {
+    return opcode == OP_SAMPLE || opcode == OP_SAMPLE_L || opcode == OP_SAMPLE_B || opcode == OP_SAMPLE_D ||
+           opcode == OP_SAMPLE_C || opcode == OP_SAMPLE_C_LZ || opcode == OP_GATHER4 || opcode == OP_GATHER4_C ||
+           opcode == OP_LD;
+  };
+  for (int pass = 0; pass < 8; pass++) {
+    size_t const before = tainted.size();
+    for (auto const& instruction : _program.instructions) {
+      auto const& operands = instruction.operands;
+      if (operands.size() < 2 || isFetch(instruction.opcode)) continue;
+      bool any = false;
+      for (size_t i = 1; i < operands.size(); i++) any = any || reads(operands[i]);
+      if (!any) continue;
+      int64_t const first = key(operands[0]);
+      if (first >= 0) tainted.insert(first);
+      bool const twoDestinations = instruction.opcode == OP_SINCOS || instruction.opcode == OP_UDIV ||
+                                   instruction.opcode == OP_IMUL || instruction.opcode == OP_UMUL ||
+                                   instruction.opcode == OP_SWAPC || instruction.opcode == OP_UADDC ||
+                                   instruction.opcode == OP_USUBB;
+      if (twoDestinations) {
+        int64_t const second = key(operands[1]);
+        if (second >= 0) tainted.insert(second);
+      }
+    }
+    if (tainted.size() == before) break;
+  }
+  for (auto const& instruction : _program.instructions) {
+    if (!isFetch(instruction.opcode) || instruction.operands.size() < 3) continue;
+    auto const& resource = instruction.operands[2];
+    if (resource.type != kOperandResource || resource.indices.empty()) continue;
+    if (reads(instruction.operands[1])) {
+      _screenSpaceTextures.insert(static_cast<uint32_t>(resource.indices.back().immediate));
+    }
+  }
+}
+
 bool GlslEmitter::BuildResources() {
+  if (ScreenArraysEnabled()) FindScreenSpaceTextures();
   // Which textures are read through a comparison fetch, and which through a
   // multisample one. RDEF does not say; the instruction stream does, and a
   // shadow sampler declared as a plain one silently returns the wrong thing.
@@ -1713,6 +1810,15 @@ bool GlslEmitter::BuildResources() {
         case 4: typePrefix = "u"; break;  // UINT
         default: break;                   // UNORM/SNORM/FLOAT/MIXED all read as float
       }
+    }
+    // A screen texture under multiview is the eye buffer's two-layer array.
+    // Not for a comparison or integer one: no screen texture is either, and
+    // GLSL ES has no offset form for an array shadow sampler.
+    if (ScreenArraysEnabled() && binding.dimension == 4 && !texture.comparison && typePrefix[0] == '\0' &&
+        (_screenSpaceTextures.count(binding.bindPoint) || IsCameraTextureName(binding.name))) {
+      texture.screenArray = true;
+      shape = "2DArray";
+      _screenArrayNames.push_back(binding.name);
     }
     std::string const samplerType =
         std::string(typePrefix) + "sampler" + shape + (texture.comparison ? "Shadow" : "");
@@ -2239,6 +2345,12 @@ std::string GlslEmitter::ConstantComponent(Operand const& operand, int component
   }
   auto const& variables = _constantBuffers[bindPoint];
   OperandIndex const& rowIndex = operand.indices[1];
+  // Each layer of a multiview screen texture is a whole eye, so the
+  // double-wide eye mapping is identity (screenTexturesAsArrays); a relative
+  // read starts at the variable, so the base row decides.
+  if (ScreenArraysEnabled() && IsStereoScaleOffset(bindPoint, rowIndex.immediate)) {
+    return component < 2 ? "1.0" : "0.0";
+  }
   uint32_t const byteOffset =
       static_cast<uint32_t>(rowIndex.immediate) * 16u + static_cast<uint32_t>(component) * 4u;
 
@@ -2819,6 +2931,8 @@ bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
       call += "vec" + std::to_string(coordinateComponents) + "(" +
               SrcFloat(operands[1], coordinateMask) + ", " +
               ScalarFloat(operands[operands.size() - 1]) + ")";
+    } else if (texture->screenArray) {
+      call += "vec3(" + SrcFloat(operands[1], 0x3) + ", float(gl_ViewID_OVR))";
     } else {
       call += SrcFloat(operands[1], static_cast<uint8_t>((1u << coordinateComponents) - 1u));
     }
@@ -2872,7 +2986,9 @@ bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
 
     std::string call = instruction.hasSampleOffsets ? "textureGatherOffset(" : "textureGather(";
     call += texture->name + ", " +
-            SrcFloat(operands[1], static_cast<uint8_t>((1u << texture->coordinateComponents) - 1u));
+            (texture->screenArray
+                 ? "vec3(" + SrcFloat(operands[1], 0x3) + ", float(gl_ViewID_OVR))"
+                 : SrcFloat(operands[1], static_cast<uint8_t>((1u << texture->coordinateComponents) - 1u)));
     if (instruction.hasSampleOffsets) {
       int offsetComponents = texture->coordinateComponents;
       if (texture->dimension == 5) offsetComponents = 2;   // Texture2DArray
@@ -3479,8 +3595,11 @@ bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
       if (texture->dimension == 10) gradientComponents = 3;
       uint8_t const gradientMask = static_cast<uint8_t>((1u << gradientComponents) - 1u);
       std::string call = instruction.hasSampleOffsets ? "textureGradOffset(" : "textureGrad(";
-      call += texture->name + ", " + SrcFloat(operands[1], coordinateMask) + ", " +
-              SrcFloat(operands[4], gradientMask) + ", " + SrcFloat(operands[5], gradientMask);
+      std::string const coordinate = texture->screenArray
+                                         ? "vec3(" + SrcFloat(operands[1], 0x3) + ", float(gl_ViewID_OVR))"
+                                         : SrcFloat(operands[1], coordinateMask);
+      call += texture->name + ", " + coordinate + ", " + SrcFloat(operands[4], gradientMask) + ", " +
+              SrcFloat(operands[5], gradientMask);
       call += SampleOffsetArgument(instruction, gradientComponents);
       call += ")";
       WriteDest(instruction, operands[0], call + ResourceSwizzle(resource, destMask()));
@@ -3517,8 +3636,12 @@ bool GlslEmitter::EmitInstruction(Instruction const& instruction) {
       int const coordinateComponents = texture->coordinateComponents;
       uint8_t const coordinateMask = static_cast<uint8_t>((1u << coordinateComponents) - 1u);
       std::string call = instruction.hasSampleOffsets ? "texelFetchOffset(" : "texelFetch(";
-      call += texture->name + ", " + VecType(coordinateComponents, "i") + "(" +
-              SrcInt(operands[1], coordinateMask) + ")";
+      if (texture->screenArray) {
+        call += texture->name + ", ivec3(" + SrcInt(operands[1], 0x3) + ", int(gl_ViewID_OVR))";
+      } else {
+        call += texture->name + ", " + VecType(coordinateComponents, "i") + "(" +
+                SrcInt(operands[1], coordinateMask) + ")";
+      }
       if (opcode == OP_LD_MS) {
         // The sample index is a separate operand; a multisample fetch has no
         // mip level.
@@ -4258,6 +4381,8 @@ GlslResult GlslEmitter::Run() {
     result.samplers = _samplerList;
     result.version = _version;
     result.stereoInstanced = _stereoInstanced;
+  result.screenArrayTextures = _screenArrayNames;
+    result.screenArrayTextures = _screenArrayNames;
     result.geometryInputVertices = _gsInputVertices;
     result.geometryMaxVertices = _gsMaxVertices;
     result.geometryOutputTopology = _gsOutputTopology;
@@ -4268,7 +4393,7 @@ GlslResult GlslEmitter::Run() {
   std::string source;
   source += "#version " + std::to_string(_version) + " es\n";
   bool const needsViewId = _options.multiview && (_program.stage == Stage::Vertex || _usedRTArrayIndexIn ||
-                                                  !_stereoEyeIndexType.empty());
+                                                  !_stereoEyeIndexType.empty() || !_screenArrayNames.empty());
   if (needsViewId) {
     source += "#extension GL_OVR_multiview2 : require\n";
     if (_program.stage == Stage::Vertex) source += "layout(num_views = 2) in;\n";

@@ -147,6 +147,15 @@ struct ShaderScan {
   // pre-pass that renders it.
   bool samplesCameraDepth = false;
   std::vector<std::string> cameraDepthShaderNames;
+  // Two-eye (multiview) GLSL programs that read a screen texture as one plain
+  // sampler2D (naomi.10-beta.2). On the Quest the screen and the camera's
+  // depth texture are two-layer arrays, and Unity hands such a sampler the
+  // property's default texture instead: a Blit through one of these covers
+  // the view in white, a depth read sees nothing. screenTextureAs2D holds
+  // "shader: texture" for Unity's camera textures; mainTexAs2DShaderNames the
+  // shaders whose _MainTex is read that way (the screen only in a Blit).
+  std::vector<std::string> screenTextureAs2D;
+  std::vector<std::string> mainTexAs2DShaderNames;
 };
 
 // What a shader-translating conversion did.
@@ -277,6 +286,9 @@ struct ShaderConversionOptions {
   // single-pass stereo. Most of a PC bundle's programs; far less to load and
   // compile. Not for donor builds, whose materials keep their instancing.
   bool skipQuestUnusedVariants = false;
+  // Multiview programs read screen-space textures as two-layer arrays
+  // (Dxbc::GlslOptions::screenTexturesAsArrays, naomi.10-beta.2).
+  bool screenTexturesAsArrays = true;
 };
 
 ShaderConversion ConvertShadersToGles(std::string const& sourcePath,

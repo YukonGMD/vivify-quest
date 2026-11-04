@@ -109,6 +109,7 @@ files.
 
 | Menu name | Key | Default | What it does |
 |---|---|---|---|
+| Two-Eye Screen Textures | `screenTexturesAsArrays` | on | Converted shaders read the screen and the depth texture as the Quest's two-eye array, as Unity's own two-eye build does. New in naomi.10-beta.2: the fix for Blits that covered the view in white (743 Aether, Get Your Wish). Off puts back the old reads, for comparison. *Reconverts.* |
 | Translate Shaders On Conversion | `translateShadersOnConversion` | on | Off: converted maps keep no shaders of their own and draw as stand-ins. Reconvert after changing it. |
 | Disable Beat 0 Filmgrain Blit | `disableBeat0FilmgrainBlit` | off | Skips a film-grain effect a map starts at beat 0. |
 | Disable CreateCamera Depth | `disableCreateCameraDepth` | off | Gives the cameras a map creates no depth texture. |

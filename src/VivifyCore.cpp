@@ -173,6 +173,7 @@ void Runtime::Update() {
     }
     _lastGameplayFrame = frameStart;
     VivifySetSongTime(CurrentSongTime());
+    PollViewProbe();
     RecordPerfFrame(frameStart);
     // The frame level start ran in has finished, rendering included: whatever
     // freezes after "level start end" and before this line is in that frame.
@@ -675,6 +676,7 @@ void Runtime::ResetRuntime(std::string_view reason) {
   _sceneDepthSkipLogged = false;
   _lastGameplayFrame = {};
   _stallsLogged = 0;
+  _blitScreenWarned.clear();
   ReleaseCachedBlitTextures();
   // What the level ran with, before it is put back (Debug logging only).
   if (_currentBeatmapData != nullptr && GetVivifyDebugLogging()) DumpRenderingState("level end");
@@ -1037,6 +1039,7 @@ void Runtime::WritePerfSummary() {
         (cost.layer2Ns - _perfLogCostStart.layer2Ns) / 1e6 / frames,
         (cost.layer3Ns - _perfLogCostStart.layer3Ns) / 1e6 / frames, GetDetailedLogging() ? "on" : "off"));
   }
+  EndViewProbeSong();
   EndPerformanceMode(true);
   if (!PerfRecordersValid()) {
     VivifyWriteFlushedLine("[PERF] draw call counts: not available in this game build");

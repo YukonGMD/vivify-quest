@@ -77,7 +77,7 @@ Paper hands them over, usually within a few milliseconds of the call.
 | `ASSETS` | One line per level load: assets and prefabs; every shader its materials use, how many materials and how many draw a stand-in; textures by Unity format number. |
 | `PERF` | The song summary (below). |
 | `GL` | GL errors since the last check (every 2 s in a song). |
-| `FRAME`, `COST`, `SLOW` | Detailed mode only. |
+| `FRAME`, `COST`, `SLOW`, `WHITE` | Detailed mode only. |
 
 Repeated lines are rate-limited: the first 8 with the same text (digits
 ignored) in 10 s are written, then one line says how many more were left
@@ -164,8 +164,24 @@ During songs it adds:
   and breadcrumb; the first one also writes the render state (lights,
   ambient, fog, quality settings, largest textures).
 
+- `WHITE` (naomi.10-beta.2): four times a second of song, the frame as it
+  leaves Vivify is copied to a 16x16 texture and its left eye read back
+  (AsyncGPUReadback where Unity supports it on the headset; otherwise a small
+  ReadPixels once a second, which stalls a little). When nine in ten samples
+  are near white, one line says so with everything that could be drawing it:
+  every active Blit with its shader, order, end time and whether it reads the
+  screen as 2D; screen textures; Vivify's cameras; the main camera's clear
+  flags and background; fog; the last Vivify event and breadcrumb. Another
+  line says when it ends, and the song summary counts the stretches.
+
 Vivify cannot see individual draw calls (Unity loads GL through its own
 table), so the slow-frame detail is per renderer and material.
+
+Two warnings explain white or washed-out views even with detailed mode off
+(naomi.10-beta.2): `Vivify screen texture check:` at level select, for a
+shader that reads the camera's depth (or another camera texture) as one plain
+2D texture in its two-eye program, and `Vivify Blit '...' reads the screen as
+one plain 2D texture`, when such a Blit starts, with the song times it covers.
 
 ## Costs
 

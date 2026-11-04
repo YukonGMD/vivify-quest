@@ -149,7 +149,8 @@ int main(int argc, char** argv) {
     for (auto const& def : S::All()) {
       std::string const key(def.key);
       if (!Has(saved, def.key)) {
-        Check(def.key == "showDeveloperOptions" || def.key == "detailedLogging",
+        Check(def.key == "showDeveloperOptions" || def.key == "detailedLogging" ||
+                  def.key == "screenTexturesAsArrays",
               "naomi9.json had every key but naomi.10's new ones: " + key);
         continue;
       }
@@ -164,6 +165,7 @@ int main(int argc, char** argv) {
     Check(S::GetBool(doc, "drawGeometryShaderEffects"), "naomi9: Draw Geometry-Shader Effects still on");
     Check(!S::GetBool(doc, "showDeveloperOptions"), "naomi9: developer options start hidden");
     Check(!S::GetBool(doc, "detailedLogging"), "naomi9: detailed logging starts off");
+    Check(S::GetBool(doc, "screenTexturesAsArrays"), "naomi9: the white-screen fix starts on");
     Check(!S::Load(doc), "loading again changes nothing");
     std::string const nonDefault = S::NonDefault(doc, S::Section::Advanced);
     Check(nonDefault == "drawGeometryShaderEffects=true mapRealtimeShadows=true",

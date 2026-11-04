@@ -1,4 +1,10 @@
 #include "VivifyRuntimeInternal.hpp"
+#include "UnityEngine/Experimental/Rendering/GraphicsFormat.hpp"
+#include "UnityEngine/CameraClearFlags.hpp"
+#include "UnityEngine/RenderSettings.hpp"
+#include "UnityEngine/Rect.hpp"
+#include "UnityEngine/TextureFormat.hpp"
+#include "UnityEngine/Texture2D.hpp"
 #include "VivifyComponents.hpp"
 #include "UnityEngine/Rendering/CameraEvent.hpp"
 #include "UnityEngine/Rendering/TextureDimension.hpp"
@@ -33,11 +39,15 @@ void Runtime::ApplyBlits(UnityEngine::RenderTexture* src, UnityEngine::RenderTex
                                            : (phase == 2 ? _postEffects.empty()
                                                          : (_preEffects.empty() && _postEffects.empty())));
   auto destId = (dest != nullptr) ? ToTargetId(dest) : CameraTargetId();
+  // The frame as it leaves Vivify, for the white-view detector (detailed mode).
+  bool const probe = phase != 1 && GetDetailedLogging() && !_pauseMenuActive && _currentBeatmapData != nullptr;
   if (passthroughOnly) {
     auto* cb = ImmediateCommandBuffer();
     cb->Blit(ToTargetId(src), destId);
+    if (probe) ProbeView(cb, ToTargetId(src));
     UnityEngine::Graphics::ExecuteCommandBuffer(cb);
     cb->Clear();
+    if (_viewProbeQueued) IssueViewReadback();
     return;
   }
   auto* main = EnsureCachedBlitTexture(_mainBlitTexture, src);
@@ -126,11 +136,238 @@ void Runtime::ApplyBlits(UnityEngine::RenderTexture* src, UnityEngine::RenderTex
   }
 
   cb->Blit(ToTargetId(mainCurrent), destId);
+  if (probe) ProbeView(cb, ToTargetId(mainCurrent));
   UnityEngine::Graphics::ExecuteCommandBuffer(cb);
   cb->Clear();
+  if (_viewProbeQueued) IssueViewReadback();
   for (auto* temp : selfBlitTemps) {
     UnityEngine::RenderTexture::ReleaseTemporary(temp);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Mostly-white view detector (naomi.10-beta.2, detailed mode)
+//
+// naomi.10-beta.1's tester saw the view go white mid-song and come back the
+// moment the game was paused; the logs could show which Blits ran, but not
+// that the view was white. Four times a second of song, the frame as it leaves
+// Vivify is copied into a 16x16 two-layer texture (one cheap draw), its left
+// eye read back -- through AsyncGPUReadback where Unity supports it on this
+// GPU, so nothing waits; otherwise a ReadPixels once a second, which stalls a
+// little and is only ever done in detailed mode -- and judged on the main
+// thread. When nine in ten of the samples are near white, the log says so
+// with everything that could be drawing it.
+
+namespace {
+
+struct ReadbackCalls {
+  using Supported = bool (*)();
+  using Request = void (*)(UnityEngine::Texture* source, int32_t mip, ViewReadback* out);
+  using Flag = bool (*)(ViewReadback* self);
+  using Size = int32_t (*)(ViewReadback* self);
+  using Data = void* (*)(ViewReadback* self, int32_t layer);
+  using Update = void (*)(ViewReadback* self);
+  Request request = nullptr;
+  Flag isDone = nullptr;
+  Flag hasError = nullptr;
+  Size layerSize = nullptr;
+  Data data = nullptr;
+  Update update = nullptr;
+  bool usable = false;
+};
+
+// The engine's own calls (the game's managed code has no AsyncGPUReadback
+// wrappers), looked up once; any missing, or the GPU without support, and the
+// ReadPixels fallback is used.
+ReadbackCalls const& Readback() {
+  static ReadbackCalls const calls = [] {
+    ReadbackCalls found;
+    auto const supported = reinterpret_cast<ReadbackCalls::Supported>(
+        ResolveEngineIcall("UnityEngine.SystemInfo::SupportsAsyncGPUReadback"));
+    found.request = reinterpret_cast<ReadbackCalls::Request>(
+        ResolveEngineIcall("UnityEngine.Rendering.AsyncGPUReadback::Request_Internal_Texture_1_Injected"));
+    found.isDone = reinterpret_cast<ReadbackCalls::Flag>(
+        ResolveEngineIcall("UnityEngine.Rendering.AsyncGPUReadbackRequest::IsDone_Injected"));
+    found.hasError = reinterpret_cast<ReadbackCalls::Flag>(
+        ResolveEngineIcall("UnityEngine.Rendering.AsyncGPUReadbackRequest::HasError_Injected"));
+    found.layerSize = reinterpret_cast<ReadbackCalls::Size>(
+        ResolveEngineIcall("UnityEngine.Rendering.AsyncGPUReadbackRequest::GetLayerDataSize_Injected"));
+    found.data = reinterpret_cast<ReadbackCalls::Data>(
+        ResolveEngineIcall("UnityEngine.Rendering.AsyncGPUReadbackRequest::GetDataRaw_Injected"));
+    found.update = reinterpret_cast<ReadbackCalls::Update>(
+        ResolveEngineIcall("UnityEngine.Rendering.AsyncGPUReadbackRequest::Update_Injected"));
+    found.usable = supported != nullptr && supported() && found.request && found.isDone && found.hasError &&
+                   found.layerSize && found.data && found.update;
+    PaperLogger.info("Vivify white-view detector: {}", found.usable
+                                                           ? "reads the frame back without waiting (AsyncGPUReadback)"
+                                                           : "AsyncGPUReadback unavailable; a small ReadPixels once a "
+                                                             "second instead");
+    return found;
+  }();
+  return calls;
+}
+
+constexpr int kProbeSize = 16;
+
+}  // namespace
+
+void Runtime::ProbeView(UnityEngine::Rendering::CommandBuffer* cb,
+                        UnityEngine::Rendering::RenderTargetIdentifier image) {
+  if (_viewReadbackPending || _viewProbeQueued || !_hasMainDescriptor) return;
+  float const now = CurrentSongTime();
+  if (now < _viewProbeDue) return;
+  bool const async = Readback().usable;
+  _viewProbeDue = now + (async ? 0.25f : 1.0f);
+  if (!_viewProbe) {
+    auto desc = _cachedMainDescriptor;
+    desc.set_width(kProbeSize);
+    desc.set_height(kProbeSize);
+    desc.set_msaaSamples(1);
+    desc.set_depthBufferBits(0);
+    desc.set_graphicsFormat(UnityEngine::Experimental::Rendering::GraphicsFormat::R8G8B8A8_UNorm);
+    auto* texture = UnityEngine::RenderTexture::New_ctor(desc);
+    if (!IsAlive(texture) || !texture->Create()) return;
+    texture->set_name(StringW("VivifyViewProbe"));
+    _viewProbe = texture;
+  }
+  cb->Blit(image, ToTargetId(_viewProbe.ptr()));
+  _viewProbeQueued = true;
+}
+
+void Runtime::IssueViewReadback() {
+  _viewProbeQueued = false;
+  if (!_viewProbe) return;
+  auto const& calls = Readback();
+  if (calls.usable) {
+    _viewReadback = ViewReadback{};
+    calls.request(_viewProbe.ptr(), 0, &_viewReadback);
+    _viewReadbackPending = _viewReadback.ptr != nullptr;
+    return;
+  }
+  // Fallback: read the probe's first layer now.
+  try {
+    if (!_viewProbePixels) {
+      _viewProbePixels = UnityEngine::Texture2D::New_ctor(kProbeSize, kProbeSize,
+                                                         UnityEngine::TextureFormat::RGBA32, false);
+    }
+    auto* previous = UnityEngine::RenderTexture::get_active().unsafePtr();
+    UnityEngine::RenderTexture::set_active(_viewProbe.ptr());
+    _viewProbePixels->ReadPixels(UnityEngine::Rect(0, 0, kProbeSize, kProbeSize), 0, 0, false);
+    UnityEngine::RenderTexture::set_active(previous);
+    auto pixels = _viewProbePixels->GetPixels32();
+    if (pixels && pixels.size() == kProbeSize * kProbeSize) {
+      JudgeView(reinterpret_cast<uint8_t const*>(pixels.begin()), pixels.size() * 4u, "ReadPixels");
+    }
+  } catch (...) {
+  }
+}
+
+void Runtime::PollViewProbe() {
+  if (!_viewReadbackPending) return;
+  auto const& calls = Readback();
+  calls.update(&_viewReadback);
+  if (!calls.isDone(&_viewReadback)) return;
+  _viewReadbackPending = false;
+  if (calls.hasError(&_viewReadback)) return;
+  int32_t const size = calls.layerSize(&_viewReadback);
+  auto const* data = static_cast<uint8_t const*>(calls.data(&_viewReadback, 0));
+  if (data == nullptr || size != kProbeSize * kProbeSize * 4) return;
+  JudgeView(data, static_cast<size_t>(size), "AsyncGPUReadback");
+}
+
+void Runtime::JudgeView(uint8_t const* pixels, size_t bytes, char const* how) {
+  size_t const count = bytes / 4u;
+  if (count == 0) return;
+  size_t white = 0;
+  uint64_t sum = 0;
+  for (size_t i = 0; i < count; i++) {
+    uint8_t const r = pixels[i * 4], g = pixels[i * 4 + 1], b = pixels[i * 4 + 2];
+    if (r >= 235 && g >= 235 && b >= 235) white++;
+    sum += r + g + b;
+  }
+  float const share = static_cast<float>(white) / static_cast<float>(count);
+  float const brightness = static_cast<float>(sum) / static_cast<float>(count * 3u * 255u);
+  float const now = CurrentSongTime();
+  bool const isWhite = share >= 0.9f;
+  if (isWhite == _viewWhite) return;
+  _viewWhite = isWhite;
+  if (isWhite) {
+    _viewWhiteSince = now;
+    _viewWhiteStretches++;
+    VivifyLogLine("WHITE", fmt::format("the view turned mostly white: {:.0f}% of a {}x{} sample of the left eye near "
+                                       "white, average brightness {:.2f} ({}); active: {}",
+                                       share * 100.0f, kProbeSize, kProbeSize, brightness, how,
+                                       DescribeActiveEffects()),
+                  true, false);
+    VivifyBlackBoxRecord(BlackBox::kWarning, "view turned mostly white");
+  } else {
+    _viewWhiteSeconds += std::max(0.0f, now - _viewWhiteSince);
+    VivifyLogLine("WHITE", fmt::format("the view is no longer mostly white, after {:.1f} s (from song time {:.2f})",
+                                       now - _viewWhiteSince, _viewWhiteSince),
+                  true, false);
+    VivifyBlackBoxRecord(BlackBox::kWarning, "view no longer mostly white");
+  }
+}
+
+void Runtime::EndViewProbeSong() {
+  if (_viewWhite) _viewWhiteSeconds += std::max(0.0f, CurrentSongTime() - _viewWhiteSince);
+  if (GetDetailedLogging()) {
+    VivifyWriteFlushedLine(fmt::format("[PERF] mostly-white view (detailed mode): {} stretch(es), {:.1f} s in all",
+                                       _viewWhiteStretches, _viewWhiteSeconds));
+  }
+  _viewWhite = false;
+  _viewWhiteStretches = 0;
+  _viewWhiteSeconds = 0.0f;
+  _viewProbeDue = 0.0f;
+  _viewReadbackPending = false;
+  _viewProbeQueued = false;
+}
+
+// Everything that could be painting the view, in one line.
+std::string Runtime::DescribeActiveEffects() {
+  std::string out;
+  auto blits = [&](char const* label, std::vector<ActiveBlitEffect> const& effects) {
+    for (auto const& effect : effects) {
+      std::string shader = "no material";
+      if (IsAlive(effect.data.material)) shader = ShaderNameForLog(effect.data.material->get_shader().unsafePtr());
+      out += fmt::format("{}blit '{}' ({}, {}, source {}, until {:.2f}{})", out.empty() ? "" : "; ",
+                         effect.data.asset, shader, label, effect.data.source, effect.expireTime,
+                         ShaderReadsMainTexAs2D(shader) ? ", reads the screen as 2D" : "");
+    }
+  };
+  blits("before the game's effect", _preEffects);
+  blits("after the game's effect", _postEffects);
+  for (size_t i = 0; i < _midEffects.size(); i++) {
+    blits(fmt::format("mid-render order {}", i).c_str(), _midEffects[i]);
+  }
+  for (auto const& [name, texture] : _declaredTextures) {
+    out += fmt::format("{}screen texture '{}'{}", out.empty() ? "" : "; ", name,
+                       IsAlive(texture.texture) ? fmt::format(" {}x{}x{}", texture.texture->get_width(),
+                                                              texture.texture->get_height(),
+                                                              texture.texture->get_descriptor().get_volumeDepth())
+                                                : std::string(" (not created)"));
+  }
+  for (auto const& [name, camera] : _secondaryCameras) {
+    out += fmt::format("{}camera '{}' {}", out.empty() ? "" : "; ", name,
+                       IsAlive(camera.camera) && camera.camera->get_enabled() ? "on" : "off");
+  }
+  try {
+    auto* main = UnityEngine::Camera::get_main().unsafePtr();
+    if (IsAlive(main)) {
+      auto const background = main->get_backgroundColor();
+      out += fmt::format("{}main camera clear {} background ({:.2f}, {:.2f}, {:.2f})", out.empty() ? "" : "; ",
+                         static_cast<int>(main->get_clearFlags().value__), background.r, background.g, background.b);
+    }
+    auto const fog = UnityEngine::RenderSettings::get_fogColor();
+    out += fmt::format("; fog {} colour ({:.2f}, {:.2f}, {:.2f}) density {:.3f}",
+                       UnityEngine::RenderSettings::get_fog() ? "on" : "off", fog.r, fog.g, fog.b,
+                       UnityEngine::RenderSettings::get_fogDensity());
+  } catch (...) {
+  }
+  char label[192];
+  WritePerfLabel(label, sizeof(label));
+  out += std::string("; ") + label;
+  return out.empty() ? "nothing" : out;
 }
 
 void Runtime::CacheMainRenderDescriptor(UnityEngine::RenderTexture* src) {
@@ -517,6 +754,24 @@ void Runtime::RemoveMatchingBlitEffects(std::vector<ActiveBlitEffect>& effects, 
   }), effects.end());
 }
 
+// A Blit of the screen through a shader whose two-eye program reads _MainTex
+// as one plain texture draws Unity's default texture -- solid white, for most
+// -- for as long as it runs (naomi.10-beta.2). Said once per shader a level,
+// so a white view in a session log has its explanation beside it.
+void Runtime::WarnIfBlitReadsScreenAs2D(UnityEngine::Material* material, std::string_view asset,
+                                        std::string_view source, float startTime, float duration) {
+  if (!IsAlive(material) || source != kMainCameraId) return;
+  auto* shader = material->get_shader().unsafePtr();
+  if (!IsAlive(shader)) return;
+  std::string const name = ShaderNameForLog(shader);
+  if (!ShaderReadsMainTexAs2D(name) || !_blitScreenWarned.insert(name).second) return;
+  PaperLogger.warn("Vivify Blit '{}' (shader '{}') reads the screen as one plain 2D texture in its two-eye program; "
+                   "the Quest's screen is a two-layer array, so this Blit draws Unity's default texture (usually "
+                   "solid white) from song time {:.2f} to {:.2f}",
+                   asset, name, startTime, startTime + duration);
+  VivifyBlackBoxRecord(BlackBox::kWarning, "Blit reads the screen as 2D: " + name);
+}
+
 void Runtime::HandleBlit(CustomJSONData::CustomEventData* customEventData, rapidjson::Value const& json) {
   auto asset = ReadBlitAssetName(json);
   // "clear"/"remove": true, or "enabled": false, turns the event into a stop
@@ -554,6 +809,8 @@ void Runtime::HandleBlit(CustomJSONData::CustomEventData* customEventData, rapid
     }
     RepairMaterialShader(material, *asset);
     LogMaterialShader("Blit", *asset, material);
+    WarnIfBlitReadsScreenAs2D(material, *asset, ReadStringView(json, "source").value_or(kMainCameraId),
+                              customEventData->time, DurationBeatsToSeconds(ReadFloat(json, "duration").value_or(0.0f)));
     bool malformed = false;
     auto properties = ParseMaterialProperties(json, &malformed);
     if (malformed) return;

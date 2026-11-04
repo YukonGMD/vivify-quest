@@ -1734,6 +1734,7 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
     bool const multiview = multiviewRef[indexOf(ref)];
     Vivify::Dxbc::GlslOptions options;
     options.multiview = multiview;
+    options.screenTexturesAsArrays = conversionOptions.screenTexturesAsArrays;
     auto cached = translated.find({blob, multiview});
     if (cached == translated.end()) {
       Vivify::Dxbc::GlslResult result;
@@ -1780,6 +1781,7 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
         auto const reflection = ReflectionFrom(ref.parameters);
         Vivify::Dxbc::GlslOptions options;
         options.multiview = multiview;
+        options.screenTexturesAsArrays = conversionOptions.screenTexturesAsArrays;
         options.reflection = &reflection;
         options.functionMode = mode;
         result = Vivify::Dxbc::TranslateDxbcToGlsl(program.code.empty() ? nullptr : program.code.data(),
@@ -2627,6 +2629,29 @@ ShaderScan ScanShaders(std::string const& bundlePath) {
       if (depthHere) {
         scan.samplesCameraDepth = true;
         scan.cameraDepthShaderNames.push_back(shader.name.empty() ? std::string("?") : shader.name);
+      }
+      // Screen textures read as one plain texture by a two-eye program.
+      std::set<std::string> as2D;
+      for (auto const& program : decoded.programs) {
+        if (!SerializedFileParse::GpuProgramIsGlslSource(program.programType)) continue;
+        std::string_view const code(reinterpret_cast<char const*>(program.code.data()), program.code.size());
+        if (code.find("gl_ViewID_OVR") == std::string_view::npos &&
+            code.find("GL_OVR_multiview") == std::string_view::npos) {
+          continue;
+        }
+        for (char const* texture : {"_MainTex", "_CameraDepthTexture", "_LastCameraDepthTexture",
+                                    "_CameraDepthNormalsTexture", "_CameraOpaqueTexture"}) {
+          if (code.find(std::string("sampler2D ") + texture + ";") != std::string_view::npos) as2D.insert(texture);
+        }
+      }
+      // _MainTex is an ordinary texture on most materials; it is the screen
+      // only for a Blit, which the runtime checks when one starts.
+      for (auto const& texture : as2D) {
+        if (texture == "_MainTex") {
+          if (!shader.name.empty()) scan.mainTexAs2DShaderNames.push_back(shader.name);
+          continue;
+        }
+        scan.screenTextureAs2D.push_back((shader.name.empty() ? std::string("?") : shader.name) + ": " + texture);
       }
       for (auto const& program : decoded.programs) {
         scan.programs++;

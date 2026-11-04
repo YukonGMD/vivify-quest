@@ -256,6 +256,30 @@ says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
   the previous level.
 
 ### Fixed
+- **Blits covered the view in white until paused** (naomi.10-beta.2; upstream
+  issues #67 and #69). A PC map's Unity 2019 build targets single-pass
+  double-wide stereo, so its Blit shaders read the screen as one wide 2D
+  texture; the Quest's screen is a two-layer array, and Unity handed those
+  shaders their default texture -- white -- instead. 743 Aether's IntroBokeh
+  and FadeWhite (about 4, 7 and 7 s of white per play) and Get Your Wish's
+  PPUnderwater (32 beats) drew solid white; pausing turned Vivify's Blits off,
+  which is why the scene came back while paused. The same reads broke depth
+  effects (Aether's StarFlare, RingArtifact and Bokeh depth of field; Get Your
+  Wish's water).
+  - A map that ships both PC builds is now converted from the 2021 one, which
+    is what PC Beat Saber loads; the headset used to take whichever its folder
+    listed first, and gave both maps their 2019 builds.
+  - The translator reads screen textures in two-eye programs the way Unity's
+    own multiview build does: a 2D texture sampled at coordinates derived
+    from `unity_StereoScaleOffset`, or named as one of Unity's camera
+    textures, becomes a two-layer array read at the eye's layer, and the
+    double-wide eye mapping becomes identity. Debug setting "Two-Eye Screen
+    Textures" (on) puts the old reads back for comparison.
+  - Conversion version 24: converted maps are redone on their next load. All
+    18,507 programs in the tester's 28 maps still compile and link offline.
+  - New log lines say when a level's shader reads the camera's depth as a
+    plain 2D texture, and when a Blit that reads the screen that way starts.
+    Detailed Logging adds a mostly-white view detector (LOGGING.md).
 - **A depth-only shader failed to link and drew as a stand-in** (naomi.10).
   A converted fragment program that writes only depth declared its depth
   output as a colour output at location 4294967295 as well, which GLES

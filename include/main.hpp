@@ -140,6 +140,9 @@ VivifyLogCost VivifyLoggingCost();
 void VivifyAddLayer3Cost(uint64_t ns);
 // Detailed mode (Debug setting, off): per-frame lines and more (naomi.10).
 bool GetDetailedLogging();
+// Converted multiview programs read screen textures as two-layer arrays
+// (naomi.10-beta.2, Debug setting, on).
+bool GetScreenTexturesAsArrays();
 // Memory and heat for the per-section summary (naomi.10). Returns what was
 // last read and asks the log's writer thread to read again, so /proc and
 // /sys are never read on the calling thread. Negative (below -100 for

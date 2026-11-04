@@ -30,6 +30,14 @@ struct CullingCameraController;
 struct MultipassKeywordController;
 struct CameraApplier;
 
+// Unity's AsyncGPUReadbackRequest, as its engine calls take it (the white-view
+// detector, naomi.10-beta.2).
+struct ViewReadback {
+  void* ptr = nullptr;
+  int32_t version = 0;
+  int32_t padding = 0;
+};
+
 class Runtime {
 public:
   static Runtime& Instance();
@@ -582,6 +590,12 @@ private:
   std::mutex _depthScanMutex;
   std::unordered_map<std::string, bool> _depthScanResults;
   std::unordered_set<std::string> _depthScansRunning;
+  // Shaders whose two-eye programs read _MainTex as one plain texture, by
+  // scanned bundle (naomi.10-beta.2): a Blit of the screen through one draws
+  // Unity's default texture. Guarded by _depthScanMutex. _blitScreenWarned:
+  // the shaders already warned about this level.
+  std::unordered_map<std::string, std::unordered_set<std::string>> _mainTexAs2D;
+  std::unordered_set<std::string> _blitScreenWarned;
   bool _sceneDepthSkipLogged = false;
   // MapShadersNeedSceneDepth runs every frame: the bundles it last looked at,
   // their scan keys (computed once, as they stat the file) and, once known,
@@ -707,6 +721,29 @@ private:
   int _detailSlowSection = -1;
   int _detailSlowCount = 0;
   void LogSlowFrameDetail(float frameMs);
+  bool ShaderReadsMainTexAs2D(std::string const& shaderName);
+  // Mostly-white view detector (naomi.10-beta.2, detailed mode): a 16x16
+  // copy of the final frame, read back without stalling where Unity can, and
+  // judged on the main thread; the moment the view turns mostly white, what is
+  // active goes in the log. VivifyPostProcessing.cpp.
+  SafePtrUnity<UnityEngine::RenderTexture> _viewProbe;
+  SafePtrUnity<UnityEngine::Texture2D> _viewProbePixels;  // ReadPixels fallback
+  ViewReadback _viewReadback;
+  bool _viewReadbackPending = false;
+  bool _viewProbeQueued = false;
+  float _viewProbeDue = 0.0f;
+  bool _viewWhite = false;
+  float _viewWhiteSince = 0.0f;
+  int _viewWhiteStretches = 0;
+  float _viewWhiteSeconds = 0.0f;
+  void ProbeView(UnityEngine::Rendering::CommandBuffer* cb, UnityEngine::Rendering::RenderTargetIdentifier image);
+  void IssueViewReadback();
+  void PollViewProbe();
+  void JudgeView(uint8_t const* pixels, size_t bytes, char const* how);
+  void EndViewProbeSong();
+  std::string DescribeActiveEffects();
+  void WarnIfBlitReadsScreenAs2D(UnityEngine::Material* material, std::string_view asset, std::string_view source,
+                                 float startTime, float duration);
   void RecordPerfChange(double wall, float song, PerfMechanism mechanism, float before, float after, char const* reason);
   void SamplePerfLive();
   // Performance mode for heavy maps (naomi.8, VivifyPerformanceMode.cpp; a

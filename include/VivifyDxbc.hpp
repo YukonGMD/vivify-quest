@@ -301,6 +301,8 @@ struct GlslResult {
   int geometryMaxVertices = 0;
   int geometryOutputTopology = 0;
   int geometryEmitInstructions = 0;
+  // The textures read as two-layer screen arrays (screenTexturesAsArrays).
+  std::vector<std::string> screenArrayTextures;
 };
 
 // In a function-mode result, the declarations end at this line and the
@@ -373,6 +375,20 @@ struct GlslOptions {
   // the GPU compiler can see its trip count and unroll it; the state after the
   // loop is written exactly as the while (true) form leaves it.
   bool countedLoops = true;
+  // Under `multiview`, read screen-space textures as the two-layer arrays the
+  // Quest's camera gives them (naomi.10-beta.2). A PC map's Unity 2019 build
+  // targets single-pass double-wide stereo: the screen is one wide 2D texture
+  // and unity_StereoScaleOffset picks each eye's half. Its programs read the
+  // screen through a sampler2D, and on the Quest that sampler is handed a
+  // two-layer array, a mismatch for which Unity binds the property's default
+  // texture -- white, for _MainTex -- so a Blit drew solid white for as long
+  // as it ran (743 Aether's FadeWhite and Bokeh, Get Your Wish's
+  // PPUnderwater). With this set, a 2D texture sampled at coordinates derived
+  // from unity_StereoScaleOffset, or named as one of Unity's camera textures
+  // (_CameraDepthTexture and the like), becomes a sampler2DArray read at layer
+  // gl_ViewID_OVR, and unity_StereoScaleOffset reads as (1, 1, 0, 0): what
+  // Unity's own multiview build of the same shader does.
+  bool screenTexturesAsArrays = true;
 };
 
 // Translates a parsed program to GLSL ES source.

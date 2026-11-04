@@ -145,7 +145,12 @@ namespace {
 //      output as a colour output at location 4294967295, which failed to link
 //      and left the material on the stand-in (43a5d Through The Screen's
 //      AreaLit/LightMeshClear, found by tools/shaderaudit; naomi.10)
-constexpr int kBundleConversionVersion = 23;
+//  24  multiview programs read screen-space textures as the eye buffer's
+//      two-layer arrays: a Unity 2019 (double-wide) build's Blits read the
+//      screen through a sampler2D, got Unity's default white instead, and
+//      covered the view in white until they ended (743 Aether, Get Your Wish;
+//      naomi.10-beta.2). Maps shipping both PC builds now convert the 2021 one
+constexpr int kBundleConversionVersion = 24;
 
 // Whether Beat Saber's own shaders use STEREO_MULTIVIEW_ON: -1 not looked yet,
 // 0 no, 1 yes. Unity registers every keyword a loaded shader declares, so the
@@ -191,6 +196,7 @@ struct ConversionSettings {
   bool drawGeometry = GetDrawGeometryShaderEffects();
   bool emulateGeometry = GetEmulateGeometryShaderEffects();
   bool instancing = GetSceneryGpuInstancing();
+  bool screenArrays = GetScreenTexturesAsArrays();
 
   // What the cache marker records about how a bundle's programs were built:
   // 0 = multiview in the plain variants, 1 = 2021 bundles split,
@@ -200,7 +206,10 @@ struct ConversionSettings {
     // +16: known geometry-shader effects emulated in the vertex stage (setting,
     // naomi.5), with the bundle's inline meshes made readable for it.
     // +32: GPU-instanced variants translated, for scenery instancing (setting).
-    int const geometry = (drawGeometry ? 8 : 0) + (emulateGeometry ? 16 : 0) + (instancing ? 32 : 0);
+    // +64: screen textures left as plain 2D in multiview programs (the setting
+    // that undoes naomi.10-beta.2's white-screen fix).
+    int const geometry = (drawGeometry ? 8 : 0) + (emulateGeometry ? 16 : 0) + (instancing ? 32 : 0) +
+                         (screenArrays ? 0 : 64);
     if (replay) return 4 + geometry;
     return (splitStereo ? 1 : 0) + geometry;
   }
@@ -457,6 +466,7 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   // instancing.
   options.skipQuestUnusedVariants = true;
   options.singleViewOnly = settings.replay;
+  options.screenTexturesAsArrays = settings.screenArrays;
   auto const conversion = BundleConvert::ConvertShadersToGles(source, dest, options);
   // Which shaders were emulated, and how, for the rebuild at load. Rewritten
   // (or removed) with every conversion, before the bundle is marked current,
@@ -593,6 +603,12 @@ std::string ResolvePcBundlePath(std::string const& levelPath) {
     int score = 1;
     if (lower.find("windows") != std::string::npos) score = 3;
     else if (lower.find("bundle") != std::string::npos || path.extension() == ".vivify") score = 2;
+    // A map that ships both PC builds: the 2021 one, which is what PC Beat
+    // Saber loads today (naomi.10-beta.2). The tie used to go to whichever the
+    // folder listed first, which gave 743 Aether and Get Your Wish their 2019
+    // builds -- single-pass double-wide shaders whose screen reads came out
+    // white on the Quest.
+    if (score == 3 && lower.find("2021") != std::string::npos) score = 4;
     if (score <= bestScore) continue;
     if (!BundleConvert::IsUnityBundleFile(path.string())) continue;
     best = path.string();
@@ -2168,6 +2184,7 @@ void Runtime::ScanBundleForSceneDepth(std::string const& bundlePath) {
     bool needed = true;
     bool known = false;
     std::string shaders;
+    std::unordered_set<std::string> mainTexAs2D;
     try {
       auto const scan = BundleConvert::ScanShaders(bundlePath);
       if (scan.parsed && scan.undecodableShaders == 0) {
@@ -2175,16 +2192,33 @@ void Runtime::ScanBundleForSceneDepth(std::string const& bundlePath) {
         needed = scan.samplesCameraDepth;
         for (auto const& name : scan.cameraDepthShaderNames) shaders += (shaders.empty() ? "" : ", ") + name;
       }
+      // naomi.10-beta.2: what explains a white or washed-out view without a
+      // repro. A camera texture read as one plain texture is read wrong on
+      // every frame; _MainTex only matters when a Blit uses the shader.
+      for (auto const& entry : scan.screenTextureAs2D) {
+        PaperLogger.warn("Vivify screen texture check: '{}' reads its texture as one plain 2D texture in a two-eye "
+                         "program; on the Quest the camera gives a two-layer array, so it reads Unity's default "
+                         "instead (depth effects such as fog and soft edges come out wrong)",
+                         entry);
+      }
+      mainTexAs2D.insert(scan.mainTexAs2DShaderNames.begin(), scan.mainTexAs2DShaderNames.end());
     } catch (...) {
     }
     PaperLogger.info("Vivify scene depth scan: '{}' -> {}{}", bundlePath,
                      !known ? "unknown (depth stays on)" : (needed ? "needed by " : "not needed"), shaders);
     std::lock_guard lock(_depthScanMutex);
+    _mainTexAs2D[key] = std::move(mainTexAs2D);
     _depthScansRunning.erase(key);
     // An unreadable bundle is recorded as needing depth, so it is not
     // rescanned on every load.
     _depthScanResults[key] = needed;
   }).detach();
+}
+
+bool Runtime::ShaderReadsMainTexAs2D(std::string const& shaderName) {
+  std::lock_guard lock(_depthScanMutex);
+  auto const found = _mainTexAs2D.find(DepthScanKey(_preloadedBundlePath));
+  return found != _mainTexAs2D.end() && found->second.contains(shaderName);
 }
 
 std::optional<bool> Runtime::MapShadersNeedSceneDepth() {

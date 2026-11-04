@@ -97,6 +97,7 @@ constexpr std::string_view kPerfFixedScaleConfigKey = "performanceModeFixedScale
 constexpr std::string_view kDebugCostTestConfigKey = "debugCostTest";
 constexpr std::string_view kShowDeveloperOptionsConfigKey = "showDeveloperOptions";
 constexpr std::string_view kDetailedLoggingConfigKey = "detailedLogging";
+constexpr std::string_view kScreenArraysConfigKey = "screenTexturesAsArrays";
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
 bool gDisableAllBlits = false;
@@ -187,6 +188,8 @@ int gDebugCostTest = 0;         // debug: what is switched off for a cost test (
 bool gShowDeveloperOptions = false;
 // Layer 3 of the session log: per-frame lines and more (naomi.10, debug).
 bool gDetailedLogging = false;
+// Converted multiview programs read screen textures as two-layer arrays (beta.2).
+bool gScreenArrays = true;
 
 // Where each setting in Vivify::Settings' table is held while the game runs.
 struct BoundSetting {
@@ -195,7 +198,7 @@ struct BoundSetting {
   int* intValue = nullptr;
   std::string* stringValue = nullptr;
 };
-std::array<BoundSetting, 38> const kBoundSettings = {{
+std::array<BoundSetting, 39> const kBoundSettings = {{
     {kVivifyDebugLoggingConfigKey, &gVivifyDebugLogging},
     {kDisableBeat0FilmgrainBlitConfigKey, &gDisableBeat0FilmgrainBlit},
     {kDisableAllBlitsConfigKey, &gDisableAllBlits},
@@ -234,6 +237,7 @@ std::array<BoundSetting, 38> const kBoundSettings = {{
     {kDebugCostTestConfigKey, nullptr, &gDebugCostTest},
     {kShowDeveloperOptionsConfigKey, &gShowDeveloperOptions},
     {kDetailedLoggingConfigKey, &gDetailedLogging},
+    {kScreenArraysConfigKey, &gScreenArrays},
 }};
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
@@ -1277,6 +1281,7 @@ void RegisterModSettings() {
         }
         debug(AddToggle(parent, kSceneryInstancingConfigKey, gSceneryInstancing));
         debug(AddHeading(parent, "<size=80%>Switches for isolating a problem</size>"));
+        debug(AddToggle(parent, kScreenArraysConfigKey, gScreenArrays));
         debug(AddToggle(parent, kTranslateShadersConfigKey, gTranslateShaders));
         debug(AddToggle(parent, kDisableBeat0FilmgrainBlitConfigKey, gDisableBeat0FilmgrainBlit));
         debug(AddToggle(parent, kDisableCreateCameraDepthConfigKey, gDisableCreateCameraDepth));
@@ -1414,6 +1419,10 @@ bool GetUsePcBundleForMissingShaders() {
 
 bool GetOffscreenCulling() {
   return gOffscreenCulling;
+}
+
+bool GetScreenTexturesAsArrays() {
+  return gScreenArrays;
 }
 
 bool GetDetailedLogging() {

@@ -947,6 +947,65 @@ check("eye-index pixel translates without multiview", fields.get("ok") == "1",
 check("eye index is 0 without multiview", "ivec4 vRTArrayIndex = ivec4(0)" in source,
       source)
 
+# naomi.10-beta.2: a Unity 2019 (double-wide) Blit program. Its screen
+# texture is read at uv * unity_StereoScaleOffset[0].xy + .zw; under
+# multiview that must become the eye buffer's two-layer array at layer
+# gl_ViewID_OVR, with the scale-offset as identity. The camera depth texture is
+# recognised by name; an ordinary texture stays 2D.
+def double_wide_blit():
+    textures = [("_MainTex", 4), ("_CameraDepthTexture", 4), ("_Ordinary", 4)]
+    bindings = [{"name": "$Globals", "type": 0, "dimension": 0, "bind_point": 0},
+                {"name": "UnityStereoGlobals", "type": 0, "dimension": 0, "bind_point": 1}]
+    for index, (name, dimension) in enumerate(textures):
+        bindings.append({"name": name, "type": 2, "dimension": dimension, "bind_point": index})
+    rdef = m.rdef_chunk(
+        constant_buffers=[{"name": "$Globals", "size": 16, "variables": [variable("_Color", 0, 16, VECTOR4)]},
+                          {"name": "UnityStereoGlobals", "size": 1088,
+                           "variables": [variable("unity_StereoScaleOffset", 1056, 32, VECTOR4, elements=2)]}],
+        bindings=bindings)
+    isgn = m.signature_chunk([
+        {"name": "TEXCOORD", "index": 0, "register": 0, "mask": 0x3, "rw_mask": 0x3}], b"ISGN")
+    osgn = m.signature_chunk([{"name": "SV_Target", "index": 0, "register": 0, "rw_mask": 0}], b"OSGN")
+    code = m.insn(DCL_CONSTANT_BUFFER, m.src_cb(0, 1))
+    code += m.insn(DCL_CONSTANT_BUFFER, m.src_cb(1, 68))
+    for index in range(3):
+        code += m.insn(DCL_SAMPLER, m.dest(SAMPLER_T, index))
+        code += m.insn(DCL_RESOURCE, m.dest(RESOURCE, index), extra=[0x5555])
+    code += m.insn(DCL_INPUT_PS, m.dest(INPUT, 0, 0x3), controls=(2 << 0))
+    code += m.insn(DCL_OUTPUT, m.dest(OUTPUT, 0))
+    code += m.insn(DCL_TEMPS, extra=[4])
+    code += m.insn(MAD, m.dest(TEMP, 0, 0x3), m.src(INPUT, 0, (X, Y, X, X)), m.src_cb(1, 66, (X, Y, X, X)),
+                   m.src_cb(1, 66, (Z, W, Z, Z)))
+    code += m.insn(SAMPLE, m.dest(TEMP, 1), m.src(TEMP, 0, (X, Y, X, X)), m.src(RESOURCE, 0), m.src(SAMPLER_T, 0))
+    code += m.insn(SAMPLE, m.dest(TEMP, 2), m.src(INPUT, 0, (X, Y, X, X)), m.src(RESOURCE, 1), m.src(SAMPLER_T, 1))
+    code += m.insn(SAMPLE, m.dest(TEMP, 3), m.src(INPUT, 0, (X, Y, X, X)), m.src(RESOURCE, 2), m.src(SAMPLER_T, 2))
+    code += m.insn(ADD, m.dest(TEMP, 1), m.src(TEMP, 1), m.src(TEMP, 2))
+    code += m.insn(ADD, m.dest(OUTPUT, 0), m.src(TEMP, 1), m.src(TEMP, 3))
+    code += m.insn(LD, m.dest(TEMP, 2), m.src(TEMP, 0), m.src(RESOURCE, 0))
+    code += m.insn(RET)
+    return m.container([rdef, isgn, osgn, m.shex_chunk([code], stage=0)])
+
+
+blit = double_wide_blit()
+proc, fields, _, source = run("glsl-mv", blit)
+check("double-wide blit translates for multiview", fields.get("ok") == "1", fields.get("error", ""))
+check("the screen texture becomes the eye buffer's array", "uniform highp sampler2DArray _MainTex;" in source and
+      "texture(_MainTex, vec3(" in source and "float(gl_ViewID_OVR))" in source, source)
+check("a texel fetch from it takes the layer too", "texelFetch(_MainTex, ivec3(" in source and
+      "int(gl_ViewID_OVR))" in source, source)
+check("the camera depth texture is an array by name", "uniform highp sampler2DArray _CameraDepthTexture;" in source and
+      "texture(_CameraDepthTexture, vec3(" in source, source)
+check("an ordinary texture stays 2D", "uniform highp sampler2D _Ordinary;" in source and
+      "texture(_Ordinary, vs_TEXCOORD0.xy)" in source, source)
+body_start = source.find("void main()")
+check("the double-wide eye mapping becomes identity", "vec2(1.0, 1.0)" in source and "vec2(0.0, 0.0)" in source and
+      "unity_StereoScaleOffset" not in source[body_start:] and "vivify_cb_UnityStereoGlobals[" not in source[body_start:],
+      source)
+check("the fragment stage enables the view index", "#extension GL_OVR_multiview2 : require" in source, source)
+proc, fields, _, source = run("glsl", blit)
+check("single-view keeps plain 2D screen textures", fields.get("ok") == "1" and "sampler2DArray" not in source and
+      "gl_ViewID_OVR" not in source, source + fields.get("error", ""))
+
 glslang_enabled = False
 truncation_failures = 0
 for length in range(0, len(vertex)):

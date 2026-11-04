@@ -49,6 +49,47 @@ Other evidence for both maps: texture decode replaced 0 references, skipped 0
 over budget and refused 0; all 140 of Aether's material-shader checks in the
 debug log say supported; logcat has no shader or GL errors.
 
+## naomi.10-beta.1 test (2026-10-25)
+
+Sixteen plays of 12 maps in one session. What the logs say drew gray:
+
+| Map | Plays | Stand-ins in the log |
+|---|---|---|
+| 4968d 743 Aether | 3 | the same 8 particle systems per play as above (3 Explosion, 3 Extending Arrows, rock particles, Ground Fog, now with its billboard reason). From 11:30 Stand-In Shading was off, so in the third play they drew nothing instead of gray |
+| the other 11 (477a7, 500eb, 4839c, 47172, 5112d, 4ea5c, 48c03, 43a4a, 48dd1, 4f82e, 43a1f) | 13 | none |
+
+So any gray seen outside Aether's particles is not Vivify's stand-in, and the
+beta.1 logs could not explain it. The analysis for the white screen (below)
+found the likeliest cause: a shader that reads the screen or the camera's
+depth texture as one plain 2D texture gets Unity's default texture on the
+Quest, where both are two-layer arrays. Depth-based fog and soft edges then
+see "far away" everywhere and wash the scene out:
+
+| Map | Shader | Reads as 2D | beta.2 |
+|---|---|---|---|
+| 4968d 743 Aether (converted from its 2019 bundle) | Swifter/VFX/StarFlare, Swifter/VFX/RingArtifact, Swifter/Blit/Bokeh | `_CameraDepthTexture` | fixed: converted from the 2021 bundle, and the translator reads it as an array |
+| 4f82e Get Your Wish (converted from 2019) | Silent/Clear Water | `_CameraDepthTexture` | fixed by the translator |
+| 4f82e Get Your Wish | FX/CensorWorldSpace | `_GrabTexture` | not handled (a grab pass) |
+| 4839c Lost in Data, 48c03 Winter Wrap Up (Quest bundles) | Custom/FogMB | `_CameraDepthTexture` | the mapper's own Quest build; Vivify does not rewrite Quest shaders |
+
+beta.2 logs each such shader at level select (`Vivify screen texture check:`)
+and warns when a Blit starts through a shader that reads the screen as 2D. If
+something still looks gray, note the map and the song time; with Detailed
+Logging on, the session log then has the frame's context (see LOGGING.md).
+
+## The white screen (naomi.10-beta.2)
+
+Not gray, but the same family. A converted map's Unity 2019 build targets
+single-pass double-wide stereo: its Blit shaders read the screen as one wide
+2D texture. On the Quest the screen is a two-layer array, and Unity binds the
+shader's default texture (white, for `_MainTex`) instead, so the Blit draws
+solid white until it ends. Pausing turns Vivify's Blits off, which is why the
+view came back while paused. In beta.1: 743 Aether's IntroBokeh (2.1-6.3 s),
+FadeWhite plus Bokeh (104.7-112.1 s) and FadeWhite (207.3-213.9 s), and Get
+Your Wish's PPUnderwater (166.7 s for 32 beats). Both maps ship a 2021 bundle
+too, whose shaders read arrays; the headset happened to pick 2019. Fixed in
+beta.2 both ways (VERSION_X.md, CHANGELOG.md).
+
 ## Library audit (all 25 maps)
 
 `tools/shaderaudit/audit.py` converts each PC bundle the way the headset does

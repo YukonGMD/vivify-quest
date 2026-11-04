@@ -98,6 +98,8 @@ constexpr std::array kDefs = {
         "Switches one kind of drawing off for the song, so the log shows its cost. The map looks wrong."},
     Def{"sceneryGpuInstancing", Bool, 0, 0, 1, 1, Debug, kDiagnostics, "GPU Instancing For Scenery (experimental)",
         "Keeps converted scenery's GPU instancing, as on PC. Reconverts maps."},
+    Def{"screenTexturesAsArrays", Bool, 1, 0, 1, 1, Debug, kIsolation, "Two-Eye Screen Textures",
+        "Converted shaders read the screen as the Quest's two-eye array. Off: the old way (white Blits). Reconverts."},
     Def{"translateShadersOnConversion", Bool, 1, 0, 1, 1, Debug, kIsolation, "Translate Shaders On Conversion",
         "Off: converted maps keep no shaders of their own and draw as stand-ins. Reconvert after."},
     Def{"disableBeat0FilmgrainBlit", Bool, 0, 0, 1, 1, Debug, kIsolation, "Disable Beat 0 Filmgrain Blit",
