@@ -1,9 +1,10 @@
 # Version X plan (naomi.10, "Twilight Sparkle")
 
 Written after naomi.10-beta.1 (crash fix, gray ledger and shader audit,
-settings menu, logging). **Nothing in this plan has been started.** Each
-milestone is one beta; the release is `0.14.25-naomi.10-release` (see
-CODENAMES.md for why not a bare `naomi.10`).
+settings menu, logging) and updated after beta.1's test: **beta.2 is the
+white-screen fix**, done; every milestone planned before it moved down by
+one, and none of them is started. Each milestone is one beta; the release is
+`0.14.25-naomi.10-release` (see CODENAMES.md for why not a bare `naomi.10`).
 
 Rules that hold throughout: nothing makes a level look different from PC
 unless it is behind a setting that is off by default; the crash guard stays
@@ -41,6 +42,24 @@ GlowingWisp); the buildup is one full-screen procedural sky
 first (a sphere centred on the player sorts nearest), so every sky pixel is
 shaded before scenery covers it.
 
+**beta.1's test (2026-10-25, 16 plays of 12 maps):** no crash. Aether's
+sections at default settings: intro 33-42 ms, drop 9, ambient 33, bridge 22,
+outro 9. The intro's figure includes IntroBokeh, which costs about 9 ms of GPU
+time while it runs (GPU median 36 ms during it, 27 after). One play with
+scenery instancing on and stand-ins off ran ambient at 24 ms and buildup at 12
+-- a lead for the measuring milestone, not a result (two settings changed at
+once). Logging cost 0.003-0.005 ms a frame for the black box and up to
+0.015 ms for the session log with Debug Logging on; well under the 0.1 ms
+target.
+
+**The white screen** (fixed in beta.2, GRAY.md): converted maps' Unity 2019
+Blit shaders read the screen as one plain 2D texture; on the Quest the screen
+is a two-layer array and Unity gave them its default white. Aether had about
+18 s of white per full play; Get Your Wish 32 beats. Frames kept coming (OVR
+11-52 fps through it), so it was content, not a freeze. The same reads broke
+Aether's depth effects. Risk to watch in beta.2: with real pixels to read,
+the Bokeh Blits may cost more GPU than they did reading a default texture.
+
 **Stability:** naomi.9's two crashes were Vivify use-after-free during level
 teardown (fixed in beta.1); one more was another mod's start-up crash. No
 memory pressure near any of them.
@@ -51,15 +70,17 @@ now compile and link offline.
 
 **Measurement gaps:** OVR Metrics' GPU counters (fill, fragment
 instructions per pixel, share of time shading fragments) were not switched on
-in the captures, so per-pixel cost is inferred, not measured. Shader compile
-stalls were not visible before beta.1; the slow-frame sampler now names them.
+in any capture so far (every such column reads 0), so per-pixel cost is
+inferred, not measured; see "Capturing GPU counters" below. Shader compile
+stalls were not visible before beta.1; the slow-frame sampler now names them,
+and beta.1 caught none.
 
 ## System audit
 
 | System | What it does | Health | Measured cost | Verdict |
 |---|---|---|---|---|
-| Converter (`VivifyBundleConvert`, `VivifySerializedFile`) | Retargets PC bundles to Android, translates their shaders, makes meshes readable for emulation | 0 failures (353 maps scanned, 9 converted, naomi.9); offline every bundle converts | 9 maps in 8 s on the headset | **Keep.** Fix: which of a map's 2019/2021 PC bundles is used depends on directory order (Aether happened to get 2019); make it deterministic only after an A/B shows both convert alike |
-| Shader translator (`VivifyDxbc`) | DXBC to GLSL ES 3.x, multiview stereo, per-function modes for emulation | One bug in beta.1's audit (depth-only output), fixed; geometry programs that read the instance ID are refused | Programs are `highp` throughout; loops are `for` loops since naomi.7 | **Keep.** Fix: `mediump` only where the DXBC marks minimum precision (setting, off) |
+| Converter (`VivifyBundleConvert`, `VivifySerializedFile`) | Retargets PC bundles to Android, translates their shaders, makes meshes readable for emulation | 0 failures (353 maps scanned, 9 converted, naomi.9); offline every bundle converts. The 2019-or-2021 choice was directory order and gave Aether and Get Your Wish their 2019 builds; beta.2 prefers 2021 | 9 maps in 8 s on the headset | **Keep** |
+| Shader translator (`VivifyDxbc`) | DXBC to GLSL ES 3.x, multiview stereo, per-function modes for emulation | Two bugs found since beta.1: a depth-only output (fixed in beta.1) and 2019 builds' screen reads as 2D, which drew white Blits and broke depth effects (fixed in beta.2). Geometry programs that read the instance ID are refused | Programs are `highp` throughout; loops are `for` loops since naomi.7 | **Keep.** Fix: `mediump` only where the DXBC marks minimum precision (setting, off) |
 | Texture path (`VivifyTextureDecode`) | Decodes textures the GPU cannot sample | Quest 3S samples BC1-BC7 natively; 0 textures needed decoding in the maps played | None in Aether | **Keep** as is |
 | Geometry emulation and particle bakes | Runs known geometry programs in the vertex stage on rebuilt meshes; bakes still particle bursts | 297 Aether objects rebuilt, 7 shaders; 5 particle systems stay gray (moving, billboard, over the bake budget). Menu Mesh count grows 59-131 per Aether play since naomi.8 | Bake 3-9 ms once per burst | **Fix:** the per-play Mesh growth; draw moving mesh particles by instancing the rebuilt mesh instead of baking; billboard particles. Not a rewrite |
 | Crash guard | Two unfinished loads of a converted map, then untranslated stand-ins | No strikes in naomi.9 | None | **Keep frozen.** Recommend only |
@@ -67,7 +88,7 @@ stalls were not visible before beta.1; the slow-frame sampler now names them.
 | Note pooling, scenery instancing | Reuses note and debris copies; keeps converted scenery's GPU instancing (experimental, off) | Pooling on and stable; instancing untested since its 0.13 problems | Instancing would cut draws and the depth pass's draws; Aether's bound is pixels, so expect less there than the draw count suggests | **Keep.** Test instancing on Aether with the cost test before deciding |
 | Scene and camera handling | Vivify cameras, blits, screen textures, the scene depth texture, mid-frame copies | Stable | The depth pre-pass draws every opaque renderer again, all song, in Aether | **Fix:** depth from the main pass instead of a pre-pass (setting, off until it matches) |
 | Settings | Table, three-part menu, migration | Done in beta.1; migration host-tested on the tester's config | None | **Keep** |
-| Logging | Saved sessions, black box, detailed mode, digest and pull tools | Done in beta.1; host-tested | 0.37 us a line and 0.02 us a black-box record on the laptop; each song reports the headset figure | **Keep.** Check the headset figure stays under 0.1 ms a frame |
+| Logging | Saved sessions, black box, detailed mode, digest and pull tools; beta.2 adds screen-texture warnings and a mostly-white view detector (detailed mode) | Worked through beta.1's 16 plays | Headset, per frame: black box 0.003-0.005 ms, session log up to 0.015 ms with Debug Logging on, detailed mode 0.021-0.026 ms | **Keep** |
 
 ## Where Version X spends its effort
 
@@ -114,14 +135,16 @@ Lost in Data (4839c, a Quest bundle; median 15 ms, 95th 19-21): no
 regression (median at most 15.5 ms, 95th at most 21), and the sky and depth
 milestones applied if they apply.
 
-Whole library: all 31 bundles compile and link in the offline audit; no
-conversion failures; no crash in the fixed test set.
+Whole library: all 34 bundles of the tester's 28 maps compile and link in the
+offline audit; no conversion failures; no crash in the fixed test set.
 
 ## Regression checklist
 
 On the laptop, every beta: the full host suite (34 checks), the offline
-shader audit over the tester's 25 maps (`tools/shaderaudit`), and converter
-output byte-identical for any path a beta does not mean to change.
+shader audit over the tester's 28 maps (`tools/shaderaudit`; 18,507 programs
+at beta.2), `conv --scan` showing no Blit shader that reads the screen as 2D
+in Aether's and Get Your Wish's conversions, and converter output
+byte-identical for any path a beta does not mean to change.
 
 On the headset, every beta, the same plays:
 
@@ -136,6 +159,11 @@ On the headset, every beta, the same plays:
    Developer Options shows and hides Debug; Reset To Defaults.
 6. Two launches, then `tools/pull/pull_sessions.py`: two session files, the
    index, digests compared with the previous beta's.
+7. No white view: Aether at 2-6 s, 104-112 s and 207-214 s, and Get Your
+   Wish from 166 s to about 187 s (where beta.1 went white). With Detailed
+   Logging on, the song summary's "mostly-white view" count is 0 or only a
+   map's own intended fade (Aether's FadeWhite peaks white for well under a
+   second at 108 s).
 
 Passes when: no crash; no new gray in the digests; no section's median
 worse than the previous beta by more than 5%; logging under 0.1 ms a frame;
@@ -148,49 +176,103 @@ old path untouched, until the fixed test set and an A/B screenshot show it
 right; only then does a later beta turn it on (asking first where the image
 could differ at all).
 
-1. **beta.2: measure, and the leak.** No look changes. Cost-test plays of
+1. **beta.2: the white screen** (done; `0.14.25-naomi.10-beta.2`). Converted
+   maps prefer their 2021 PC bundle; the translator reads screen-space
+   textures in two-eye programs as two-layer arrays, as Unity's multiview
+   build does (Debug setting "Two-Eye Screen Textures", on, to undo it);
+   conversion version 24. New warnings and a white-view detector (detailed
+   mode) confirm it on the headset. A parity fix, so on by default.
+2. **beta.3: measure, and the leak.** No look changes. Cost-test plays of
    Aether (one per category: skies, transparent effects, depth pre-pass,
-   emulated geometry, blits, scenery) with OVR GPU counters on, giving a
-   measured cost table that replaces the inferred one. Find and fix the menu
-   Mesh/GameObject growth per play. Log which PC bundle (2019 or 2021) a
-   deterministic rule would pick, without changing it.
-2. **beta.3: skies last.** Opaque full-screen skies drawn after the rest of
+   emulated geometry, blits, scenery) and separate GPU-counter plays (below),
+   giving a measured cost table that replaces the inferred one; scenery
+   instancing on against off, one setting at a time. Find and fix the menu
+   Mesh/GameObject growth per play.
+3. **beta.4: skies last.** Opaque full-screen skies drawn after the rest of
    the opaque queue, for shaders that match (opaque, ZWrite on, LEqual, no
    blend; checked at load). Setting "Draw Skies Last", off; turned on in a
    later beta once screenshots match.
-3. **beta.4: depth from the main pass.** Scene depth for map shaders copied
+4. **beta.5: depth from the main pass.** Scene depth for map shaders copied
    from the main pass instead of a depth pre-pass. Setting, off.
-4. **beta.5: compile stalls.** Warm the variants a map's materials use during
+5. **beta.6: compile stalls.** Warm the variants a map's materials use during
    the load; target no compile lines after the first frame.
-5. **beta.6: particles.** Moving mesh particles on emulated shaders drawn by
+6. **beta.7: particles.** Moving mesh particles on emulated shaders drawn by
    instancing the rebuilt mesh with each particle's transform; billboard
    particles likewise. Under "Emulate Geometry Effects On Particles", as the
    bakes are.
-6. **beta.7 (if the numbers call for it): transparent overdraw or precision**,
-   chosen by beta.2's cost table, behind a setting, off.
-7. **naomi.10-release** once the fixed test set passes on the last beta.
+7. **beta.8 (if the numbers call for it): transparent overdraw or precision**,
+   chosen by beta.3's cost table, behind a setting, off.
+8. **naomi.10-release** once the fixed test set passes on the last beta.
 
-Recommended first three: beta.2 (measure and fix the leak), beta.3 (skies
-last), beta.4 (depth from the main pass). They need no look change to pay
-off, and beta.2 decides whether anything after beta.4 is worth doing.
+Recommended next three: beta.3 (measure and fix the leak), beta.4 (skies
+last), beta.5 (depth from the main pass). They need no look change to pay
+off, and beta.3 decides whether anything after beta.5 is worth doing.
+
+## Capturing GPU counters
+
+The per-pixel counters (fill per eye, instructions per fragment, time
+shading fragments, texture fetch stalls) come from the headset's GPU
+profiler, which has to be switched on from a computer first. They add some
+overhead, so a play with them on is never used for timing: do counter plays
+and timing plays separately, and say which is which.
+
+What you need: the headset connected over USB (or Wi-Fi ADB) with developer
+mode on, `adb` on the computer, and OVR Metrics Tool installed on the
+headset **before** Beat Saber is started (installing it while the game runs
+closes the game).
+
+1. Quit Beat Saber.
+2. On the computer: `adb shell ovrgpuprofiler -e` (Meta's documented way to
+   enable the profiler; their page says some OVR Metrics stats need it
+   before they can be selected).
+3. In the headset, open OVR Metrics Tool. On its main screen switch on
+   "Record all captured metrics to csv files".
+4. On the **Stats** tab, select: Average Fill Percentage per Eye, Average
+   Instructions per Fragment, Average Instructions per Vertex, Average
+   Vertices Per Frame, Percentage Time Shading Fragments, Percentage Time
+   Shading Vertices, Texture Fetch Stall Percentage, L1 and L2 Texture Miss
+   Percentage. (The Basic and Advanced buttons do not include these.)
+5. Start Beat Saber and play the counter plays: Aether once full length at
+   default settings; then, if there is time, once each with "Debug: Switch
+   Off For A Cost Test" set to Skies, Transparent effects, Depth pre-pass,
+   Emulated geometry and Post-processing blits (set it back to Nothing
+   after).
+6. Quit Beat Saber. On the computer: `adb shell ovrgpuprofiler -d` to turn
+   the profiler off again (if that option is not recognised, restarting the
+   headset turns it off; `adb shell ovrgpuprofiler --help` lists the
+   options).
+7. Tell me which plays were counter plays. I pull the CSVs read-only from
+   `/sdcard/Android/data/com.oculus.ovrmonitormetricsservice/files/CapturedMetrics/`.
+
+If the new columns (`avg_fill_percentage`, `avg_inst_per_frag`,
+`percent_time_shading_frags`) still read 0 in the CSV, the counters did not
+switch on: tell me what `adb shell ovrgpuprofiler -e` printed, since Meta's
+page does not document an in-app switch for them.
 
 ## After Version X (backlog, by priority)
 
 1. Geometry emulation for programs that read the instance ID or pass a
    varying through (43a5d's ParticleScreen/Visualizer and AreaLit/LightMesh).
-2. Deterministic choice between a map's 2019 and 2021 PC bundles, after an
-   A/B.
-3. 42-flux (43999): WACOMalt/WACOWater4 shipped empty; make re-fetching the
+2. 42-flux (43999): WACOMalt/WACOWater4 shipped empty; make re-fetching the
    PC donor after a clean slate visible, or say in the menu why it is gray.
-4. A shorter gray flash before an explosion bakes (check every frame for
+3. A shorter gray flash before an explosion bakes (check every frame for
    the first second, with a reused, pinned particle buffer).
-5. Sky cubemap or lower-resolution sky (look changes; settings, off).
-6. Lower-resolution transparent effects pass (look change; setting, off).
-7. `mediump` where the bytecode marks minimum precision (setting, off).
-8. The crash guard's remaining issues, as recommendations for the tester.
-9. Other mods' start-up crashes (libbl and others' memcpy) reported upstream
+4. Sky cubemap or lower-resolution sky (look changes; settings, off).
+5. Lower-resolution transparent effects pass (look change; setting, off).
+6. `mediump` where the bytecode marks minimum precision (setting, off).
+7. The crash guard's remaining issues, as recommendations for the tester.
+8. Other mods' start-up crashes (libbl and others' memcpy) reported upstream
    with the symbolised stacks.
-10. Per-draw-call detail in detailed mode, only if a measured need appears
+9. Per-draw-call detail in detailed mode, only if a measured need appears
     (Unity loads GL through its own table, so it would mean a hook).
-11. The offline shader audit in CI, with a small redistributable bundle as
+10. The offline shader audit in CI, with a small redistributable bundle as
     its fixture.
+11. Quest-built shaders that read the camera's depth as one plain 2D texture
+    (Lost in Data's and Winter Wrap Up's Custom/FogMB): a GLSL rewrite of
+    those reads for Quest bundles, behind a setting, off, since it changes a
+    Quest map from how its own Quest build draws.
+12. Kitchen Gun's video screen (43a4a, `vidscreen.mat` reads a VideoPlayer's
+    render texture): check whether the video plays on the Quest, with the
+    white-view detector, before changing anything.
+13. Grab-pass textures (`_GrabTexture`, Get Your Wish's FX/CensorWorldSpace)
+    read as 2D in two-eye programs.
