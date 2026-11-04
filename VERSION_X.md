@@ -249,6 +249,174 @@ If the new columns (`avg_fill_percentage`, `avg_inst_per_frag`,
 switch on: tell me what `adb shell ovrgpuprofiler -e` printed, since Meta's
 page does not document an in-app switch for them.
 
+## Ambitious option: a new core
+
+The question: rewrite Vivify's core pipeline from the ground up (converter,
+shader translator, material and texture handling, effect emulation,
+resolution control) to make it as fast and efficient as it can be. This
+section weighs it against what the measurements say. Short answer at the
+end: **not a ground-up rewrite; a second pipeline built beside the first, one
+measured piece at a time, starting after beta.3's cost table**.
+
+### What cannot change, and what that leaves
+
+Beat Saber 1.40.8 on the Quest renders with **Unity 2022.3.33f1's built-in
+render pipeline**, on **OpenGL ES 3** with **multiview** (one draw for both
+eyes into a two-layer eye buffer, 1680x1760 per eye at 120 Hz). The evidence:
+the game's managed code carries no URP or HDRP assemblies (the
+`RenderPipelineAsset`/`ScriptableRenderContext` types present are core
+UnityEngine ones every build has); the game's own `MainEffectController`
+works through `OnPreRender`/`OnPostRender`, and Vivify's Blits through
+`OnRenderImage`, callbacks that exist only in the built-in pipeline; the log
+shows `stereoMode=3` (multiview) and two-slice eye textures. Quality settings
+in the session log: antiAliasing 0, eyeTextureResolutionScale 1.0, shadows
+off, pixel lights 0.
+
+What that **allows**: per-camera properties (depth texture mode, clear
+flags, culling mask, far plane, MSAA and HDR flags, render order by depth);
+command buffers attached at the built-in camera events (before or after the
+opaque pass, before image effects, after everything); `OnRenderImage`
+effects; the XR viewport scale (cheap) and eye-texture scale (reallocates;
+naomi.7's blanks); fixed foveation and GPU/CPU levels through OVRManager;
+`Graphics.DrawMeshInstanced`, `CommandBuffer.DrawMeshInstanced` and
+`Mesh.CombineMeshes`; compute shaders (`ComputeShader` is in the game's
+code; GLES 3.1+ and the Adreno 740 support them; dispatch and procedural
+draws would go through engine calls, since their managed wrappers are
+stripped).
+
+What it **rules out**: everything that lives in a scriptable pipeline --
+render graph, renderer features, the SRP Batcher, URP's motion-vector pass
+and so Application SpaceWarp (next section) -- and Vulkan-only features. The
+game picks its graphics API and pipeline at build time; a mod cannot switch
+either.
+
+### Hooking into the game's rendering, option by option
+
+| Option | What it would do | Possible for a mod? | Evidence and payoff for Aether | Risk, including game updates |
+|---|---|---|---|---|
+| Per-camera settings | Depth texture mode, clear flags, culling, MSAA/HDR flags, render order, Vivify cameras' resolution | Yes, Vivify already sets several | The depth pre-pass that `depthTextureMode = Depth` costs is a whole second opaque pass all song; Vivify cameras could render at Effect Resolution | Low; public Unity API, stable across game updates |
+| Our own steps through camera events and command buffers | Draw opaque skies after the other opaque objects; copy the main pass's depth instead of a pre-pass; downsampled Blits; a cheap view probe | Yes; Vivify's Blits and the white-view probe already work this way | Skies: CrackedRainbowSky about 1,370 operations a pixel, drawn first today. Depth: see above | Low to medium; public API. Wrong ordering shows as wrong images, which A/B screenshots catch |
+| Resolution, refresh rate and foveation | Viewport scale (Performance Mode), refresh rate (72/90/120 Hz), fixed foveation | Yes; viewport scale and foveation are done; the refresh rate is OVRPlugin's `systemDisplayFrequency` (the game's own settings should also offer a refresh-rate choice on the Quest; to confirm on the headset) | Measured: Performance Mode took Aether's intro from 31 to 15-21 ms and ambient from 34 to 15 (naomi.9). At 72 Hz the budget is 13.9 ms against Aether's 12.4 ms median GPU time | Low technically; every one of them changes what the player sees (sharpness, smoothness), so settings, off |
+| Hooking Unity's native rendering functions | Inline hooks inside libunity (GfxDevice draw and state calls): skip, reorder or rewrite single draws, read draw-call detail | Technically, with pattern-scanned addresses; libunity is not exported for this | Little that command buffers cannot do already; draw-level detail for diagnostics | High: any game update rebuilds libunity and moves every address; a wrong hook crashes every map, not one |
+| Application SpaceWarp (render at half rate, the system synthesises the other frames) | Halve the GPU work per displayed frame | **No.** Meta's documentation requires URP with SpaceWarp support, Vulkan as the only graphics API, a `MotionVectors` pass in every shader, depth submission, and the feature switched on at build time. Beat Saber is built-in pipeline on GLES, and its and the maps' shaders write no motion vectors. `OVRManager.SetSpaceWarp` exists in the game's code, but with no motion-vector or depth layers behind it the compositor has nothing to synthesise from | Would be the largest win if it existed (about half the GPU time) | Out of reach for a mod: it needs a different build of the game |
+| The compositor's own reprojection | Already always on (timewarp of the last frame to the latest head pose) | Not controllable | It is what keeps head motion smooth at 65 fps today | n/a |
+
+### Which parts of today's pipeline cost speed, and which caused the gray and white
+
+- **White** (beta.1): the translator turned each shader's own program into
+  GLSL faithfully but did not know which textures were the screen. Fixed by
+  a heuristic (coordinates from `unity_StereoScaleOffset`, camera texture
+  names). A screen coordinate computed in the vertex stage, or a Blit shader
+  that samples the screen with plain UVs, still slips through; only a
+  cross-stage analysis (an IR, below) closes that.
+- **Gray**: geometry-shader emulation covers three known shaders and
+  triangle or point programs only, and particle systems only when their
+  particles hold still and fit a CPU bake (Aether's 5 remaining gray
+  systems). Stand-ins also replace any variant the translator refuses. Quest
+  bundles' own shaders are never touched (Lost in Data's FogMB reads depth as
+  2D).
+- **Speed**: Aether is GPU-bound at 95% busy; Vivify's own CPU work is
+  0.14-0.20 ms a frame, so anything that only saves CPU time saves nothing
+  that shows. The GPU time goes on per-pixel work: full-screen procedural
+  skies shaded before scenery covers them, the depth pre-pass, transparent
+  effects' overdraw, full-resolution Blits (IntroBokeh costs about 9 ms while
+  it runs), and `highp` arithmetic everywhere.
+
+### What an optimising converter could do, honestly weighed
+
+| Piece | What it does | Expected payoff, with evidence | Cost and risk |
+|---|---|---|---|
+| Classify shaders at conversion time | Mark skies (opaque, depth-written, full-screen), Blits, screen textures across both stages, reachable keyword variants | Enables the sky reorder, the depth copy and exact warm-up; no speed by itself | Low; analysis only, old output unchanged |
+| Dead-keyword and dead-variant removal | Drop variants no material and no event can turn on (beyond today's "skip unused", 877 variants skipped in 43a5d) | Shorter conversions and loads, fewer first-use compiles. beta.1 saw no compile stall in-song but first frames of 0.7-1.2 s after level start on four maps and 0.3-0.9 s of Prepare Shaders. **No change to frame time** in steady play | Low to medium: a variant wrongly judged dead draws as a stand-in; needs the map's events scanned for keyword changes |
+| Shader simplification and precision lowering | Fold constants, drop dead code, and use `mediump` where the DXBC marks minimum precision or a value provably fits | Adreno 740 runs FP16 at about twice the FP32 rate, so ALU-heavy skies and Gemstone could gain noticeably. **Unmeasured**: the GPU counters (instructions per fragment, time shading fragments) were never on. Aether's sky hashes (`fract(sin(x) * 43758.5)`) break in 16-bit, so most of Aether's heavy shaders are exactly the ones that cannot drop precision | Medium cost; high look risk; setting, off, per shader |
+| SPIR-V optimisation round trip | GLSL to SPIR-V (glslang), spirv-opt (inlining, dead code, loop unrolling), back to GLSL ES (SPIRV-Cross) | **Small.** The DXBC is already the output of Microsoft's optimising compiler, and the Adreno driver compiles our GLSL with its own LLVM-based optimiser, which removes the bit-cast noise our translation adds. Possibly shorter compile times | High: two large libraries in the mod, and SPIRV-Cross renames uniforms and blocks that Unity binds by name (`hlslcc_mtx`, `UnityStereoGlobals`, locations). Not worth it on the evidence |
+| ASTC recompression and mip handling | Recompress BC textures to ASTC (smaller, same sampling), generate missing mips | **None for Aether** (5 textures, 1.3 MB in all; the GPU samples BC1-BC7 natively). Some for texture-heavy maps (Coconut Mall has 48), mainly memory and bandwidth; unmeasured | Medium-high cost (an ASTC encoder is slow on the headset); quality loss is a look change, setting, off |
+| Mesh optimisation and LOD | Vertex-cache reordering, simplified distant meshes | **None for Aether** (22 meshes, 38,883 triangles in all) | LOD changes the look; vertex reordering is safe but buys nothing here |
+| Merging materials and draws | GPU instancing (already an experimental setting), `Mesh.CombineMeshes` for objects that never move | Aether draws 4,587 renderers from 22 meshes, and the depth pre-pass draws them again. One beta.1 play with instancing on ran ambient at 24 ms against 33, but stand-ins were off in it too, so unproven. Since the GPU is the bound, expect less than the draw count suggests | Medium: objects the map animates or moves cannot be combined; misplaced instances were the 0.13 bug |
+| Geometry emulation through compute | Run any geometry program as a compute pass writing a vertex buffer, then draw that | Clears the remaining gray (moving and billboard particles, the instance-ID programs in 43a5d) and makes the CPU bakes unnecessary. GPU cost about what PC pays for the geometry stage | High: a compute translation path, dispatch and procedural draws through engine calls, per-frame buffers; the biggest single piece of work here |
+| Resolution control | Per-section learned scale (exists), Vivify cameras and Blits at reduced resolution, refresh-rate choice | Measured: the largest lever there is (Aether's slow sections halved) | Low technically; look change, settings, off |
+
+### What the best-possible design would look like
+
+Given that Unity's built-in renderer, GLES and the game's camera setup stay
+as they are, the best core is a **compiler with a whole-map view** feeding a
+**thin runtime**:
+
+1. **At conversion time** the converter parses every program into one
+   intermediate form (SSA, typed, both stages of a variant together) instead
+   of emitting text straight from DXBC. Analyses run there: which textures
+   are the screen (across stages), which shaders are skies, Blits or
+   depth-only, which variants are reachable from the map's materials and
+   events, which values tolerate `mediump`. It writes GLSL from that form and
+   a sidecar file with every decision, so the runtime does not rediscover
+   them at load.
+2. **Material and texture handling** becomes data from that sidecar: stand-in
+   plans, emulation plans and texture decisions are computed once per
+   conversion, not at every level load.
+3. **Effect emulation** moves to compute where the GPU supports it, with
+   today's vertex-stage emulation and bakes as the fallback.
+4. **The runtime** keeps doing what only it can: events, animations, cameras,
+   and the command-buffer steps (sky order, depth copy, Blits at their own
+   resolution), plus resolution control.
+
+That is a large piece of work, and most of its speed would come from the
+command-buffer steps and resolution control, which do not need the new
+converter at all. The converter half mainly buys correctness (no more
+heuristics, which is what the white and gray problems came from) and shorter
+loads.
+
+### Ranked for Aether-type maps (payoff against risk)
+
+1. **Opaque skies after the opaque queue** (command buffer or render-queue
+   change). Same image; large in the buildup, drop and bridge; low risk.
+2. **Scene depth from the main pass instead of a pre-pass.** A whole opaque
+   pass saved all song; medium risk.
+3. **Resolution and refresh-rate control for heavy maps** (exists in part).
+   Measured largest lever; low risk; changes the look, so settings, off.
+4. **Blits at their own resolution** (Effect Resolution exists; defaults to
+   100%). IntroBokeh's 9 ms; look change, setting.
+5. **Exact variant warm-up and dead-variant removal.** Load time and stalls;
+   low to medium risk.
+6. **Instancing and combined meshes.** Medium payoff, unmeasured; medium risk.
+7. **Compute geometry emulation.** Clears the gray; high cost and risk.
+8. **Precision lowering.** Potentially large on some shaders, but Aether's
+   heaviest break; high look risk.
+9. **ASTC, mesh optimisation, SPIR-V round trip.** Little or nothing for
+   Aether on the evidence.
+10. **Native render hooks.** Breaks with game updates; little beyond 1-4.
+11. **Application SpaceWarp.** Not possible for a mod.
+
+### Recommendation and the step-by-step path
+
+Do **not** start a ground-up rewrite. The measurements say the speed is in
+per-pixel GPU work that the runtime's command-buffer steps and resolution
+control reach without a new converter, and a rewrite would put every working
+map at risk at once. Do build the new core **beside** the old one, in this
+order, each step a beta with the new route behind its own setting (off) and
+the old route untouched until the fixed test set and A/B screenshots prove
+the new one:
+
+1. **beta.3** (as planned): the measured cost table and GPU counters. Gate:
+   if skies, depth and transparent effects together are not most of Aether's
+   GPU time, re-rank everything below before going on.
+2. **beta.4-beta.5** (as planned): skies last, depth from the main pass.
+3. **beta.6**: the conversion-time **analysis layer** ("Converter 2,
+   analysis only"): cross-stage screen-texture detection, sky/Blit
+   classification, reachable variants, written as a sidecar. It feeds the
+   compile-stall warm-up of beta.6 and replaces beta.2's heuristic only when
+   its answers match on all 28 maps. A host A/B tool runs both translations
+   of every program through glslang and a software renderer (for example
+   Mesa's llvmpipe) and compares their output pixels, so "same image" is
+   checked on the laptop before the headset.
+4. **beta.9 onward** (after naomi.10-release, as naomi.11): the IR-based
+   emitter for one shader class at a time (Blits first, then skies), setting
+   "New Shader Translator" off; precision analysis on top of it; compute
+   geometry emulation last.
+
+That gives the speed early (beta.4-beta.5), the correctness of a real
+compiler without betting the library on it, and an exit at every step if a
+piece does not pay.
+
 ## After Version X (backlog, by priority)
 
 1. Geometry emulation for programs that read the instance ID or pass a
