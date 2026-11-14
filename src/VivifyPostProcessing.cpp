@@ -160,9 +160,20 @@ void Runtime::ApplyBlits(UnityEngine::RenderTexture* src, UnityEngine::RenderTex
 
 namespace {
 
+// The engine's signatures, as Beat Saber 1.40.8's libunity (Unity 2022.3.33f1)
+// names them. Request takes four arguments: the texture, the mip, a pointer to
+// a NativeArray destination (null: Unity allocates the buffer itself, which is
+// what AsyncGPUReadback.Request passes) and the request it fills in. beta.2
+// passed three, so Unity stored the request through whatever the fourth
+// register held and the game crashed on the first probe (naomi.10-beta.3).
+//   AsyncGPUReadback_CUSTOM_Request_Internal_Texture_1_Injected(
+//       ScriptingBackendNativeObjectPtrOpaque*, int, void*, AsyncGPUReadbackRequest&)
+//   AsyncGPUReadbackRequest_CUSTOM_{Update,IsDone,HasError,GetLayerDataSize}_Injected(
+//       AsyncGPUReadbackRequest*)
+//   AsyncGPUReadbackRequest_CUSTOM_GetDataRaw_Injected(AsyncGPUReadbackRequest*, int)
 struct ReadbackCalls {
   using Supported = bool (*)();
-  using Request = void (*)(UnityEngine::Texture* source, int32_t mip, ViewReadback* out);
+  using Request = void (*)(UnityEngine::Texture* source, int32_t mip, void* nativeArrayData, ViewReadback* out);
   using Flag = bool (*)(ViewReadback* self);
   using Size = int32_t (*)(ViewReadback* self);
   using Data = void* (*)(ViewReadback* self, int32_t layer);
@@ -240,7 +251,7 @@ void Runtime::IssueViewReadback() {
   auto const& calls = Readback();
   if (calls.usable) {
     _viewReadback = ViewReadback{};
-    calls.request(_viewProbe.ptr(), 0, &_viewReadback);
+    calls.request(_viewProbe.ptr(), 0, nullptr, &_viewReadback);
     _viewReadbackPending = _viewReadback.ptr != nullptr;
     return;
   }

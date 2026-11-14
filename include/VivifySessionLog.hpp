@@ -101,6 +101,11 @@ std::vector<std::string> FilesToDelete(std::vector<Session> const& sessions, std
 // The line every cleanly ended session finishes with starts with this.
 inline constexpr std::string_view kFooter = "=== session ended";
 
+// The first line of VivifySession.txt since naomi.10: the file only says
+// where the logs went. A file that starts with it is not a log.
+inline constexpr std::string_view kPointerText =
+    "Vivify session logs are now saved one per launch in Sessions/ (see LOGGING.md).";
+
 // How a session that the index still calls running ended: `tail` is the end
 // of its file; `blackBoxState` what the black box recorded for it, if it
 // recorded that session (BlackBox::State values; nullopt otherwise).
@@ -130,7 +135,10 @@ struct PreviousBox {
 // to, the box's state), appends the black box's records to that session's
 // file when it did not end cleanly, adds `current` as running, deletes what
 // FilesToDelete picks, and writes index.txt. `legacyLog` is the old single
-// VivifySession.txt: when present it is moved in as a session of its own.
+// VivifySession.txt: when it holds a naomi.9 or earlier log it is moved in as
+// a session of its own; when it is only the pointer naomi.10 writes there, it
+// is left alone. Session files that are only that pointer (naomi.10-beta.1
+// and beta.2 moved one in at every launch) are deleted.
 Startup BeginSession(std::string const& dir, Session const& current, PreviousBox const& box,
                      std::string const& legacyLog = {});
 

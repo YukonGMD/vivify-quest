@@ -304,6 +304,58 @@ int main(int argc, char** argv) {
               later.sessions[4].ended == L::kBackground,
           "an unlisted session file is added and settled", std::to_string(later.sessions.size()));
   }
+  {
+    // naomi.10-beta.3: VivifySession.txt as naomi.10 writes it is only a
+    // pointer. beta.1 and beta.2 moved it in at every launch as an "unknown"
+    // session named a second after the launch, so the next launch took it
+    // for the previous session. As on the headset on 2026-11-04: session 40
+    // crashed, its pointer was written a second later, and an older launch
+    // left a pointer copy behind.
+    std::string const dir = scratch + "/SessionsPointer";
+    std::string const pointer = scratch + "/PointerVivifySession.txt";
+    fs::create_directories(dir);
+    std::string const pointerText = std::string(L::kPointerText) + "\nThis session: Sessions/" + NameAt(40) + "\n";
+    std::string const leftover = "Vivify_2026-10-25_01-39-01_unknown-unknown.txt";
+    WriteFile(dir + "/" + NameAt(39), "=== header ===\n=== session ended cleanly at 01:39 ===\n");
+    WriteFile(dir + "/" + leftover, std::string(L::kPointerText) + "\nThis session: Sessions/" + NameAt(39) + "\n");
+    WriteFile(dir + "/" + NameAt(40), "=== header ===\nplaying 43a25\n");
+    WriteFile(dir + "/index.txt",
+              L::FormatIndex({MakeSession(NameAt(39), L::kClean, 0), MakeSession(leftover, "unknown", 158),
+                              MakeSession(NameAt(40), L::kRunning, 0)}));
+    WriteFile(pointer, pointerText);
+    L::PreviousBox box{true, Vivify::BlackBox::kRunning, NameAt(40),
+                       {"23:46:30.361 s=0.00 [CRUMB] first frame after level start: 36ms later"}};
+    auto const startup = L::BeginSession(dir, MakeSession(NameAt(41), L::kRunning, 0), box, pointer);
+    auto const index = L::ParseIndex(ReadAll(dir + "/index.txt"));
+    Check(ReadAll(pointer) == pointerText, "the pointer is left where it is, not moved in");
+    Check(!fs::exists(dir + "/" + leftover), "a pointer copy left by beta.1/beta.2 is deleted");
+    int unknown = 0;
+    for (auto const& entry : fs::directory_iterator(dir)) {
+      unknown += entry.path().filename().string().find("unknown-unknown") != std::string::npos;
+    }
+    Check(unknown == 0, "no unknown-unknown session file", std::to_string(unknown));
+    Check(index.size() == 3 && index[0].file == NameAt(39) && index[1].file == NameAt(40) &&
+              index[2].file == NameAt(41),
+          "index: the real sessions only", std::to_string(index.size()));
+    Check(startup.previous && startup.previous->file == NameAt(40) && startup.previous->ended == L::kUnexpected,
+          "the previous session is the one that crashed", startup.previous ? startup.previous->file : "none");
+    bool told = false, boxShown = false, removedNote = false;
+    for (auto const& note : startup.notes) {
+      told |= note.find(NameAt(40)) != std::string::npos && note.find("ended unexpectedly") != std::string::npos;
+      boxShown |= note.find("first frame after level start") != std::string::npos;
+      removedNote |= note.find("removed 1 leftover copy") != std::string::npos;
+    }
+    Check(told && boxShown, "the new session is told about the crash, with its last black-box events");
+    Check(removedNote, "the clean-up is noted");
+    // A naomi.9 log in VivifySession.txt is still moved in (checked above);
+    // a second launch with the pointer in place changes nothing.
+    WriteFile(dir + "/" + NameAt(41), "=== header ===\n=== session ended cleanly at 01:42 ===\n");
+    WriteFile(pointer, std::string(L::kPointerText) + "\nThis session: Sessions/" + NameAt(41) + "\n");
+    auto const again = L::BeginSession(dir, MakeSession(NameAt(42), L::kRunning, 0), L::PreviousBox{}, pointer);
+    Check(again.sessions.size() == 4 && again.previous && again.previous->file == NameAt(41),
+          "next launch: still no pointer copy, previous is the last real session",
+          std::to_string(again.sessions.size()));
+  }
 
   // --- The writer -----------------------------------------------------------------------------------
   {

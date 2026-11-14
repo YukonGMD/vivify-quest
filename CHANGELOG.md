@@ -29,8 +29,8 @@ codename (CODENAMES.md), shown in the settings menu and the session log:
 
 naomi.10 ships as pre-releases first: 0.14.25-naomi.10-beta.1 (crash fixes,
 gray ledger and shader audit, settings menu, logging), 0.14.25-naomi.10-beta.2
-(the white-screen fix), further betas per VERSION_X.md, then
-0.14.25-naomi.10-release once its tests pass. The release
+(the white-screen fix), 0.14.25-naomi.10-beta.3 (two fixes from beta.2's
+test), then 0.14.25-naomi.10-release once its tests pass. The release
 says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
 
 ### Changed
@@ -257,6 +257,26 @@ says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
   the previous level.
 
 ### Fixed
+- **Detailed Logging crashed the game when a map's first Blit started**
+  (naomi.10-beta.3). beta.2's mostly-white view detector asks Unity to read
+  a 16x16 copy of the frame back. Unity's engine call for that takes four
+  arguments -- the texture, the mip, an optional NativeArray destination and
+  the request it fills in -- and beta.2 passed three, so Unity stored the
+  request through a stray register: the game closed at the first probe.
+  beta.2's test lost Lifelike at its first frame and you - Swifter at 84 s,
+  both with Detailed Logging on; with it off the detector never runs. The
+  call now passes no NativeArray, as Unity's own `AsyncGPUReadback.Request`
+  does; the signature was checked against the game's libunity, and the other
+  engine calls Vivify looks up by name were checked the same way.
+- **Two session files per launch** (naomi.10-beta.3). Since naomi.10,
+  VivifySession.txt only says where the logs are, but every launch moved
+  that two-line pointer into Sessions/ as a session of its own
+  (`Vivify_..._unknown-unknown.txt`). The copies took places among the 10
+  sessions kept, and the newest of them was named "the previous session", so
+  a crash was reported against the copy instead of the session that crashed
+  (the black box itself still reached the right file). The pointer is now
+  left alone, and the copies beta.1 and beta.2 left are deleted at launch
+  (the session log says how many). Host test with the headset's case.
 - **Blits covered the view in white until paused** (naomi.10-beta.2; upstream
   issues #67 and #69). A PC map's Unity 2019 build targets single-pass
   double-wide stereo, so its Blit shaders read the screen as one wide 2D

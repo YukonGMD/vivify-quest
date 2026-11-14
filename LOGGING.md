@@ -27,7 +27,7 @@ All under `/sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify/`:
 | `Sessions/latest.txt` | The name of the current session's file. |
 | `Sessions/blackbox.bin` | The black box (512 KB). |
 | `Sessions/last-summary.txt` | Build, game version, mods and settings at the last launch, for "changed since the last session". |
-| `VivifySession.txt` | naomi.9 and earlier kept their one log here, replaced at each launch. The first naomi.10 launch moves that last log into Sessions/ as a session of its own; afterwards this file only says where the logs are. |
+| `VivifySession.txt` | naomi.9 and earlier kept their one log here, replaced at each launch. The first naomi.10 launch moves that last log into Sessions/ as a session of its own; afterwards this file only says where the logs are. (beta.1 and beta.2 also moved that pointer in at every launch, as a 158-byte `Vivify_..._unknown-unknown.txt`; beta.3 deletes those copies at launch and says how many.) |
 | `vivify_global*.txt` | Every session from 0.14.23 to naomi.9, appended. Kept as history; no longer written (one line at its end says so). |
 | `VivifyReport.txt` | The per-level report, unchanged. |
 

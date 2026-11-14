@@ -60,6 +60,18 @@ is a two-layer array and Unity gave them its default white. Aether had about
 Aether's depth effects. Risk to watch in beta.2: with real pixels to read,
 the Bokeh Blits may cost more GPU than they did reading a default texture.
 
+**beta.2's test (2026-11-04, three launches, about 14 minutes):** By The
+Wind and Lost in Data played through (medians 34 and 16 ms, against beta.1's
+32 and 15-18); Aether was selected and converted from its 2021 bundle with no
+"reads the screen as 2D" warning, but neither Aether nor Get Your Wish was
+played, so the white-screen fix is not yet confirmed on the headset. Three
+crashes: two were beta.2's own white-view detector (Detailed Logging on), at
+the first frame with a Blit in Lifelike (0 s) and you - Swifter (84 s) -- an
+engine call given three arguments instead of four; the third ended a launch
+during the other mods' start-up, like the pre-naomi.10 ones. Every launch
+also saved the VivifySession.txt pointer as an extra session file. **beta.3**
+fixes both; nothing else changes.
+
 **Stability:** naomi.9's two crashes were Vivify use-after-free during level
 teardown (fixed in beta.1); one more was another mod's start-up crash. No
 memory pressure near any of them.
@@ -170,6 +182,13 @@ worse than the previous beta by more than 5%; logging under 0.1 ms a frame;
 every change that alters the image behind a setting that is off.
 
 ## Milestones
+
+**Inserted after beta.2's test: beta.3 fixes beta.2's two regressions**
+(`0.14.25-naomi.10-beta.3`): the white-view detector's readback call, which
+crashed the game with Detailed Logging on at a map's first Blit, and the
+extra session file per launch. No look change. The planned milestones below
+keep the numbers they were written with; if beta.3 tests clean, naomi.10 is
+released from it and they become the naomi.11 backlog.
 
 Each is one beta. A new rendering path ships behind a setting, off, with the
 old path untouched, until the fixed test set and an A/B screenshot show it

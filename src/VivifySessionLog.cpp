@@ -443,6 +443,13 @@ bool IsSessionFileName(std::string_view name) {
   return name.rfind("Vivify_", 0) == 0 && name.size() > 31 && name.substr(name.size() - 4) == ".txt";
 }
 
+// VivifySession.txt as naomi.10 writes it: two short lines, no log.
+bool IsPointerOnly(std::string const& path) {
+  uint64_t const size = SizeOf(path);
+  if (size == 0 || size > 4096) return false;
+  return ReadAll(path).rfind(kPointerText, 0) == 0;
+}
+
 // "Vivify_2026-10-25_01-47-12_naomi.10-beta.1-89f98f5.txt" -> start time and build.
 void FromFileName(std::string_view name, std::string& started, std::string& build) {
   if (!IsSessionFileName(name)) return;
@@ -479,7 +486,9 @@ Startup BeginSession(std::string const& dir, Session const& current, PreviousBox
   std::vector<Session> sessions = ParseIndex(ReadAll(indexPath));
 
   // naomi.9 and earlier kept one VivifySession.txt, replaced at every launch.
-  if (!legacyLog.empty() && fs::exists(legacyLog, ec)) {
+  // Since naomi.10 it only points at Sessions/; that pointer is not a log
+  // (beta.1 and beta.2 moved it in at every launch as an "unknown" session).
+  if (!legacyLog.empty() && fs::exists(legacyLog, ec) && !IsPointerOnly(legacyLog)) {
     std::string const head = ReadAll(legacyLog).substr(0, 200);
     std::string version = "unknown", commit = "unknown";
     size_t const v = head.find("=== Vivify ");
@@ -519,6 +528,27 @@ Startup BeginSession(std::string const& dir, Session const& current, PreviousBox
       sessions.insert(sessions.begin(), legacy);
       out.notes.push_back("the old VivifySession.txt (" + version + ") is now " + name);
     }
+  }
+
+  // The pointer copies beta.1 and beta.2 left: not sessions. Without this they
+  // take places in the 10 kept, and the newest of them (named a second after
+  // its launch) was taken for the previous session.
+  std::vector<std::string> pointerFiles;
+  for (auto const& entry : fs::directory_iterator(dir, ec)) {
+    std::string const name = entry.path().filename().string();
+    if (IsSessionFileName(name) && name != current.file && IsPointerOnly(entry.path().string())) {
+      pointerFiles.push_back(entry.path().string());
+    }
+  }
+  size_t pointerCopies = 0;
+  for (auto const& path : pointerFiles) {
+    std::error_code removeEc;
+    if (fs::remove(path, removeEc)) pointerCopies++;
+  }
+  if (pointerCopies > 0) {
+    out.notes.push_back("removed " + std::to_string(pointerCopies) +
+                        " leftover copy(ies) of the VivifySession.txt pointer (naomi.10-beta.1 and beta.2 "
+                        "saved one as a session at every launch)");
   }
 
   // Session files the index does not list (a launch cut off before writing it).

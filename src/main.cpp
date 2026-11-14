@@ -349,7 +349,7 @@ void WritePointers() {
   std::ofstream latest(std::string(kSessionsDir) + "/latest.txt", std::ios::trunc);
   latest << gSessionFile << "\n";
   std::ofstream old(std::string(kVivifyLogPath), std::ios::trunc);
-  old << "Vivify session logs are now saved one per launch in Sessions/ (see LOGGING.md).\n"
+  old << Vivify::SessionLog::kPointerText << "\n"
       << "This session: Sessions/" << gSessionFile << "\n";
 }
 
