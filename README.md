@@ -1,210 +1,271 @@
+# Vivify Quest (naomi builds)
 
-### if you have issues please just make a issue and follow issue template
+An unofficial Quest port of [Aeroluna's Vivify](https://github.com/Aeroluna/Vivify)
+for **Beat Saber 1.40.8** on Meta Quest. It plays Vivify maps on the headset.
+When a map ships only a PC (Windows) asset bundle, it converts that bundle on
+the headset, translating the map's DirectX shaders to OpenGL ES.
 
-### ***if you cant find session log: look at log-help.md for help*** and make sure to get both logs, (/mods/vivify and /logs2)
-# Vivify Quest
-## current recomended version: ***0.14.7***
-A Quest port of [Vivify](https://github.com/Aeroluna/Vivify) for **Beat Saber
-1.40.8**. It plays Vivify maps on the headset, including maps that were only
-ever built for PC.
+> **Unofficial.** This project is not affiliated with or endorsed by
+> Aeroluna, Beat Games or Meta. Please don't report problems with it to
+> them. It contains no Beat Saber binaries or game assets.
 
-It is built from several community Quest ports merged into one (see
-[Credits](#credits)), and adds three things of its own:
-- an on-device PC → Quest converter, with its own DirectX → GLSL shader
-  translator;
-- AudioLink;
-- diagnostics for maps that don't work.
+This repository is YukonGMD's fork of
+[trail-b1az3r/vivify-quest](https://github.com/trail-b1az3r/vivify-quest). It
+carries the **naomi** test builds, versioned `0.14.25-naomi.N` and based on
+upstream 0.14.25. Upstream has moved on to its own 0.15 releases; the two lines
+are separate, and installing one replaces the other.
 
-What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
+**Current build:** `0.14.25-naomi.10-beta.3`, an **untested pre-release**.
+What changed is in [CHANGELOG.md](CHANGELOG.md) and the
+[release notes](docs/releases/naomi.10-beta.3.md).
 
-## Features
+## Tested on
 
-- FULLY WORKING RAYMARCHING SHADERES IN HOLD MY HAND (only in 0.14.7+)
+Only **one Quest 3S** running **Beat Saber 1.40.8** (`1.40.8_7379`). Nothing
+else has been tested: not Quest 2, Quest 3 or Quest Pro, and no other game
+version. The mod is built for `1.40.8_7379` only.
 
-- **Vivify events on Quest:** custom prefabs, materials, blits, cameras,
-  screen textures and rendering settings. Blits run at the right point in the
-  frame (before or after the skybox, opaque or transparent geometry), as on
-  PC, so effects don't draw over the notes.
-- **PC maps playable on Quest.**
-  - A map with no Quest bundle has its PC bundle converted on the headset.
-    If the song folder has no PC bundle, the mod downloads one.
-  - Shaders are translated from DirectX to GLES for the Quest's two-eye
-    (multiview) rendering.
-  - Anything that can't be translated gets a stand-in shader, so it is still
-    drawn.
-- **Broken Quest shaders replaced.** A shader that a map's Quest bundle
-  shipped empty (the mapper's Unity failed to compile it) is replaced by the
-  PC build of that shader. The mod downloads the map's PC bundle if needed,
-  and merges the translated shader into a cached copy of the Quest bundle.
-- **AudioLink:** `_AudioTexture` for any AudioLink shader in a map, and the
-  SongCore `AudioLink` capability.
-- **Crash guard:** a converted bundle that crashes the game is automatically
-  reconverted without shader translation, so the level stays playable.
-- **Diagnostics:** a session log and a per-level report on the headset.
+## What it does
 
-## Install
+- **Vivify events on Quest:** custom prefabs, materials, animated
+  properties, Blits (post-processing), cameras, screen textures and rendering
+  settings. Blits run at the same point in the frame as on PC.
+  [PARITY.md](PARITY.md) compares every PC feature with this port.
+- **PC-only maps on Quest.** A map with no Quest bundle has its PC bundle
+  converted on the headset the first time it loads, and the result is kept.
+  The DirectX shader programs are translated to GLES for the Quest's two-eye
+  (multiview) rendering. Anything that can't be translated is drawn with a
+  plain stand-in instead of nothing.
+- **Broken Quest shaders replaced.** A Quest bundle shader that the mapper's
+  Unity left empty is replaced with the translated PC version of that shader.
+- **Geometry-shader effects emulated** for three known shaders (Swifter's
+  triangle explosion, Mawntee's 3D-noise wireframe, Bytesized's grass). The
+  Quest can't run geometry shaders in its two-eye mode.
+- **AudioLink** for maps whose shaders use it.
+- **Crash guard:** a converted map that never finishes loading twice is
+  played with stand-ins instead, so it stays playable.
+- **Session logs** saved on the headset, one per launch, with a crash-proof
+  "black box" of recent events ([LOGGING.md](LOGGING.md)).
 
-1. Install the `.qmod` from the
-   [releases](https://github.com/trail-b1az3r/vivify-quest/releases) with
-   QuestPatcher or ModsBeforeFriday.
-2. Dependencies (SongCore, CustomJSONData, Tracks, BSML and the rest) are
-   installed by your mod manager.
+### Seen on the headset
 
-The newest untested build of `main` is the rolling
-[nightly](https://github.com/trail-b1az3r/vivify-quest/releases/tag/nightly)
-pre-release. It is rebuilt daily when something has changed.
+- naomi.10-beta.1: 16 plays of 12 Vivify maps in one session, including the
+  converted PC map 743 Aether.
+- naomi.10-beta.2: By The Wind and Lost in Data played through. Lifelike and
+  you - Swifter crashed, but only with the Debug setting "Detailed Logging"
+  on; beta.3 fixes that bug.
+- Offline, every shader program in the tester's 28 Vivify maps (18,507
+  programs) translates and then compiles and links with glslang.
+
+## Known issues
+
+- **beta.3 has not been played yet.** It fixes two bugs from beta.2: a crash
+  with Detailed Logging on, and two session files per launch.
+- **The white-screen fix is unconfirmed.** 743 Aether and Get Your Wish
+  covered the view in white for a few seconds (upstream issues #67 and #69).
+  beta.2 fixed the cause, but neither map has been played since.
+- **Some objects are still drawn gray.** A stand-in is drawn where an effect
+  can't run on the Quest. In 743 Aether several particle systems stay gray
+  (Extending Arrows, rock particles, Ground Fog). [GRAY.md](GRAY.md) lists
+  each one and why.
+- **Geometry and tessellation shaders** other than the three emulated ones
+  can't run on the Quest; they are drawn with a stand-in.
+- **Some effects can't be copied from PC.** Get Your Wish's
+  FX/CensorWorldSpace uses a grab pass, which the port doesn't handle. Lost
+  in Data and Winter Wrap Up ship their own Quest fog shader, which reads
+  depth in a way the Quest doesn't support; the port doesn't rewrite a
+  map's Quest shaders.
+- **Heavy maps are slow.** The Quest 3S GPU is the limit: in beta.2's test
+  By The Wind ran at a median of 34 ms a frame, about 30 fps.
+  [PERF.md](PERF.md) lists what costs the most. Effect Resolution and
+  Performance Mode (below) can help.
+- **The game sometimes crashed at start-up** while other mods were loading.
+  These crashes were never traced to Vivify; the cause is unknown.
+- **Left-handed mode** doesn't mirror a map's environment (PARITY.md).
+- **PC-only integrations** (Camera2, custom saber mods, OpenXR multi-pass)
+  have no Quest equivalent.
+
+## Install with ModsBeforeFriday
+
+**Back up first.** Copy the folder
+`/sdcard/ModData/com.beatgames.beatsaber/` from the headset to your
+computer. It holds your mods' files and settings, including Vivify's
+converted maps and logs.
+
+1. Turn on developer mode for your Quest and connect it to your computer
+   with a USB cable.
+2. Open [ModsBeforeFriday](https://lauriethefish.github.io/ModsBeforeFriday/)
+   in a browser that supports WebUSB (Chrome or Edge) and connect to the
+   headset. If the game isn't modded yet, let ModsBeforeFriday patch it.
+   Beat Saber must be version 1.40.8.
+3. Download `Vivify.qmod` from this repository's
+   [releases](https://github.com/YukonGMD/vivify-quest/releases).
+4. In ModsBeforeFriday, press **Upload Files** (or drag the file onto the
+   page) and choose `Vivify.qmod`. Its dependencies (SongCore,
+   CustomJSONData, Tracks, BSML and the others in `mod.json`) are installed
+   with it. It replaces whichever Vivify version was installed before.
+
+Settings carry over between versions. When a version changes how PC maps are
+converted, each converted map is converted again, once, the next time it
+loads. Expect that load to take longer.
 
 ## Settings
 
-All settings are in **Mod Settings → Vivify**.
+In the game: **Mod Settings → Vivify**. Settings that make a level look
+different from PC are off by default. [SETTINGS.md](SETTINGS.md) lists every
+setting with its default.
 
-| Setting | Default | What it does |
-|---|---|---|
-| Convert PC Bundles On Device | on | Converts PC-only maps on the headset. |
-| Translate Shaders On Conversion | on | Translates PC shaders to GLES. Off: everything uses stand-in shading. |
-| Stand-In Shading For Unsupported Shaders | on | Draws shaders that can't run with a simple stand-in instead of nothing. |
-| Scene Depth For Map Shaders | on | Renders `_CameraDepthTexture` for maps whose shaders read it (raymarchers, distortion, soft particles). Maps that don't read it skip the extra pass. |
-| Effect Resolution % | 100 | Renders map post-process effects at a lower resolution and scales them up. Lower it (75 or 50) if Vivify maps lag. |
-| Use Only PC Bundle For Missing Shaders | off | A Quest map whose bundle is missing shaders is played entirely from its converted PC build instead of being patched. |
-| Crash Guard | on | After two loads of a converted map that never finish, plays it with grey stand-ins instead. Turn off if maps go grey after crashes caused by other mods. |
-| Offscreen Culling (less lag) | off | Animators in a map's prefabs stop updating while nothing they draw is on screen. Can leave out scenery and particles that the animation itself grows, moves or spawns into view. |
-| Far Culling Distance | 0 (off) | Draws nothing farther than this many metres. Try 150-300 on heavy maps; far scenery may disappear. |
-| Emulate Geometry Effects On Particles | on | Particle systems whose particles hold still after one burst (743 Aether's triangle explosions) are baked into one mesh so the emulated geometry effect draws on them, as on PC. Off: they keep the stand-in colour. |
-| Performance Mode For Heavy Maps | off | While a song runs over its frame budget, draws into less of the eye buffers (never reallocating them), 2-5% a step down to the floor and back up when there is headroom; foveation HighTop and the GPU boost once the map turns out heavy. Holds full resolution while Vivify blits, screen textures or cameras are active, and for maps whose shaders read scene depth. |
-| Performance Mode: Lowest Resolution % | 60 | The floor for the viewport scale. |
-| Performance Mode: Aim For Half The Refresh Rate | off | The budget becomes two refreshes (60 fps at 120 Hz) instead of one. |
-| Performance Mode: Also Scale Maps That Read Depth | off | Lets maps whose shaders read the scene depth texture scale too; their soft edges and depth effects can land in the wrong place. |
-| Performance Mode: Learn Each Map | off | Remembers how heavy each second of a map was and eases down before those parts on later plays. "Forget Learned Performance Profiles" deletes what it learned. |
-| Debug: Fixed Resolution % | 0 (off) | Holds one viewport scale for whole songs, for A/B checks. |
-| Debug: Switch Off For A Cost Test | Nothing | Switches one category (skies, transparent effects and particles, depth pre-pass, emulated geometry, blits, scenery) off for whole songs, so the `[PERF]` lines show its cost. The map looks wrong while it is on. |
-| Slow-Frame Sampler (diagnostics) | on | During frames over 100 ms, samples where the main and render threads are and sums it up per section in the session log's `[PERF]` lines. Changes nothing on screen. |
-| AudioLink | on | Runs AudioLink for maps that use it. |
-| Map Realtime Shadows | off | Lets maps turn on realtime shadows. Expensive; can blacken note bodies. |
-| Replay Render Mode (converted maps) | off | Converts maps with single-screen programs so replay and recording renderers can draw them. Turn on to render, off to play. |
-| Blit Fix For Screen Textures (experimental) | off | Builds converted maps' shaders a second time for blits into screen textures, where they otherwise draw nothing. |
-| Prepare Shaders Before Playing | off | Compiles a converted map's shaders in the menu after you select it, instead of freezing at song start. |
-| Draw Geometry-Shader Effects (experimental) | off | Draws wireframe/exploding-triangle style effects on converted maps without their geometry stage instead of grey. |
-| Disable Custom Note Visuals | off | Keeps the game's own notes, sabers and debris. |
-| Disable All Blits | off | Turns off post-processing effects. |
-| Disable Beat 0 Filmgrain Blit | off | Skips film-grain blits that start at beat 0. |
-| Disable CreateCamera Depth | off | Stops map-created cameras from rendering depth. |
-| Disable Vivify Visuals In Multiplayer | on | Plays Vivify maps without their visuals in multiplayer. |
-| Disable VR Center Adjust Handling | off | Lets room recentering move Vivify's cameras and effects. |
-| Submit Scores On Vivify Maps | on | |
-| Debug logging | off | More detail in the session log. |
+**Everyday** (the first screen):
 
-**Reset Vivify (clean slate)** (press twice) deletes all converted maps,
-crash-guard notes and PC bundles Vivify downloaded into Quest maps, and resets
-the settings; use it when maps are stuck grey or broken after an update.
-**Redownload All Vivify Maps** (press twice) lists your Vivify maps in
-`Mods/Vivify/VivifyMaps.txt`, then replaces each with a fresh BeatSaver
-download; use it when maps stay broken even on an older version. A map is
-only replaced once its new copy has downloaded.
-**Convert All PC Bundles Now** converts every PC map up front. **Force
-Reconvert All (ignore cache)** redoes every conversion.
+- **Performance Mode** (off): lowers the resolution while a heavy map runs
+  slower than the headset's refresh rate. The map looks softer.
+- **Effect Resolution %** (100): draws full-screen effects at a lower
+  resolution. Try 75 or 50 if a map lags; effects get blurrier.
+- **Plain Notes And Sabers** (off): keeps the game's own notes, sabers and
+  debris instead of the map's custom ones.
+- **Submit Scores On Vivify Maps** (on).
+- **Convert All PC Bundles Now**: converts every PC-only map up front, so
+  the first play doesn't have to wait.
 
-## When a map doesn't work
+**Advanced** (below the first screen) is grouped by purpose:
 
-Send these two files from the headset:
+- **Performance Mode**: its lowest resolution, whether it may scale maps that
+  read depth, learning each map, and aiming for half the refresh rate.
+- **How maps look**: AudioLink, stand-ins, scene depth, the geometry-effect
+  emulation, realtime shadows, skipping all full-screen effects, pausing
+  offscreen animations, a far culling distance, and visuals in multiplayer
+  (off there by default). Skipping effects, pausing animations and far
+  culling make a map faster but different from PC.
+- **PC maps**: converting on the headset, preparing shaders in the menu
+  before playing (off), Replay Render Mode for replay renderers, and Crash
+  Guard (on). **Force Reconvert All** (press twice) converts every PC map
+  again.
+- **Other**: Reuse Note And Debris Copies (on), Show Developer Options
+  (off), and three buttons that each need two presses: **Reset All Vivify
+  Settings To Defaults**; **Reset Vivify (clean slate)**, which deletes
+  converted maps and the PC bundles Vivify downloaded and resets the
+  settings; and **Redownload All Vivify Maps**.
 
-```
-/sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify/VivifySession.txt
-/sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify/VivifyReport.txt
-```
+**Debug** appears only with Show Developer Options on. It holds logging
+switches ("Debug Logging", "Detailed Logging") and switches for testing and
+isolating problems. If any of them is not at its default, a line in the
+menu says so.
 
-`vivify_global.txt` (and `vivify_global-p2.txt`, ...) in the same folder keeps every session, with timestamps, so an older run can still be sent after a restart.
+## Reporting a problem
 
-For a crash, also send `/sdcard/ModData/com.beatgames.beatsaber/logs2/`.
-The map's bundle helps too:
-- **Quest maps:** `bundleAndroid2021.vivify` from the song folder.
-- **Converted maps:** the converted copy from `Mods/Vivify/ConvertedBundles/`.
+Open an issue on [this repository](https://github.com/YukonGMD/vivify-quest/issues),
+not on Aeroluna's or upstream's. Say which map, the song time, what you saw,
+and what you expected, and attach the files below.
 
-### Known limits
+All of these are in `/sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify/` on
+the headset. To reach them, connect the headset to a computer with USB and
+allow file access, or use `adb pull`.
 
-- **Geometry-shader and tessellation effects** can't run on the Quest under
-  multiview. They are drawn with a stand-in.
-- **A map that needs a feature the Quest's GPU lacks** can look different
-  from PC.
+| File | When |
+|---|---|
+| `Sessions/Vivify_<date>_<time>_<build>-<commit>.txt` | Always: the session in which the problem happened. Each launch writes its own file. |
+| `Sessions/index.txt` | Always. It lists every saved session: start time, build, maps played, and how it ended (`clean`, `background`, `unexpected`). |
+| `VivifyReport.txt` | When one map doesn't work. |
+| `/sdcard/ModData/com.beatgames.beatsaber/logs2/` | After a crash. |
+
+**After a crash,** start the game once more and wait for the menu before
+copying the files. That launch adds the crash's black-box record to the
+crashed session's file, and `index.txt` marks that session `unexpected`.
+Detailed Logging (Debug) adds a line per frame to the session log, which
+helps with stutters and visual glitches.
+
+**What the logs contain:** the headset model and OS build, the game and mod
+versions, your Vivify settings, and the names and folders of the maps you
+played. Before writing, Vivify replaces e-mail addresses with `<email>`.
+The values after `user=`, `username=`, `account=`, `player=`, `ssid=` and
+`serial=` become `<hidden>`. Vivify never reads the device serial or account
+names. Read a log before you post it.
+
+### Tools for a PC with adb
+
+- `python3 tools/pull/pull_sessions.py <folder>` copies every saved session,
+  `index.txt`, `latest.txt` and `last-summary.txt` off the headset. It only
+  reads from the headset and never overwrites a copy already pulled. It also
+  writes a one-page digest beside each new session.
+- `python3 tools/logdigest/logdigest.py <session file>` writes that one-page
+  digest for any session. It covers how the session ended, crash evidence,
+  maps played, the slowest sections, what was drawn gray and why, and what
+  changed since the previous session. `--index index.txt` lists the saved
+  sessions.
+
+[log-help.md](log-help.md) has more detail on getting the files.
 
 ## Building
 
-You need [QPM.CLI](https://github.com/QuestPackageManager/QPM.CLI), the
-Android NDK, CMake and Ninja (see the
-[BSMG Quest modding guide](https://bsmg.wiki/quest/quest-modding-intro.html)).
+You need [QPM](https://github.com/QuestPackageManager/QPM.CLI), the Android
+NDK (`qpm.json` asks for 27.3), CMake, Ninja, PowerShell 7 (`pwsh`) and
+Python 3. See the
+[BSMG Quest modding guide](https://bsmg.wiki/quest/quest-modding-intro.html).
 
 ```sh
-python3 scripts/restore-deps.py   # dependencies from GitHub (no qpackages.com needed)
-qpm s build
-qpm s qmod
+python3 scripts/restore-deps.py   # dependencies from GitHub (or: qpm restore)
+qpm s build                       # builds build/libVivify.so
+qpm s qmod                        # builds and packs Vivify.qmod
 ```
 
-CI (`.github/workflows/build.yml`) does the same on every push. See
-[`scripts/README-deps.md`](scripts/README-deps.md) for dependency sources.
+The build writes the commit into the binary, and the session log header
+shows it. A build from a tree with uncommitted changes is marked `-dirty`.
+[`scripts/README-deps.md`](scripts/README-deps.md) explains the dependency
+sources.
 
 ### Tests
 
-The converter, shader translator and parsers are plain C++20 with no Unity
-dependency, so they build and test on a desktop under ASan/UBSan:
+The converter, shader translator, parsers and log tools are plain C++20 and
+Python, so they build and run on a desktop.
+[`.github/workflows/validate.yml`](.github/workflows/validate.yml) has every
+suite and the exact commands. It includes a glslang compile of every
+translated program. `tools/shaderaudit` converts a whole library of PC
+bundles and compiles and links every program offline.
 
-```sh
-g++ -std=c++20 -O1 -g -fsanitize=address,undefined -I include -o /tmp/conv \
-    tools/bundleconvert/main.cpp src/VivifyBundleConvert.cpp \
-    src/VivifySerializedFile.cpp src/VivifyDxbc.cpp
-VIVIFY_CONV=/tmp/conv python3 tools/bundleconvert/run_tests.py
-VIVIFY_CONV=/tmp/conv python3 tools/bundleconvert/fuzz.py
-```
+## Credits and thanks
 
-`tools/shaderscan`, `tools/dxbc`, `tools/texturedecode` and `tools/report`
-have their own suites. `.github/workflows/validate.yml` runs them all,
-including a glslang compile of every translated program.
-
-## Credits
-
-**Vivify and AudioLink**
-- [Aeroluna](https://github.com/Aeroluna) wrote
-  [Vivify](https://github.com/Aeroluna/Vivify) for PC Beat Saber, which this
-  port follows, and [BSAudioLink](https://github.com/Aeroluna/BSAudioLink),
-  whose AudioLink integration and shader bundle this port uses (MIT).
-- [llealloo](https://github.com/llealloo) and contributors wrote
-  [AudioLink](https://github.com/llealloo/vrc-udon-audio-link) (MIT).
-- [RedBrumbler](https://github.com/RedBrumbler) wrote
+- **[Aeroluna](https://github.com/Aeroluna)** wrote
+  [Vivify](https://github.com/Aeroluna/Vivify), the PC mod this port follows,
+  and [BSAudioLink](https://github.com/Aeroluna/BSAudioLink), whose AudioLink
+  shader bundle this port uses.
+- **[trail-b1az3r](https://github.com/trail-b1az3r)** (Rayla) made
+  [vivify-quest](https://github.com/trail-b1az3r/vivify-quest), which this
+  fork is based on. It merges the Quest ports below and adds the on-device
+  converter, the DirectX-to-GLSL translator, AudioLink and the diagnostics.
+- **Quest ports merged upstream:**
+  - axo-lotl ([Gay-Axolotl](https://github.com/Gay-Axolotl)):
+    [Vivifhy-Quest](https://github.com/Gay-Axolotl/Vivifhy-Quest), the base
+    and its per-`CameraEvent` render ordering.
+  - Braxed ([rbatteries1-design](https://github.com/rbatteries1-design)):
+    legacy Blit aliases, the `VRCenterAdjust` hooks, and the note-visual,
+    multiplayer and settings-menu fixes.
+  - [Lars27110](https://github.com/Lars27110): the same fixes.
+  - [webbs7524-wq](https://github.com/webbs7524-wq) and
+    [PATTT160](https://github.com/PATTT160): Blit extensions.
+  - [gamesbeash-art](https://github.com/gamesbeash-art): named
+    `SetRenderingSettings` values and the full `RenderTextureFormat` list.
+- **[llealloo](https://github.com/llealloo)** and contributors wrote
+  [AudioLink](https://github.com/llealloo/audiolink).
+  **[RedBrumbler](https://github.com/RedBrumbler)** wrote
   [BSAudioLink-Quest](https://github.com/RedBrumbler/BSAudioLink-Quest), the
-  earlier Quest port of AudioLink that this one follows where the Quest
-  differs.
+  earlier Quest port of AudioLink.
+- **Quest modding libraries:** beatsaber-hook, bs-cordl, custom-types,
+  CustomJSONData, Tracks, SongCore, BSML, scotland2, paperlog, Sombrero,
+  MetaCore, WebUtils and QPM, by the Quest modding community.
+  [bcdec](https://github.com/iOrange/bcdec) by Sergii Kudlai decodes PC
+  texture formats. Unity's [HLSLcc](https://github.com/Unity-Technologies/HLSLcc)
+  was the reference for the shader translation.
+- **[ModsBeforeFriday](https://github.com/Lauriethefish/ModsBeforeFriday)**
+  by Lauriethefish installs it, and the
+  [Beat Saber Modding Group](https://bsmg.wiki) documents Quest modding.
+- **Testing:** everyone who reported issues upstream, and YukonGMD on a
+  Quest 3S for the naomi builds.
 
-**Quest ports merged into this one**
-- **axo-lotl** ([Gay-Axolotl](https://github.com/Gay-Axolotl)):
-  [Vivifhy-Quest](https://github.com/Gay-Axolotl/Vivifhy-Quest), the base of
-  this port and its per-`CameraEvent` render ordering.
-- **Braxed** ([rbatteries1-design](https://github.com/rbatteries1-design)):
-  [Vivify-Quest-Port](https://github.com/rbatteries1-design/Vivify-Quest-Port),
-  which contributed:
-  - the legacy Blit aliases;
-  - the `VRCenterAdjust` hooks;
-  - the note-visual and multiplayer settings;
-  - settings-menu fixes.
-- [Lars27110](https://github.com/Lars27110):
-  [Vivify-Quest](https://github.com/Lars27110/Vivify-Quest), with the same
-  fixes.
-- [webbs7524-wq](https://github.com/webbs7524-wq):
-  [Vivify-Quest-2](https://github.com/webbs7524-wq/Vivify-Quest-2), and
-  [PATTT160](https://github.com/PATTT160):
-  [Vivify-Quest3.0fork](https://github.com/PATTT160/Vivify-Quest3.0fork).
-  Their Blit extensions are merged: material aliases, order spellings,
-  clearing, and persistent Blits.
-- [gamesbeash-art](https://github.com/gamesbeash-art):
-  [Vivify-Quest_enabled-Play](https://github.com/gamesbeash-art/Vivify-Quest_enabled-Play),
-  which contributed:
-  - named enum values in `SetRenderingSettings`;
-  - the full `RenderTextureFormat` list.
+## Licence
 
-**Tools and references**
-- Unity's [HLSLcc](https://github.com/Unity-Technologies/HLSLcc) was the
-  reference for what the DirectX → GLSL translation has to produce.
-- The Quest modding community's libraries: SongCore, CustomJSONData,
-  BSML, beatsaber-hook, bs-cordl and QPM.
-- [Beat Saber Modding Group](https://bsmg.wiki) documentation.
+MIT, see [LICENSE](LICENSE). The licences and copyright notices of the
+projects and libraries above are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-**Testers**
-- ME
-- people who made issues 
+Beat Saber is a game by Beat Games. Vivify is Aeroluna's. This port is a
+fan project with no connection to either.
