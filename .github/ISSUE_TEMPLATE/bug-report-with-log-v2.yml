@@ -108,9 +108,11 @@ body:
     attributes:
       label: Vivify debug/session log
       description: |
-        REQUIRED: Attach the Vivify debug/session log as a file, paste the log text, or provide a direct link to the log.
+        REQUIRED: Attach the Vivify session log as a file, paste the log text, or provide a direct link to the log.
 
-        Enable debug mode in the Vivify mod settings if available before reproducing the issue.
+        From naomi.10 on, each launch saves its own log in /sdcard/ModData/com.beatgames.beatsaber/Mods/Vivify/Sessions/ (Vivify_<date>_<time>_<build>-<commit>.txt). Attach the one from the launch where the problem happened, and Sessions/index.txt. After a crash, start the game once more and wait for the menu first: that adds the crash record to the crashed session's file. See log-help.md.
+
+        For stutters or visual glitches, turn on Detailed Logging (Advanced, Show Developer Options, then Debug) before reproducing the issue.
 
         Do not submit an Android logcat file here.
       placeholder: |
