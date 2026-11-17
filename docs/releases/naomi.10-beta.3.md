@@ -139,4 +139,4 @@ and attach the session file and `Sessions/index.txt` (see the README).
 - Tag `naomi.10-beta.3`, commit `9f5bd8e4`. The build stamp in the session
   log header is `9f5bd8e458`.
 - `Vivify.qmod` SHA-256:
-  `d2f8097ef5141ab00161ae4c11f676318cf10e1cd9172e67726158eebc9b3fbb`
+  `b7841b5dd197e3491676dc166162b72c875e5fecf46aaec38fa3d2a958adc0c6`
