@@ -1100,14 +1100,18 @@ def screen_fragment(kind):
     return m.container([rdef, isgn, osgn, m.shex_chunk([code], stage=0)])
 
 
-def screen_plan(vertex_kind, fragment_kind):
+def screen_plan(vertex_kind, fragment_kind, projection_only=False):
     vs_path = os.path.join(tmpdir, "screen-vs.dxbc")
     fs_path = os.path.join(tmpdir, "screen-fs.dxbc")
     with open(vs_path, "wb") as handle:
         handle.write(screen_vertex(vertex_kind))
     with open(fs_path, "wb") as handle:
         handle.write(screen_fragment(fragment_kind))
-    proc = subprocess.run([BINARY, "screenplan", vs_path, fs_path], capture_output=True, timeout=60)
+    env = dict(os.environ)
+    env.pop("VIVIFY_UPRIGHT_PROJECTION_ONLY", None)
+    if projection_only:
+        env["VIVIFY_UPRIGHT_PROJECTION_ONLY"] = "1"
+    proc = subprocess.run([BINARY, "screenplan", vs_path, fs_path], capture_output=True, timeout=60, env=env)
     text = proc.stdout.decode("utf-8", errors="replace")
     head = text.split("---\n", 1)[0]
     fields = dict(line.partition("=")[::2] for line in head.splitlines())
@@ -1150,6 +1154,32 @@ check("screen plan: a grab position flipped on purpose afterwards is fixed at th
 if GLSLANG is not None and not os.environ.get("VIVIFY_SKIP_GLSLANG"):
     for index, source in enumerate(sources):
         glslang_compile(source, "screen plan program %d" % index)
+
+# naomi.10-beta.5: the narrower fix a tester's friend proposed, as a Debug test
+# ("Upright Reads: Projection Sign Only"): only a _ProjectionParams.x sign may
+# be flipped -- the ComputeScreenPos step. It gives Clear Water's conversion the
+# same coordinate (the other factor of the same product), and cannot reach a
+# row that is wrong because of the constant Direct3D bakes into
+# ComputeGrabScreenPos (Mochie's particles, You/BlackHole in the library).
+proc, fields, sources = screen_plan("portable", "silent", projection_only=True)
+check("projection-sign-only plan: Clear Water's grab conversion is fixed at its _ProjectionParams.x read",
+      fields.get("checked") == "2" and fields.get("fixed") == "1" and fields.get("unfixable") == "0" and
+      fields.get("signature", "").startswith("f") and fields.get("signature", "").count(";") == 1 and
+      len(sources) == 2 and "(-_ProjectionParams.x)" in sources[1], str(fields) + (sources[1] if len(sources) == 2 else ""))
+_, full_fields, full_sources = screen_plan("portable", "silent")
+check("projection-sign-only plan: same instruction as the full plan, the other factor",
+      fields.get("signature", "").split(".")[0] == full_fields.get("signature", "").split(".")[0] and
+      fields.get("signature") != full_fields.get("signature"), str(fields) + " / " + str(full_fields))
+proc, fields, sources = screen_plan("grab", "plain", projection_only=True)
+check("projection-sign-only plan: a Direct3D grab position is left upside down",
+      fields.get("checked") == "2" and fields.get("fixed") == "0" and fields.get("unfixable") == "2" and
+      fields.get("signature") == "", str(fields))
+proc, fields, sources = screen_plan("portable", "plain", projection_only=True)
+check("projection-sign-only plan: ComputeScreenPos reads stay as they are",
+      fields.get("fixed") == "0" and fields.get("unfixable") == "0" and fields.get("signature") == "", str(fields))
+proc, fields, sources = screen_plan("portable", "mirror", projection_only=True)
+check("projection-sign-only plan: a read mirrored on PC stays mirrored",
+      fields.get("fixed") == "0" and fields.get("signature") == "", str(fields))
 
 glslang_enabled = False
 truncation_failures = 0

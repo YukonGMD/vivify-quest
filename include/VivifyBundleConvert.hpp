@@ -299,6 +299,10 @@ struct ShaderConversionOptions {
   // Screen reads that PC gets right only because it renders upside down are
   // made upright (Dxbc::PlanUprightScreenReads, naomi.10-beta.4).
   bool uprightScreenReads = true;
+  // With uprightScreenReads: only _ProjectionParams.x signs may be flipped
+  // (Dxbc::ScreenReadScope::ProjectionSignOnly; naomi.10-beta.5 Debug test of
+  // a narrower fix, off).
+  bool uprightProjectionSignOnly = false;
 };
 
 ShaderConversion ConvertShadersToGles(std::string const& sourcePath,

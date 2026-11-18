@@ -7,6 +7,12 @@
 #include "UnityEngine/Texture2D.hpp"
 #include "VivifyComponents.hpp"
 #include "UnityEngine/Rendering/CameraEvent.hpp"
+#include "UnityEngine/Rendering/GraphicsDeviceType.hpp"
+#include "UnityEngine/SystemInfo.hpp"
+#include "UnityEngine/Camera.hpp"
+#include "UnityEngine/Matrix4x4.hpp"
+#include "UnityEngine/Transform.hpp"
+#include "UnityEngine/RenderTexture.hpp"
 #include "UnityEngine/Rendering/TextureDimension.hpp"
 #include "UnityEngine/RenderTextureDescriptor.hpp"
 #include "UnityEngine/HideFlags.hpp"
@@ -332,6 +338,86 @@ void Runtime::EndViewProbeSong() {
   _viewProbeDue = 0.0f;
   _viewReadbackPending = false;
   _viewProbeQueued = false;
+  _cameraParamsLoggedAt.clear();
+  _cameraParamLines = 0;
+}
+
+// Detailed Logging (naomi.10-beta.5): the per-camera values a Blit or
+// full-screen effect on this camera reads -- _ProjectionParams,
+// _WorldSpaceCameraPos (each eye's under multiview), _ScreenParams,
+// _ZBufferParams and unity_OrthoParams. Unity sets these itself for every
+// camera it renders, and keeps them out of the global property sheet
+// (Shader.GetGlobalVector reads zeros for them), so they are worked out from
+// the camera the way Unity works them out; GL.GetGPUProjectionMatrix and
+// SystemInfo.graphicsUVStartsAtTop are stripped from this game, so the flip
+// comes from the graphics API: Unity flips the projection (x = -1) only where
+// texture rows start at the top (Direct3D, Metal, Vulkan) and only when
+// rendering into a texture, never on OpenGL ES. The first use of each camera in
+// a level, then at most every 30 s of song, eight lines a level: no cost
+// otherwise, and none with Detailed Logging off.
+void Runtime::LogCameraParams(UnityEngine::Camera* camera, std::string_view role) {
+  if (!GetDetailedLogging() || _pauseMenuActive || _currentBeatmapData == nullptr || _cameraParamLines >= 8) return;
+  if (!IsManagedAlive(camera)) return;
+  float const now = CurrentSongTime();
+  std::string const name = ToStdString(camera->get_name());
+  std::string const key = std::string(role) + ":" + name;
+  if (auto it = _cameraParamsLoggedAt.find(key); it != _cameraParamsLoggedAt.end() && now - it->second < 30.0f) return;
+  _cameraParamsLoggedAt[key] = now;
+  _cameraParamLines++;
+  try {
+    float const nearPlane = camera->get_nearClipPlane();
+    float const farPlane = camera->get_farClipPlane();
+    int const width = camera->get_pixelWidth();
+    int const height = camera->get_pixelHeight();
+    using UnityEngine::Rendering::GraphicsDeviceType;
+    auto const api = UnityEngine::SystemInfo::get_graphicsDeviceType();
+    int const apiValue = static_cast<int>(api.value__);
+    bool const openGl = apiValue == GraphicsDeviceType::OpenGLES3.value__ ||
+                        apiValue == GraphicsDeviceType::OpenGLES2.value__ ||
+                        apiValue == GraphicsDeviceType::OpenGLCore.value__;
+    auto target = camera->get_targetTexture();
+    bool const intoTexture = IsManagedAlive(target.unsafePtr()) || camera->get_stereoEnabled();
+    float const projectionX = (!openGl && intoTexture) ? -1.0f : 1.0f;
+    bool const reversedZ = UnityEngine::SystemInfo::get_usesReversedZBuffer();
+    float const ratio = nearPlane != 0.0f ? farPlane / nearPlane : 0.0f;
+    float const zx = reversedZ ? -1.0f + ratio : 1.0f - ratio;
+    float const zy = reversedZ ? 1.0f : ratio;
+    float const zz = farPlane != 0.0f ? zx / farPlane : 0.0f;
+    float const zw = farPlane != 0.0f ? zy / farPlane : 0.0f;
+    auto const position = camera->get_transform()->get_position();
+    std::string eyes;
+    if (camera->get_stereoEnabled()) {
+      for (auto eye : {UnityEngine::Camera_StereoscopicEye::Left, UnityEngine::Camera_StereoscopicEye::Right}) {
+        auto const toWorld = camera->GetStereoViewMatrix(eye).get_inverse();
+        eyes += fmt::format("{}({:.3f}, {:.3f}, {:.3f})", eyes.empty() ? "; per eye " : " / ", toWorld.m03, toWorld.m13,
+                            toWorld.m23);
+      }
+    }
+    bool const ortho = camera->get_orthographic();
+    float const orthoSize = camera->get_orthographicSize();
+    std::string targetText = "the eye buffers";
+    if (IsManagedAlive(target.unsafePtr())) {
+      targetText = fmt::format("render texture '{}' {}x{}", ToStdString(target->get_name()), target->get_width(),
+                               target->get_height());
+    } else if (!camera->get_stereoEnabled()) {
+      targetText = "the screen";
+    }
+    VivifyLogLine(
+        "CAMERA",
+        fmt::format("{} camera '{}' at song {:.2f} (worked out from the camera as Unity does; API {}): "
+                    "_ProjectionParams=({:+.0f}, {:.3f}, {:.1f}, {:.6f}); _WorldSpaceCameraPos=({:.3f}, {:.3f}, "
+                    "{:.3f}){}; _ScreenParams=({}, {}, {:.6f}, {:.6f}); _ZBufferParams=({:.4f}, {:.4f}, {:.6f}, "
+                    "{:.6f}){}; unity_OrthoParams=({:.3f}, {:.3f}, 0, {}); drawing into {}",
+                    role, name, now, apiValue, projectionX, nearPlane, farPlane,
+                    farPlane != 0.0f ? 1.0f / farPlane : 0.0f, position.x, position.y, position.z, eyes, width, height,
+                    width > 0 ? 1.0f + 1.0f / static_cast<float>(width) : 0.0f,
+                    height > 0 ? 1.0f + 1.0f / static_cast<float>(height) : 0.0f, zx, zy, zz, zw,
+                    reversedZ ? " (reversed depth)" : "", orthoSize * camera->get_aspect(), orthoSize, ortho ? 1 : 0,
+                    targetText),
+        false, false);
+  } catch (std::exception const& ex) {
+    PaperLogger.warn("Vivify camera values (detailed logging) could not be read for '{}': {}", name, ex.what());
+  }
 }
 
 // Everything that could be painting the view, in one line.

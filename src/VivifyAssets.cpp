@@ -204,6 +204,7 @@ struct ConversionSettings {
   bool instancing = GetSceneryGpuInstancing();
   bool screenArrays = GetScreenTexturesAsArrays();
   bool upright = GetUprightScreenReads();
+  bool uprightNarrow = GetUprightReadsProjectionSignOnly();
 
   // What the cache marker records about how a bundle's programs were built:
   // 0 = multiview in the plain variants, 1 = 2021 bundles split,
@@ -217,8 +218,10 @@ struct ConversionSettings {
     // that undoes naomi.10-beta.2's white-screen fix).
     // +128: screen reads left as translated, upside down where PC relied on
     // its flipped render targets (the setting that undoes beta.4's fix).
+    // +256: with them made upright, only _ProjectionParams.x signs flipped
+    // (naomi.10-beta.5 Debug test of a narrower fix).
     int const geometry = (drawGeometry ? 8 : 0) + (emulateGeometry ? 16 : 0) + (instancing ? 32 : 0) +
-                         (screenArrays ? 0 : 64) + (upright ? 0 : 128);
+                         (screenArrays ? 0 : 64) + (upright ? 0 : 128) + (upright && uprightNarrow ? 256 : 0);
     if (replay) return 4 + geometry;
     return (splitStereo ? 1 : 0) + geometry;
   }
@@ -477,6 +480,7 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   options.singleViewOnly = settings.replay;
   options.screenTexturesAsArrays = settings.screenArrays;
   options.uprightScreenReads = settings.upright;
+  options.uprightProjectionSignOnly = settings.upright && settings.uprightNarrow;
   auto const conversion = BundleConvert::ConvertShadersToGles(source, dest, options);
   // Which shaders were emulated, and how, for the rebuild at load. Rewritten
   // (or removed) with every conversion, before the bundle is marked current,

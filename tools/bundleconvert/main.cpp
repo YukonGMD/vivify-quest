@@ -134,6 +134,7 @@ int main(int argc, char** argv) {
     options.keepInstancingVariants = std::getenv("VIVIFY_KEEP_INSTANCING") != nullptr;
     options.screenTexturesAsArrays = std::getenv("VIVIFY_LEGACY_SCREEN_2D") == nullptr;
     options.uprightScreenReads = std::getenv("VIVIFY_NO_UPRIGHT_READS") == nullptr;
+    options.uprightProjectionSignOnly = std::getenv("VIVIFY_UPRIGHT_PROJECTION_ONLY") != nullptr;
     ShaderConversion c = ConvertShadersToGles(src, dst, options);
     std::printf("status=%s\nmessage=%s\nseen=%d translated=%d leftAlone=%d refused=%d "
                 "programs=%d outBytes=%llu\ntexSeen=%d texReadable=%d texStreamed=%d\n"

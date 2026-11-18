@@ -77,7 +77,7 @@ Paper hands them over, usually within a few milliseconds of the call.
 | `ASSETS` | One line per level load: assets and prefabs; every shader its materials use, how many materials and how many draw a stand-in; textures by Unity format number. |
 | `PERF` | The song summary (below). |
 | `GL` | GL errors since the last check (every 2 s in a song). |
-| `FRAME`, `COST`, `SLOW`, `WHITE` | Detailed mode only. |
+| `FRAME`, `COST`, `SLOW`, `WHITE`, `CAMERA` | Detailed mode only. |
 
 Repeated lines are rate-limited: the first 8 with the same text (digits
 ignored) in 10 s are written, then one line says how many more were left
@@ -173,6 +173,16 @@ During songs it adds:
   screen as 2D; screen textures; Vivify's cameras; the main camera's clear
   flags and background; fog; the last Vivify event and breadcrumb. Another
   line says when it ends, and the song summary counts the stretches.
+
+- `CAMERA` (naomi.10-beta.5): for a camera that a Blit, the game's
+  full-screen effect or a Vivify camera draws through, the per-camera values
+  its shaders read: `_ProjectionParams`, `_WorldSpaceCameraPos` (and each eye's
+  under multiview), `_ScreenParams`, `_ZBufferParams`, `unity_OrthoParams`, and
+  what it draws into. Unity sets these itself and keeps them out of the global
+  property sheet, so they are worked out from the camera the way Unity does
+  (the projection flip from the graphics API: never on OpenGL ES). The first
+  use of each camera in a level, then at most every 30 s of song, eight lines a
+  level.
 
 Vivify cannot see individual draw calls (Unity loads GL through its own
 table), so the slow-frame detail is per renderer and material.

@@ -119,7 +119,8 @@ int main(int argc, char** argv) {
     Check(settingsDoc.find("`" + std::string(removed) + "`") != std::string::npos,
           "SETTINGS.md explains removed " + std::string(removed));
   }
-  for (char const* key : {"slowFrameSampler", "performanceModeFixedScalePercent", "debugCostTest"}) {
+  for (char const* key : {"slowFrameSampler", "performanceModeFixedScalePercent", "debugCostTest",
+                          "uprightReadsProjectionSignOnly"}) {
     auto const* def = S::Find(key);
     Check(def != nullptr && def->section == S::Section::Debug, std::string("test-only in Debug: ") + key);
   }
@@ -155,7 +156,8 @@ int main(int argc, char** argv) {
       std::string const key(def.key);
       if (!Has(saved, def.key)) {
         Check(def.key == "showDeveloperOptions" || def.key == "detailedLogging" ||
-                  def.key == "screenTexturesAsArrays" || def.key == "uprightScreenReads",
+                  def.key == "screenTexturesAsArrays" || def.key == "uprightScreenReads" ||
+                  def.key == "uprightReadsProjectionSignOnly",
               "naomi9.json had every key but naomi.10's new ones: " + key);
         continue;
       }
@@ -172,6 +174,7 @@ int main(int argc, char** argv) {
     Check(!S::GetBool(doc, "detailedLogging"), "naomi9: detailed logging starts off");
     Check(S::GetBool(doc, "screenTexturesAsArrays"), "naomi9: the white-screen fix starts on");
     Check(S::GetBool(doc, "uprightScreenReads"), "naomi9: the upright screen reads start on");
+    Check(!S::GetBool(doc, "uprightReadsProjectionSignOnly"), "naomi9: the narrower upright test starts off");
     Check(!S::Load(doc), "loading again changes nothing");
     std::string const nonDefault = S::NonDefault(doc, S::Section::Advanced);
     Check(nonDefault == "drawGeometryShaderEffects=true mapRealtimeShadows=true",

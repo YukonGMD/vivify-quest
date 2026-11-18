@@ -794,6 +794,7 @@ else:
 import mkshader2021  # noqa: E402
 
 AND_OP, ITOF, DCL_INPUT_SGV, DCL_INPUT_PS_SGV = 1, 43, 96, 99
+ISHL_OP, DP3_OP = 41, 16
 SV_RT_ARRAY_INDEX, SV_INSTANCE_ID = 4, 8
 GLES3_TYPE = 4
 
@@ -1510,6 +1511,156 @@ def expect_runtime_instancing_size(proc, fields, refusals, dst):
 
 pc_shader_case("an instanced array is sized by UNITY_RUNTIME_INSTANCING_ARRAY_SIZE, not the placeholder 2",
                instanced_body, expect_runtime_instancing_size)
+
+# naomi.10-beta.5, a graphics check asked for after beta.4: do the per-draw,
+# per-camera and per-eye values sit where Unity 2022.3 on the Quest puts them,
+# for shaders built by Unity 2019 and 2021? The layout comes from the PC
+# bundle's own parameters (ReflectionFrom). UnityPerDraw and UnityPerCamera
+# become loose uniforms bound by name -- the same declarations Unity's own
+# GLES3 output uses (the Quest-built 2021 bundles in the tester's library) --
+# so their offsets, and the members 2021 added (unity_RenderingLayer), cannot
+# move anything. UnityStereoGlobals is a std140 block that multiview fills as a
+# whole; its rows must be the std140 layout of Unity's member list, which is
+# the same in 2019.4, 2021.3 and 2022.3 (UnityShaderVariables.cginc).
+STEREO_GLOBALS = [  # (name, kind, array length)
+    ("unity_StereoMatrixP", "float4x4", 2), ("unity_StereoMatrixV", "float4x4", 2),
+    ("unity_StereoMatrixInvV", "float4x4", 2), ("unity_StereoMatrixVP", "float4x4", 2),
+    ("unity_StereoCameraProjection", "float4x4", 2), ("unity_StereoCameraInvProjection", "float4x4", 2),
+    ("unity_StereoWorldToCamera", "float4x4", 2), ("unity_StereoCameraToWorld", "float4x4", 2),
+    ("unity_StereoWorldSpaceCameraPos", "float3", 2), ("unity_StereoScaleOffset", "float4", 2),
+]
+
+
+def std140_offsets(members):
+    """Byte offsets and block size under std140 for arrays of float4x4 /
+    float3 / float4 (every array element starts a new 16-byte row)."""
+    offsets, at = {}, 0
+    for name, kind, length in members:
+        rows = 4 if kind == "float4x4" else 1
+        at = (at + 15) // 16 * 16
+        offsets[name] = at
+        at += 16 * rows * max(length, 1)
+    return offsets, (at + 15) // 16 * 16
+
+
+def _layout_vs():
+    """A PC single-pass instanced vertex program reading all three: the eye's
+    view-projection and camera position from UnityStereoGlobals, the object's
+    matrices from UnityPerDraw, and the camera values from UnityPerCamera."""
+    T, I, O = dx.OPERAND_TEMP, dx.OPERAND_INPUT, dx.OPERAND_OUTPUT
+    X, Y, Z, W = 0, 1, 2, 3
+    inputs = [{"name": "POSITION", "index": 0, "register": 0},
+              {"name": "SV_InstanceID", "index": 0, "register": 1, "sv": SV_INSTANCE_ID,
+               "mask": 0x1, "rw_mask": 0x1, "component_type": 1}]
+    outputs = [{"name": "SV_POSITION", "index": 0, "register": 0, "sv": 1, "rw_mask": 0},
+               {"name": "TEXCOORD", "index": 0, "register": 1, "rw_mask": 0},
+               {"name": "TEXCOORD", "index": 1, "register": 2, "rw_mask": 0},
+               {"name": "TEXCOORD", "index": 2, "register": 3, "rw_mask": 0},
+               {"name": "SV_RenderTargetArrayIndex", "index": 0, "register": 4,
+                "sv": SV_RT_ARRAY_INDEX, "mask": 0x1, "rw_mask": 0xE, "component_type": 1}]
+    code = []
+    code += dx.insn(DCL_INPUT, dx.dest(I, 0))
+    code += dx.insn(DCL_INPUT_SGV, dx.dest(I, 1, 0x1), extra=[SV_INSTANCE_ID])
+    code += dx.insn(DCL_OUTPUT_SIV, dx.dest(O, 0), extra=[1])
+    for register in (1, 2, 3):
+        code += dx.insn(DCL_OUTPUT, dx.dest(O, register))
+    code += dx.insn(DCL_OUTPUT_SIV, dx.dest(O, 4, 0x1), extra=[SV_RT_ARRAY_INDEX])
+    code += dx.insn(DCL_TEMPS, extra=[3])
+    code += dx.insn(AND_OP, dx.dest(T, 0, 0x1), dx.src(I, 1, (X, X, X, X)), dx.imm_int(1, 1, 1, 1))
+    code += dx.insn(ISHL_OP, dx.dest(T, 0, 0x2), dx.src(T, 0, (X, X, X, X)), dx.imm_int(2, 2, 2, 2))
+    # world = unity_ObjectToWorld * position (UnityPerDraw, b1, rows 0-3)
+    code += dx.insn(MUL, dx.dest(T, 1), dx.src(I, 0, (Y, Y, Y, Y)), dx.src_cb(1, 1))
+    code += dx.insn(MAD, dx.dest(T, 1), dx.src_cb(1, 0), dx.src(I, 0, (X, X, X, X)), dx.src(T, 1))
+    code += dx.insn(MAD, dx.dest(T, 1), dx.src_cb(1, 2), dx.src(I, 0, (Z, Z, Z, Z)), dx.src(T, 1))
+    code += dx.insn(ADD, dx.dest(T, 1), dx.src(T, 1), dx.src_cb(1, 3))
+    # clip = unity_StereoMatrixVP[eye] * world (UnityStereoGlobals, b2, rows 24 + eye * 4)
+    code += dx.insn(MUL, dx.dest(T, 2), dx.src(T, 1, (Y, Y, Y, Y)), dx.src_cb_relative(2, 25, 0, 1))
+    code += dx.insn(MAD, dx.dest(T, 2), dx.src_cb_relative(2, 24, 0, 1), dx.src(T, 1, (X, X, X, X)), dx.src(T, 2))
+    code += dx.insn(MAD, dx.dest(T, 2), dx.src_cb_relative(2, 26, 0, 1), dx.src(T, 1, (Z, Z, Z, Z)), dx.src(T, 2))
+    code += dx.insn(MAD, dx.dest(O, 0), dx.src_cb_relative(2, 27, 0, 1), dx.src(T, 1, (W, W, W, W)), dx.src(T, 2))
+    # to the eye: unity_StereoWorldSpaceCameraPos[eye] - world (row 64 + eye)
+    code += dx.insn(ADD, dx.dest(O, 1, 0x7), dx.src(T, 1, (X, Y, Z, Z), modifier=dx.MOD_NEG),
+                    dx.src_cb_relative(2, 64, 0, 0, (X, Y, Z, Z)))
+    # a unity_WorldToObject row (UnityPerDraw row 4)
+    code += dx.insn(DP3_OP, dx.dest(O, 1, 0x8), dx.src(I, 0, (X, Y, Z, Z)), dx.src_cb(1, 4, (X, Y, Z, Z)))
+    # UnityPerCamera (b0): _ProjectionParams row 5, _ZBufferParams row 7,
+    # _ScreenParams row 6, _WorldSpaceCameraPos row 4
+    code += dx.insn(MUL, dx.dest(O, 2), dx.src_cb(0, 5), dx.src_cb(0, 7))
+    code += dx.insn(MUL, dx.dest(O, 3), dx.src_cb(0, 6), dx.src_cb(0, 4, (X, Y, Z, Z)))
+    code += dx.insn(MOV, dx.dest(O, 4, 0x1), dx.src(T, 0, (X, X, X, X)))
+    code += dx.insn(RET)
+    return dx.unity_program([dx.signature_chunk(inputs, b"ISGN"), dx.signature_chunk(outputs, b"OSGN"),
+                             dx.shex_chunk([code], stage=1)])
+
+
+def _layout_params(unity_version):
+    stereo_offsets, stereo_size = std140_offsets(STEREO_GLOBALS)
+    per_camera = ("UnityPerCamera", 144, [("_Time", 0, 4, 0), ("_SinTime", 16, 4, 0), ("_CosTime", 32, 4, 0),
+                                          ("unity_DeltaTime", 48, 4, 0), ("_WorldSpaceCameraPos", 64, 3, 0),
+                                          ("_ProjectionParams", 80, 4, 0), ("_ScreenParams", 96, 4, 0),
+                                          ("_ZBufferParams", 112, 4, 0), ("unity_OrthoParams", 128, 4, 0)], [])
+    draw_vectors = [("unity_LODFade", 128, 4, 0), ("unity_WorldTransformParams", 144, 4, 0)]
+    if unity_version >= 2021:
+        draw_vectors.append(("unity_RenderingLayer", 160, 4, 0))
+    per_draw = ("UnityPerDraw", 176 if unity_version >= 2021 else 160, draw_vectors,
+                [("unity_ObjectToWorld", 0, 4, 0), ("unity_WorldToObject", 64, 4, 0)])
+    stereo = ("UnityStereoGlobals", stereo_size,
+              [(n, stereo_offsets[n], 3 if k == "float3" else 4, a) for n, k, a in STEREO_GLOBALS if k != "float4x4"],
+              [(n, stereo_offsets[n], 4, a) for n, k, a in STEREO_GLOBALS if k == "float4x4"])
+    return mkshader2021.inline_parameter_blob(
+        constant_buffers=[per_camera, per_draw, stereo],
+        bindings=[("UnityPerCamera", 0), ("UnityPerDraw", 1), ("UnityStereoGlobals", 2)])
+
+
+layout_code = {}
+
+
+def expect_unity_layout(unity_version):
+    def check(proc, fields, refusals, dst):
+        if fields.get("linked") != "1" or fields.get("variantsRefused") != "0":
+            return f"linked={fields.get('linked')} variantsRefused={fields.get('variantsRefused')} {refusals}"
+        _, refs, entries = inspect_converted(dst)
+        code = entries[int(next(r for r in refs if r["stage"] == "0")["blob"])]["code"].replace("\\n", "\n")
+        offsets, size = std140_offsets(STEREO_GLOBALS)
+        wanted = [
+            "uniform vec4 hlslcc_mtx4x4unity_ObjectToWorld[4];", "uniform vec4 hlslcc_mtx4x4unity_WorldToObject[4];",
+            "uniform vec4 _ProjectionParams;", "uniform vec4 _ZBufferParams;", "uniform vec4 _ScreenParams;",
+            "uniform vec3 _WorldSpaceCameraPos;",
+            "layout(std140) uniform UnityStereoGlobals { vec4 vivify_cb_UnityStereoGlobals[%d]; };" % (size // 16)]
+        for text in wanted:
+            if text not in code:
+                return f"Unity {unity_version}: missing '{text}': {code}"
+        for block in ("uniform UnityPerDraw", "uniform UnityPerCamera"):
+            if block in code:
+                return f"Unity {unity_version}: {block} became a block, whose offsets would then matter"
+        rows = set(int(n) for n in re.findall(r"vivify_cb_UnityStereoGlobals\[\w+\.\w \+ (\d+)\]", code))
+        vp = offsets["unity_StereoMatrixVP"] // 16
+        eye = offsets["unity_StereoWorldSpaceCameraPos"] // 16
+        if rows != {vp, vp + 1, vp + 2, vp + 3, eye}:
+            return f"Unity {unity_version}: stereo rows read {sorted(rows)}, std140 puts the view-projection at " \
+                   f"{vp}-{vp + 3} and the eye position at {eye}"
+        layout_code[unity_version] = code
+        return None
+    return check
+
+
+for version in (2019, 2021):
+    layout_body, _ = pc_shader_2021(
+        "Layout/Unity%d" % version, [(_layout_vs(), [0])], [(_ps(spi=True), [0])],
+        vertex_params=[_layout_params(version)], fragment_params_blobs=[mkshader2021.inline_parameter_blob()])
+    pc_shader_case("Unity %d per-draw, per-camera and per-eye values land where Unity 2022.3 on GLES3 puts them"
+                   % version, layout_body, expect_unity_layout(version))
+cases += 1
+# 2021 added unity_RenderingLayer to UnityPerDraw: the only difference may be
+# that member's own name-bound declaration, which moves nothing else.
+layout_2021 = (layout_code.get(2021) or "").replace("uniform vec4 unity_RenderingLayer;\n", "", 1)
+if layout_code.get(2019) is not None and layout_code.get(2019) == layout_2021:
+    print("ok   a 2019 and a 2021 UnityPerDraw (unity_RenderingLayer added) give the same vertex program")
+else:
+    fails += 1
+    import difflib
+    print("FAIL a 2019 and a 2021 UnityPerDraw give different vertex programs:\n" + "\n".join(difflib.unified_diff(
+        (layout_code.get(2019) or "").splitlines(), (layout_code.get(2021) or "").splitlines(), lineterm="", n=0)))
 
 broken_body, _ = pc_shader_2021("Custom/Broken", [(_vs(spi=False), [])],
                                 [(dxbc_untranslatable(), [])], keyword_names=())

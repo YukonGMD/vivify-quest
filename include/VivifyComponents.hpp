@@ -42,6 +42,10 @@ private:
   Vivify::OffsetBladeMovementData* _offsetMovementData = nullptr;
   UnityEngine::Color _lastAppliedColor;
   bool _hasLastAppliedColor = false;
+
+  // Keeps the game's sample loop to the samples the trail can hold
+  // (naomi.10-beta.5; see VivifyComponents.cpp).
+  void LimitSampleGap();
 };
 
 DECLARE_CLASS_CODEGEN(Vivify, RuntimeBehaviour, UnityEngine::MonoBehaviour) {

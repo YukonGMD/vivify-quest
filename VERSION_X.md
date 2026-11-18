@@ -94,7 +94,7 @@ and beta.1 caught none.
 | Converter (`VivifyBundleConvert`, `VivifySerializedFile`) | Retargets PC bundles to Android, translates their shaders, makes meshes readable for emulation | 0 failures (353 maps scanned, 9 converted, naomi.9); offline every bundle converts. The 2019-or-2021 choice was directory order and gave Aether and Get Your Wish their 2019 builds; beta.2 prefers 2021 | 9 maps in 8 s on the headset | **Keep** |
 | Shader translator (`VivifyDxbc`) | DXBC to GLSL ES 3.x, multiview stereo, per-function modes for emulation | Two bugs found since beta.1: a depth-only output (fixed in beta.1) and 2019 builds' screen reads as 2D, which drew white Blits and broke depth effects (fixed in beta.2). Geometry programs that read the instance ID are refused | Programs are `highp` throughout; loops are `for` loops since naomi.7 | **Keep.** Fix: `mediump` only where the DXBC marks minimum precision (setting, off) |
 | Texture path (`VivifyTextureDecode`) | Decodes textures the GPU cannot sample | Quest 3S samples BC1-BC7 natively; 0 textures needed decoding in the maps played | None in Aether | **Keep** as is |
-| Geometry emulation and particle bakes | Runs known geometry programs in the vertex stage on rebuilt meshes; bakes still particle bursts | 297 Aether objects rebuilt, 7 shaders; 5 particle systems stay gray (moving, billboard, over the bake budget). Menu Mesh count grows 59-131 per Aether play since naomi.8 | Bake 3-9 ms once per burst | **Fix:** the per-play Mesh growth; draw moving mesh particles by instancing the rebuilt mesh instead of baking; billboard particles. Not a rewrite |
+| Geometry emulation and particle bakes | Runs known geometry programs in the vertex stage on rebuilt meshes; bakes still particle bursts | 297 Aether objects rebuilt, 7 shaders; 5 particle systems stay gray (moving, billboard, over the bake budget). Menu Mesh count grew 59-131 after naomi.9's first two Aether plays (stand-ins on), then 2-23; none with stand-ins off (beta.1, beta.4). beta.5: particle bakes run with stand-ins off too | Bake 3-9 ms once per burst | **Fix:** the per-play Mesh growth; draw moving mesh particles by instancing the rebuilt mesh instead of baking; billboard particles. Not a rewrite |
 | Crash guard | Two unfinished loads of a converted map, then untranslated stand-ins | No strikes in naomi.9 | None | **Keep frozen.** Recommend only |
 | Resolution scaling (Performance Mode) | Lowers the drawn part of the eye buffers while a song runs over budget; foveation and GPU boost | No blanking since naomi.8; halves Aether's slow sections | Big win, but it changes the look, so it stays off by default | **Keep.** Tune with per-section data; no new mechanism |
 | Note pooling, scenery instancing | Reuses note and debris copies; keeps converted scenery's GPU instancing (experimental, off) | Pooling on and stable; instancing untested since its 0.13 problems | Instancing would cut draws and the depth pass's draws; Aether's bound is pixels, so expect less there than the draw count suggests | **Keep.** Test instancing on Aether with the cost test before deciding |
@@ -182,6 +182,27 @@ worse than the previous beta by more than 5%; logging under 0.1 ms a frame;
 every change that alters the image behind a setting that is off.
 
 ## Milestones
+
+**Inserted after beta.4's test: beta.5** (`0.14.25-naomi.10-beta.5`). beta.4
+ran Aether without a freeze (sections at naomi.9's levels, GPU memory flat
+near 1 GB against beta.3's 3.6-4 GB). From its logs: a 16 s stall in the
+game's saber-trail sample loop at a level start (the loop is now bounded,
+and the bad time it was given is logged); particle emulation never ran with
+stand-ins off, which left Aether's Triangle Explosion bursts and the
+wireframe section's near rocks undrawn (fixed). The planned leak fix found no
+leak to fix: with stand-ins off Aether's menu Mesh count did not grow (+1,
+-1), and naomi.9's +131 and +59 (stand-ins on) fell to +2, +7 and +23 over its
+next plays; the leak check now names the meshes that grow. The planned
+warm-up for 'first-use compile stalls' at 1:00 and 1:20 was dropped: no
+session has ever caught the shader compiler (the slow-frame sampler names it
+when it does); those frames are GPU-bound -- 400 cube particles up to 11 m
+across, drawn with a heavy noise shader, at 0:58-1:03, and the '189' group at
+1:20 -- and only a look change would make them cheaper. Graphics checks asked
+for: per-draw and per-camera values are name-bound loose uniforms on GLES3 as
+in Unity's own Quest output, the per-eye block's std140 layout matches Unity
+2019, 2021 and 2022, there is no clip-space flip in the translator; host tests
+for these, and a Debug test of a narrower screen-read fix (off). No
+conversion version change; no look change with the defaults.
 
 **Inserted after beta.3's test: beta.4 fixes the Aether freeze and Lifelike's
 mirrored water** (`0.14.25-naomi.10-beta.4`): "GPU Instancing For Scenery"

@@ -102,14 +102,22 @@ double ParticleSignature(ArrayW<UnityEngine::ParticleSystem_Particle> const& par
 }  // namespace
 
 void Runtime::FindParticleBakes(UnityEngine::GameObject* instance, std::string const& prefabId) {
-  if (!GetEmulateParticleGeometry() || _standInOriginals.empty() || !IsAlive(instance)) return;
+  // naomi.10-beta.5: this used to start from the stand-in copies only, so with
+  // "Stand-Ins For Unsupported Shaders" off nothing was ever baked, and 743
+  // Aether's Triangle Explosion bursts and its wireframe 'rock particles'
+  // (song 2:30) drew nothing at all. Without a stand-in the particle renderer
+  // still has the emulated material itself, which is the original to bake with.
+  if (!GetEmulateParticleGeometry() || _emulationList.plans.empty() || !IsAlive(instance)) return;
   for (auto* renderer : instance->GetComponentsInChildren<UnityEngine::ParticleSystemRenderer*>(true)) {
     if (!IsAlive(renderer)) continue;
     UnityEngine::Material* material = renderer->get_sharedMaterial().unsafePtr();
     if (!IsAlive(material)) continue;
-    auto original = _standInOriginals.find(material->GetInstanceID());
-    if (original == _standInOriginals.end() || !original->second) continue;
-    UnityEngine::Shader* shader = original->second->get_shader().unsafePtr();
+    UnityEngine::Material* originalMaterial = material;  // no stand-in: the emulated material itself
+    if (auto copy = _standInOriginals.find(material->GetInstanceID()); copy != _standInOriginals.end()) {
+      if (!copy->second) continue;
+      originalMaterial = copy->second.ptr();
+    }
+    UnityEngine::Shader* shader = originalMaterial->get_shader().unsafePtr();
     if (!IsAlive(shader)) continue;
     auto plan = _emulationList.plans.find(ToStdString(shader->get_name()));
     if (plan == _emulationList.plans.end() || plan->second.mode != GeometryEmulation::Mode::Triangle) continue;
@@ -126,7 +134,7 @@ void Runtime::FindParticleBakes(UnityEngine::GameObject* instance, std::string c
     auto bake = std::make_unique<ParticleBake>();
     bake->system = system;
     bake->renderer = renderer;
-    bake->original = original->second.ptr();
+    bake->original = originalMaterial;
     bake->prefabId = prefabId;
     bake->name = ToStdString(system->get_gameObject()->get_name());
     _particleBakes.push_back(std::move(bake));

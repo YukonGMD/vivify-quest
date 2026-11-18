@@ -98,6 +98,7 @@ constexpr std::string_view kShowDeveloperOptionsConfigKey = "showDeveloperOption
 constexpr std::string_view kDetailedLoggingConfigKey = "detailedLogging";
 constexpr std::string_view kScreenArraysConfigKey = "screenTexturesAsArrays";
 constexpr std::string_view kUprightReadsConfigKey = "uprightScreenReads";
+constexpr std::string_view kUprightNarrowConfigKey = "uprightReadsProjectionSignOnly";
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
 bool gDisableAllBlits = false;
@@ -192,6 +193,8 @@ bool gScreenArrays = true;
 // Converted shaders' screen reads made upright where PC relies on its flipped
 // render targets (beta.4).
 bool gUprightReads = true;
+// ...flipping only _ProjectionParams.x signs (beta.5 Debug test, off).
+bool gUprightNarrow = false;
 
 // Where each setting in Vivify::Settings' table is held while the game runs.
 struct BoundSetting {
@@ -200,7 +203,7 @@ struct BoundSetting {
   int* intValue = nullptr;
   std::string* stringValue = nullptr;
 };
-std::array<BoundSetting, 39> const kBoundSettings = {{
+std::array<BoundSetting, 40> const kBoundSettings = {{
     {kVivifyDebugLoggingConfigKey, &gVivifyDebugLogging},
     {kDisableBeat0FilmgrainBlitConfigKey, &gDisableBeat0FilmgrainBlit},
     {kDisableAllBlitsConfigKey, &gDisableAllBlits},
@@ -240,6 +243,7 @@ std::array<BoundSetting, 39> const kBoundSettings = {{
     {kDetailedLoggingConfigKey, &gDetailedLogging},
     {kScreenArraysConfigKey, &gScreenArrays},
     {kUprightReadsConfigKey, &gUprightReads},
+    {kUprightNarrowConfigKey, &gUprightNarrow},
 }};
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
@@ -1284,6 +1288,7 @@ void RegisterModSettings() {
         debug(AddHeading(parent, "<size=80%>Switches for isolating a problem</size>"));
         debug(AddToggle(parent, kScreenArraysConfigKey, gScreenArrays));
         debug(AddToggle(parent, kUprightReadsConfigKey, gUprightReads));
+        debug(AddToggle(parent, kUprightNarrowConfigKey, gUprightNarrow));
         debug(AddToggle(parent, kTranslateShadersConfigKey, gTranslateShaders));
         debug(AddToggle(parent, kDisableBeat0FilmgrainBlitConfigKey, gDisableBeat0FilmgrainBlit));
         debug(AddToggle(parent, kDisableCreateCameraDepthConfigKey, gDisableCreateCameraDepth));
@@ -1432,6 +1437,10 @@ bool GetScreenTexturesAsArrays() {
 
 bool GetUprightScreenReads() {
   return gUprightReads;
+}
+
+bool GetUprightReadsProjectionSignOnly() {
+  return gUprightNarrow;
 }
 
 bool GetDetailedLogging() {

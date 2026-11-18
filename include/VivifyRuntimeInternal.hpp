@@ -494,9 +494,13 @@ private:
   std::vector<UnityEngine::Texture2D*> _decodedTextureObjects;
   // Leak check (naomi.5): run in the menu a few seconds after a level ends.
   void LogLeakCheck(char const* when);
+  void LogMenuMeshGrowth();
   void ReleaseDecodedTextures();
   float _leakCheckDueAt = -1.0f;
   std::array<int, 5> _lastMenuLeakCounts = {-1, -1, -1, -1, -1};
+  // Meshes by name at the previous level's menu leak check (naomi.10-beta.5).
+  std::map<std::string, int> _lastMenuMeshNames;
+  bool _haveMenuMeshNames = false;
 
   UnityEngine::GameObject* _lastMainCameraGO = nullptr;
   bool _mainCameraPropsDirty = false;
@@ -741,6 +745,13 @@ private:
   void PollViewProbe();
   void JudgeView(uint8_t const* pixels, size_t bytes, char const* how);
   void EndViewProbeSong();
+  // Detailed Logging (naomi.10-beta.5): the per-camera values a Blit or
+  // full-screen effect on this camera reads, a few times a level.
+ public:
+  void LogCameraParams(UnityEngine::Camera* camera, std::string_view role);
+ private:
+  std::map<std::string, float> _cameraParamsLoggedAt;
+  int _cameraParamLines = 0;
   std::string DescribeActiveEffects();
   void WarnIfBlitReadsScreenAs2D(UnityEngine::Material* material, std::string_view asset, std::string_view source,
                                  float startTime, float duration);

@@ -91,7 +91,10 @@ int main(int argc, char** argv) {
         fragmentData.empty() ? nullptr : fragmentData.data(), fragmentData.size());
     std::cout << "ok=" << (vertex.ok && fragment.ok ? 1 : 0) << "\n";
     if (!vertex.ok || !fragment.ok) return 0;
-    auto const plan = Vivify::Dxbc::PlanUprightScreenReads(vertex, fragment);
+    auto const plan = Vivify::Dxbc::PlanUprightScreenReads(
+        vertex, fragment,
+        std::getenv("VIVIFY_UPRIGHT_PROJECTION_ONLY") != nullptr ? Vivify::Dxbc::ScreenReadScope::ProjectionSignOnly
+                                                                 : Vivify::Dxbc::ScreenReadScope::Any);
     std::cout << "checked=" << plan.readsChecked << "\n";
     std::cout << "fixed=" << plan.readsFixed << "\n";
     std::cout << "unfixable=" << plan.readsUnfixable << "\n";

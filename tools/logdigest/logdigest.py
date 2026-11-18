@@ -123,6 +123,10 @@ def digest(text, name="session"):
     stalls = [e for e in entries if "frame stall" in e.text]
     for e in stalls[:5]:
         out.append("  %s" % e.text[:160])
+    # naomi.10-beta.5: a map's saber trail handed a time gap no frame explains.
+    trails = [e for e in entries if e.text.startswith("Vivify saber trail:")]
+    for e in trails[:3]:
+        out.append("  saber trail %s s=%s: %s" % (e.time, e.song, e.text[20:200]))
     if box:
         crumbs = [l for l in box if "[CRUMB]" in l]
         out.append("  black box: %d events kept; last breadcrumb: %s" % (len(box) - 2, crumbs[-1] if crumbs else "none"))
@@ -229,6 +233,9 @@ def digest(text, name="session"):
         m = re.search(r"since the previous level's menu check (.*?)( \||$)", growth[-1])
         if m:
             out.append("  last level-to-level growth in the menu: " + m.group(1))
+    names = [e.text for e in entries if e.text.startswith("Vivify leak check (menu): meshes there are more of")]
+    if names:
+        out.append("  meshes that grew, by name: " + names[-1].split(": ", 2)[-1][:200])
 
     gl = [e for e in entries if e.tag == "GL"]
     out.append("GL errors: %d line(s)%s" % (len(gl), (": " + gl[0].text) if gl else ""))

@@ -1074,10 +1074,12 @@ void Runtime::LogLeakCheck(char const* when) {
   std::string line = fmt::format(
       "leak check ({}): alive {} GameObject, {} Mesh, {} Material, {} Texture2D, {} RenderTexture; Vivify holds "
       "{} decoded texture(s), {} rebuilt mesh(es), {} stand-in copy(ies), {} declared texture(s), {} camera(s), "
-      "{} live prefab(s), {} preloaded prefab(s), {} synced object(s)",
+      "{} live prefab(s), {} preloaded prefab(s), {} synced object(s), {} particle bake(s) ({} baked)",
       when, counts[0], counts[1], counts[2], counts[3], counts[4], _decodedTextureObjects.size(),
       _emulationMeshes.size(), _emulationStandIns.size(), _declaredTextures.size(), _secondaryCameras.size(),
-      _livePrefabs.size(), _instantiatePrefabs.size(), _syncedObjects.size());
+      _livePrefabs.size(), _instantiatePrefabs.size(), _syncedObjects.size(), _particleBakes.size(),
+      std::count_if(_particleBakes.begin(), _particleBakes.end(),
+                    [](auto const& bake) { return bake && bake->mesh; }));
   // The menu checks are the comparable ones: the game scene is gone each time.
   bool const menu = std::string_view(when).rfind("menu", 0) == 0;
   if (menu && _lastMenuLeakCounts[0] >= 0) {
@@ -1089,6 +1091,47 @@ void Runtime::LogLeakCheck(char const* when) {
   }
   if (menu) _lastMenuLeakCounts = counts;
   VivifyBreadcrumb(line);
+  if (menu) LogMenuMeshGrowth();
+}
+
+// Which meshes the menu check found more of than the previous level's
+// (naomi.10-beta.5). naomi.9 counted +131 and +59 Meshes after its first two
+// Aether plays, and a count alone does not say whose they are; a few hundred
+// names, once per level in the menu.
+void Runtime::LogMenuMeshGrowth() {
+  std::map<std::string, int> names;
+  try {
+    auto meshes = UnityEngine::Resources::FindObjectsOfTypeAll(csTypeOf(UnityEngine::Mesh*));
+    for (auto entry : meshes) {
+      auto* object = entry.unsafePtr();
+      if (!IsManagedAlive(object)) continue;
+      std::string name = ToStdString(object->get_name());
+      if (name.empty()) name = "(no name)";
+      names[name]++;
+    }
+  } catch (...) {
+    return;
+  }
+  if (_haveMenuMeshNames) {
+    std::vector<std::pair<int, std::string>> grew;
+    for (auto const& [name, count] : names) {
+      auto it = _lastMenuMeshNames.find(name);
+      int const before = it == _lastMenuMeshNames.end() ? 0 : it->second;
+      if (count > before) grew.emplace_back(count - before, name);
+    }
+    if (!grew.empty()) {
+      std::sort(grew.begin(), grew.end(), [](auto const& a, auto const& b) { return a.first > b.first; });
+      std::string list;
+      for (size_t i = 0; i < grew.size() && i < 10; i++) {
+        list += fmt::format("{}'{}' +{}", i ? ", " : "", grew[i].second.substr(0, 60), grew[i].first);
+      }
+      if (grew.size() > 10) list += fmt::format(" and {} more name(s)", grew.size() - 10);
+      PaperLogger.info("Vivify leak check (menu): meshes there are more of than after the previous level, by name: {}",
+                       list);
+    }
+  }
+  _lastMenuMeshNames = std::move(names);
+  _haveMenuMeshNames = true;
 }
 
 }

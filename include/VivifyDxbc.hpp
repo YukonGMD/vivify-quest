@@ -449,7 +449,15 @@ struct ScreenReadPlan {
 };
 
 // Both programs as TranslateToGlsl would see them (WithExternalReflection).
-ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& fragment);
+// Where the plan may put its flips. Any: every literal and operand sign on a
+// read's path (beta.4, the default). ProjectionSignOnly (naomi.10-beta.5, a
+// Debug test of a narrower fix): only the sign of a _ProjectionParams.x
+// operand, in either stage -- the ComputeScreenPos step -- so a shader whose
+// wrong row comes from a constant Unity baked in for Direct3D (the -0.5 of
+// ComputeGrabScreenPos) is left as it was.
+enum class ScreenReadScope { Any, ProjectionSignOnly };
+ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& fragment,
+                                      ScreenReadScope scope = ScreenReadScope::Any);
 
 // Applies a plan's flips to copies of the two programs.
 void ApplyScreenReadPlan(ScreenReadPlan const& plan, Program& vertex, Program& fragment);

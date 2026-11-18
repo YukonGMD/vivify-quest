@@ -146,6 +146,9 @@ bool GetScreenTexturesAsArrays();
 // Converted shaders read the screen the right way up where PC relies on its
 // flipped render targets (naomi.10-beta.4, Debug setting, on).
 bool GetUprightScreenReads();
+// With it: only _ProjectionParams.x signs flipped (naomi.10-beta.5, Debug test
+// of a narrower fix, off).
+bool GetUprightReadsProjectionSignOnly();
 // Memory and heat for the per-section summary (naomi.10). Returns what was
 // last read and asks the log's writer thread to read again, so /proc and
 // /sys are never read on the calling thread. Negative (below -100 for

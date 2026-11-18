@@ -1794,7 +1794,10 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
     Vivify::Dxbc::Program vertexProgram;
     Vivify::Dxbc::Program fragmentProgram;
     if (!parsed(vertexRef, vertexProgram) || !parsed(fragmentRef, fragmentProgram)) return nullptr;
-    auto const plan = Vivify::Dxbc::PlanUprightScreenReads(vertexProgram, fragmentProgram);
+    auto const plan = Vivify::Dxbc::PlanUprightScreenReads(
+        vertexProgram, fragmentProgram,
+        conversionOptions.uprightProjectionSignOnly ? Vivify::Dxbc::ScreenReadScope::ProjectionSignOnly
+                                                    : Vivify::Dxbc::ScreenReadScope::Any);
     if (std::getenv("VIVIFY_DEBUG_UPRIGHT") != nullptr) {
       std::fprintf(stderr, "upright: %s vs=%u fs=%u: %s; flips %s\n", shader.name.c_str(), vertexRef.blobIndex,
                    fragmentRef.blobIndex, plan.note.c_str(), plan.Signature().c_str());

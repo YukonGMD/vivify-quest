@@ -4,6 +4,10 @@
 #include "UnityEngine/Renderer.hpp"
 #include "UnityEngine/Matrix4x4.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 DEFINE_TYPE(Vivify, OffsetBladeMovementData);
 DEFINE_TYPE(Vivify, FollowedSaberTrail);
 DEFINE_TYPE(Vivify, RuntimeBehaviour);
@@ -147,7 +151,53 @@ void FollowedSaberTrail::LateUpdate() {
     }
     return;
   }
+  LimitSampleGap();
   static_cast<GlobalNamespace::SaberTrail*>(this)->LateUpdate();
+}
+
+// The game's SaberTrail.LateUpdate (1.40.8, read from its code) adds one trail
+// sample for every 1/samplingFrequency s between the last sample it added
+// (_lastTrailElementTime) and the newest saber data, all within one frame:
+// count = FloorToInt((last.time - _lastTrailElementTime) * samplingFrequency).
+// naomi.10-beta.4's first launch spun in that loop for over 16 s at the start
+// of Lifelike (watchdog: FollowedSaberTrail::LateUpdate -> SaberTrail.LateUpdate
+// -> TrailElementCollection.SetHeadData / MoveTailToHead), which takes a gap
+// of millions of seconds; where such a time comes from is not known yet, so the
+// first few are logged with the values. The trail keeps only
+// CeilToInt(duration * frequency) + 3 samples and each new one replaces the
+// oldest, so starting the loop at most that many samples back draws the same
+// trail, just without the hundreds of millions of samples nobody sees.
+void FollowedSaberTrail::LimitSampleGap() {
+  // The game's loop runs from the fifth frame on (the first four only count,
+  // and the fourth calls Init), whether or not Init has run.
+  if (____framesPassed <= 4 || ____movementData == nullptr) return;
+  int const frequency = ____samplingFrequency;
+  if (frequency <= 0) return;
+  auto const last = ____movementData->get_lastAddedData();
+  float const behind = last.time - ____lastTrailElementTime;
+  int const capacity = static_cast<int>(std::ceil(std::max(____trailDuration, 0.0f) * static_cast<float>(frequency))) + 3;
+  float const allowed = static_cast<float>(capacity + 2) / static_cast<float>(frequency);
+  // Not finite: the game's count comes out as 0 or int.MinValue, no loop.
+  if (!std::isfinite(behind) || behind <= allowed) return;
+  float const was = ____lastTrailElementTime;
+  ____lastTrailElementTime = last.time - static_cast<float>(capacity) / static_cast<float>(frequency);
+  // A long hitch (a load) can pass the limit harmlessly; only a gap no frame
+  // could explain is worth a line.
+  static int logged = 0;
+  if (behind > 10.0f && logged < 5) {
+    logged++;
+    float followedLast = std::numeric_limits<float>::quiet_NaN();
+    float followedTime = std::numeric_limits<float>::quiet_NaN();
+    if (IsManagedAlive(_followed)) {
+      followedLast = _followed->____lastTrailElementTime;
+      if (_followed->____movementData != nullptr) followedTime = _followed->____movementData->get_lastAddedData().time;
+    }
+    PaperLogger.warn("Vivify saber trail: the game's trail would have added {:.0f} samples in one frame (newest saber "
+                     "data at {:.3f} s, last trail sample at {:.3f} s, {} per second, {} frames in); started it {} "
+                     "samples back instead. The trail it follows: last sample {:.3f} s, newest data {:.3f} s",
+                     static_cast<double>(behind) * frequency, last.time, was, frequency, ____framesPassed, capacity,
+                     followedLast, followedTime);
+  }
 }
 
 void FollowedSaberTrail::Cleanup() {
@@ -330,6 +380,7 @@ UnityEngine::RenderTexture* SecondaryCameraController::EnsureEyeTexture(
 
 void SecondaryCameraController::OnRenderImage(UnityEngine::RenderTexture* src, UnityEngine::RenderTexture* dest) {
   auto* camera = GetCamera();
+  if (GetDetailedLogging()) Runtime::Instance().LogCameraParams(camera, "secondary");  // a few times a level
   int const stereoActiveEye = IsManagedAlive(camera) ? camera->get_stereoActiveEye().value__ : 0;
 
   if (colorKey.has_value()) {
@@ -467,6 +518,12 @@ void CameraApplier::OnPostRender() {
 void CameraApplier::OnRenderImage(UnityEngine::RenderTexture* src, UnityEngine::RenderTexture* dest) {
   auto& runtime = Runtime::Instance();
   runtime.CacheMainRenderDescriptor(src);
+  // Detailed Logging only, a few times a level (naomi.10-beta.5).
+  if (GetDetailedLogging() && (hasMainEffect || !runtime.GetPreEffectsEmpty() || !runtime.GetPostEffectsEmpty())) {
+    auto go = get_gameObject();
+    auto* camera = IsManagedAlive(go.unsafePtr()) ? go->GetComponent<UnityEngine::Camera*>() : nullptr;
+    runtime.LogCameraParams(camera, runtime.GetPreEffectsEmpty() && runtime.GetPostEffectsEmpty() ? "effect" : "blit");
+  }
   if (hasMainEffect && IsManagedAlive(mainEffectController) &&
       mainEffectController->_mainEffectContainer.ptr() != nullptr &&
       IsManagedAlive(mainEffectController->_mainEffectContainer)) {

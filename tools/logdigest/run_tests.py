@@ -46,6 +46,8 @@ BODY = """01:48:00.000 s=- [CRUMB] +47000ms level start begin: 12 custom event(s
 01:50:00.000 s=- [PERF]   render thread in the GPU driver's shader compiler (libllvm-glnext.so) in 40% of samples: first-use shader compiles
 01:50:00.000 s=- [PERF] logging cost on the game's threads, per frame on average: session log 0.0021 ms, black box 0.0004 ms, detailed mode 0.0000 ms (off)
 01:50:03.000 s=- [CRUMB] +170000ms leak check (menu, 3 s after the level ended): alive 8427 GameObject; since the previous level's menu check +402 GameObject, +131 Mesh, +1 Material | gc 0/1/2=2/2/2 heap used=68.4MB of 85.4MB
+01:50:03.010 s=- [INFO] Vivify leak check (menu): meshes there are more of than after the previous level, by name: 'Explosion (Vivify particle emulation)' +3, 'Cube' +1
+01:48:00.400 s=0.12 [WARN] Vivify saber trail: the game's trail would have added 250000000 samples in one frame (newest saber data at 5000000.000 s, last trail sample at 0.000 s, 50 per second, 5 frames in); started it 23 samples back instead. The trail it follows: last sample 44.900 s, newest data 44.910 s
 """
 
 clean = HEADER + BODY + "=== session ended cleanly at 2026-10-25 01:55:00: 900 lines written, 3 left out by the rate limit ===\n"
@@ -56,6 +58,9 @@ check("what changed", "changed since the last session: build naomi.9 -> naomi.10
 check("ended cleanly", "ended: cleanly" in d, d)
 check("previous session's end is shown", "previous session Vivify_2026-10-25_01-30-00" in d, d)
 check("frame stall listed", "the game did not draw for 3.3s" in d, d)
+check("saber trail gap listed (beta.5)", "saber trail 01:48:00.400 s=0.12: the game's trail would have added 250000000" in d, d)
+check("growing meshes named (beta.5)",
+      "meshes that grew, by name: 'Explosion (Vivify particle emulation)' +3, 'Cube' +1" in d, d)
 check("maps played", "maps played: 4968d (743 Aether - Swifter)" in d, d)
 check("load timeline", "load timeline: bundle preload 161 ms" in d, d)
 check("slowest section first", d.index("24 ms median, 60 fps in 20%: 'prefab_intro_2'") <

@@ -31,8 +31,9 @@ naomi.10 ships as pre-releases first: 0.14.25-naomi.10-beta.1 (crash fixes,
 gray ledger and shader audit, settings menu, logging), 0.14.25-naomi.10-beta.2
 (the white-screen fix), 0.14.25-naomi.10-beta.3 (two fixes from beta.2's
 test), 0.14.25-naomi.10-beta.4 (the Aether freeze and Lifelike's mirrored
-water, from beta.3's test), then 0.14.25-naomi.10-release once its tests
-pass. The release
+water, from beta.3's test), 0.14.25-naomi.10-beta.5 (from beta.4's test: a
+saber-trail stall, Aether's particle effects with stand-ins off, and checks),
+then 0.14.25-naomi.10-release once its tests pass. The release
 says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
 
 ### Changed
@@ -257,8 +258,45 @@ says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
   seconds later, a breadcrumb with the live GameObjects, meshes, materials,
   textures and render textures, what Vivify still holds, and the change since
   the previous level.
+  naomi.10-beta.5: it also counts the particle bakes Vivify holds, and the
+  menu check names the meshes there are more of than after the previous
+  level (`Vivify leak check (menu): meshes there are more of ...`).
+- **Detailed Logging: the camera values a Blit reads** (naomi.10-beta.5).
+  For each camera a Blit, the full-screen effect or a Vivify camera draws
+  through, `[CAMERA]` lines give `_ProjectionParams`, `_WorldSpaceCameraPos`
+  (each eye's), `_ScreenParams`, `_ZBufferParams` and `unity_OrthoParams`, a
+  few times a level. Off with Detailed Logging off.
+- **"Upright Reads: Projection Sign Only"** (naomi.10-beta.5, Debug, off): a
+  test of a narrower fix than Upright Screen Reads, which may then flip only
+  `_ProjectionParams.x` signs (the ComputeScreenPos step). On the 28-map
+  library it gives Lifelike's water the same result and leaves the two
+  grab-pass shaders upside down (their wrong row is a Direct3D constant
+  baked into the PC program); no other shader changes either way. Host tests
+  for both, and for where Unity 2019 and 2021 bundles' per-draw, per-camera
+  and per-eye values land on the Quest.
 
 ### Fixed
+- **A 16-second stall at the start of a level with a map's saber trail**
+  (naomi.10-beta.5). beta.4's first launch stopped at Lifelike's start (song
+  0.12 s) with the main thread inside the game's own trail code, called for
+  the map's trail (Vivify's FollowedSaberTrail): the game's SaberTrail adds
+  one trail sample for every 1/frequency s between its last sample and the
+  saber's newest data, all in one frame, and it had been given a gap of
+  millions of seconds. The trail keeps only duration x frequency + 3 samples
+  and each new one replaces the oldest, so the loop now starts at most that
+  many samples back: the trail draws the same, and the loop is short. Where
+  the bad time comes from is not known yet; the first five gaps over 10 s are
+  logged with the values (`Vivify saber trail: the game's trail would have
+  added ...`).
+- **743 Aether's particle effects drew nothing with "Stand-Ins For
+  Unsupported Shaders" off** (naomi.10-beta.5). naomi.8's particle emulation,
+  which bakes still mesh particles so geometry-shader effects draw on them,
+  started from the stand-in copies, so with stand-ins off it never ran: the
+  Triangle Explosion bursts and the near half of the wireframe section at
+  2:30 (its 'rock particles' around the player; the far rocks and the tower
+  are mesh renderers and drew) were missing. It now starts from the emulated
+  material itself when there is no stand-in. Particles that keep moving
+  ('Extending Arrows') and billboards ('Ground Fog') are as before.
 - **743 Aether froze the headset with "GPU Instancing For Scenery" on**
   (naomi.10-beta.4). beta.3's test: frames of 0.6-1.2 s from 1:05 (and in
   the second play from 2:36 to the end), the GPU 100% busy, the game's

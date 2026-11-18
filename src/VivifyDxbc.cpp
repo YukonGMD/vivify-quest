@@ -5305,7 +5305,7 @@ std::string ScreenReadPlan::Signature() const {
   return text;
 }
 
-ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& fragment) {
+ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& fragment, ScreenReadScope scope) {
   ScreenReadPlan plan;
   if (!vertex.ok || !fragment.ok || vertex.stage != Stage::Vertex || fragment.stage != Stage::Pixel) return plan;
   // Subroutines are not followed; a program with them is left as it was.
@@ -5374,6 +5374,24 @@ ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& frag
     auto const& instruction = program.instructions[index];
     for (size_t k = 1; k < instruction.operands.size(); k++) {
       auto const& operand = instruction.operands[k];
+      if (scope == ScreenReadScope::ProjectionSignOnly) {
+        // Only a read of _ProjectionParams.x in every lane the instruction
+        // writes; nothing else on the path.
+        if (operand.type != kOperandConstantBuffer) continue;
+        if (operand.indices.size() >= 2 && operand.indices[1].hasRelative) continue;
+        bool projection = false;
+        bool other = false;
+        for (int lane = 0; lane < 4; lane++) {
+          if (!(instruction.operands[0].mask & (1u << lane))) continue;
+          uint32_t within = 0;
+          auto const* variable = ConstantVariable(program, operand, lane, within);
+          bool const isX = variable != nullptr && variable->name == "_ProjectionParams" && within == 0;
+          projection = projection || isX;
+          other = other || !isX;
+        }
+        if (projection && !other) candidates.push_back({stage, index, static_cast<int>(k), 0, false});
+        continue;
+      }
       if (operand.type == kOperandImmediate32) {
         std::set<int> used;
         for (int lane = 0; lane < 4; lane++) {
