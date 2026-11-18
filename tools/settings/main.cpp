@@ -6,6 +6,7 @@
 // headset; fixtures/old-0.14.17.json is an older one with keys since renamed
 // or removed, values out of range and a value of the wrong type.
 #include <cstdio>
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <set>
@@ -118,8 +119,7 @@ int main(int argc, char** argv) {
     Check(settingsDoc.find("`" + std::string(removed) + "`") != std::string::npos,
           "SETTINGS.md explains removed " + std::string(removed));
   }
-  for (char const* key : {"slowFrameSampler", "sceneryGpuInstancing", "performanceModeFixedScalePercent",
-                          "debugCostTest"}) {
+  for (char const* key : {"slowFrameSampler", "performanceModeFixedScalePercent", "debugCostTest"}) {
     auto const* def = S::Find(key);
     Check(def != nullptr && def->section == S::Section::Debug, std::string("test-only in Debug: ") + key);
   }
@@ -129,6 +129,11 @@ int main(int argc, char** argv) {
     Check(def != nullptr && def->group == "Performance Mode", std::string("Performance Mode family: ") + key);
   }
   for (auto const& [key, value] : kNaomi9Defaults) {
+    auto const removed = S::RemovedKeys();
+    if (std::find(removed.begin(), removed.end(), key) != removed.end()) {
+      Check(S::Find(key) == nullptr, "retired since naomi.9, not in the table: " + key);
+      continue;
+    }
     auto const* def = S::Find(key);
     Check(def != nullptr && def->defaultValue == value, "default unchanged since naomi.9: " + key);
   }
@@ -150,7 +155,7 @@ int main(int argc, char** argv) {
       std::string const key(def.key);
       if (!Has(saved, def.key)) {
         Check(def.key == "showDeveloperOptions" || def.key == "detailedLogging" ||
-                  def.key == "screenTexturesAsArrays",
+                  def.key == "screenTexturesAsArrays" || def.key == "uprightScreenReads",
               "naomi9.json had every key but naomi.10's new ones: " + key);
         continue;
       }
@@ -166,6 +171,7 @@ int main(int argc, char** argv) {
     Check(!S::GetBool(doc, "showDeveloperOptions"), "naomi9: developer options start hidden");
     Check(!S::GetBool(doc, "detailedLogging"), "naomi9: detailed logging starts off");
     Check(S::GetBool(doc, "screenTexturesAsArrays"), "naomi9: the white-screen fix starts on");
+    Check(S::GetBool(doc, "uprightScreenReads"), "naomi9: the upright screen reads start on");
     Check(!S::Load(doc), "loading again changes nothing");
     std::string const nonDefault = S::NonDefault(doc, S::Section::Advanced);
     Check(nonDefault == "drawGeometryShaderEffects=true mapRealtimeShadows=true",
@@ -207,6 +213,16 @@ int main(int argc, char** argv) {
     Check(S::GetString(doc, "standInShaderName").empty(), "reset: stand-in shader name cleared");
     Check(!Has(doc, "offscreenCulling") && !Has(doc, "prepareShaders"), "reset: stale keys gone");
     Check(doc.MemberCount() == S::All().size(), "reset: only current keys remain");
+  }
+
+  // --- beta.3's tester had GPU Instancing For Scenery on: it is dropped ----------
+  {
+    rapidjson::Document doc;
+    doc.Parse(R"({"sceneryGpuInstancing": true, "detailedLogging": true, "performanceModeHeavyMaps": true})");
+    Check(S::Load(doc), "a file with the retired instancing switch is rewritten");
+    Check(!Has(doc, "sceneryGpuInstancing"), "sceneryGpuInstancing=true is dropped (naomi.10-beta.4)");
+    Check(S::GetBool(doc, "detailedLogging") && S::GetBool(doc, "performanceModeHeavyMaps"),
+          "the settings beside it carry over");
   }
 
   // --- Damaged files ------------------------------------------------------------

@@ -9,6 +9,7 @@
 #include <set>
 #include <tuple>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -1493,6 +1494,9 @@ struct LinkedShader {
   int instancingVariantsLinked = 0;
   int variantsSkipped = 0;  // program refs a Quest never selects, left alone
   int programsTranslated = 0;
+  int screenReadsChecked = 0;   // uprightScreenReads, summed over linked variants
+  int screenReadsFixed = 0;
+  int screenReadsUnfixable = 0;
   std::set<std::string> variantReasons;  // why individual variants stayed on DirectX
 };
 
@@ -1763,6 +1767,57 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
     return cached->second.ok ? &cached->second : nullptr;
   };
 
+  // Upright screen reads (naomi.10-beta.4, Dxbc::PlanUprightScreenReads): for
+  // a vertex and fragment pair whose screen reads PC gets right only because
+  // it renders upside down, both programs translated with the plan's sign
+  // flips. nullptr when the pair needs none (or cannot be planned), and the
+  // plain translations are used.
+  std::set<std::tuple<uint32_t, uint32_t, bool>> uprightTried;
+  std::map<std::tuple<uint32_t, uint32_t, bool>, std::pair<Vivify::Dxbc::GlslResult, Vivify::Dxbc::GlslResult>>
+      uprightLinked;
+  auto parsed = [&](ParsedProgramRef const& ref, Vivify::Dxbc::Program& program) {
+    auto at = entryAt.find(ref.blobIndex);
+    if (at == entryAt.end()) return false;
+    auto const& entry = decoded.programs[at->second];
+    if (entry.raw || !IsTranslatableDirectXProgram(entry.programType)) return false;
+    program = Vivify::Dxbc::ParseProgram(entry.code.empty() ? nullptr : entry.code.data(), entry.code.size());
+    if (!program.ok) return false;
+    program = Vivify::Dxbc::WithExternalReflection(program, ReflectionFrom(ref.parameters));
+    return true;
+  };
+  auto uprightPair = [&](ParsedProgramRef const& vertexRef, ParsedProgramRef const& fragmentRef)
+      -> std::pair<Vivify::Dxbc::GlslResult, Vivify::Dxbc::GlslResult> const* {
+    bool const multiview = multiviewRef[indexOf(vertexRef)];
+    auto const key = std::make_tuple(vertexRef.blobIndex, fragmentRef.blobIndex, multiview);
+    if (auto done = uprightLinked.find(key); done != uprightLinked.end()) return &done->second;
+    if (!uprightTried.insert(key).second) return nullptr;
+    Vivify::Dxbc::Program vertexProgram;
+    Vivify::Dxbc::Program fragmentProgram;
+    if (!parsed(vertexRef, vertexProgram) || !parsed(fragmentRef, fragmentProgram)) return nullptr;
+    auto const plan = Vivify::Dxbc::PlanUprightScreenReads(vertexProgram, fragmentProgram);
+    if (std::getenv("VIVIFY_DEBUG_UPRIGHT") != nullptr) {
+      std::fprintf(stderr, "upright: %s vs=%u fs=%u: %s; flips %s\n", shader.name.c_str(), vertexRef.blobIndex,
+                   fragmentRef.blobIndex, plan.note.c_str(), plan.Signature().c_str());
+    }
+    out.screenReadsChecked += plan.readsChecked;
+    out.screenReadsUnfixable += plan.readsUnfixable;
+    if (plan.flips.empty()) return nullptr;
+    Vivify::Dxbc::ApplyScreenReadPlan(plan, vertexProgram, fragmentProgram);
+    Vivify::Dxbc::GlslOptions options;
+    options.multiview = multiview;
+    options.screenTexturesAsArrays = conversionOptions.screenTexturesAsArrays;
+    auto vertexResult = Vivify::Dxbc::TranslateToGlsl(vertexProgram, options);
+    options.multiview = multiviewRef[indexOf(fragmentRef)];
+    auto fragmentResult = Vivify::Dxbc::TranslateToGlsl(fragmentProgram, options);
+    if (!vertexResult.ok || !fragmentResult.ok) {
+      out.variantReasons.insert("upright screen reads: " + (vertexResult.ok ? fragmentResult.error : vertexResult.error));
+      return nullptr;
+    }
+    out.screenReadsFixed += plan.readsFixed;
+    out.programsTranslated += 2;
+    return &(uprightLinked[key] = std::make_pair(std::move(vertexResult), std::move(fragmentResult)));
+  };
+
   // Geometry-shader emulation (naomi.5): the same programs translated as
   // functions, and composed into one vertex program per variant.
   std::map<std::tuple<uint32_t, bool, int>, Vivify::Dxbc::GlslResult> functionTranslated;
@@ -1947,6 +2002,13 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
 
     auto link = [&](ParsedProgramRef const& vertex, ParsedProgramRef const* fragment,
                     ParsedProgramRef const* geometry, std::string& source, int& version) {
+      if (fragment != nullptr && geometry == nullptr && conversionOptions.uprightScreenReads) {
+        auto const* pair = uprightPair(vertex, *fragment);
+        if (pair != nullptr) {
+          source = LinkStages(pair->first, &pair->second, nullptr, version);
+          return true;
+        }
+      }
       auto const* vs = translate(vertex);
       auto const* fs = fragment != nullptr ? translate(*fragment) : nullptr;
       auto const* gs = geometry != nullptr ? translate(*geometry) : nullptr;
@@ -2233,6 +2295,10 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
         conversion.geometryStagesDropped += linked.geometryDropped;
         conversion.geometryStagesEmulated += linked.geometryEmulated;
         conversion.instancingVariantsLinked += linked.instancingVariantsLinked;
+        conversion.screenReadsChecked += linked.screenReadsChecked;
+        conversion.screenReadsFixed += linked.screenReadsFixed;
+        conversion.screenReadsUnfixable += linked.screenReadsUnfixable;
+        if (linked.screenReadsFixed > 0) conversion.shadersWithUprightReads.push_back(shader.name);
         if (options.keepInstancingVariants && linked.converted && !linked.hasInstancingVariant) {
           conversion.shadersWithoutInstancing.push_back(shader.name);
         }

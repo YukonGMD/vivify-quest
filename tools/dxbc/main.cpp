@@ -13,6 +13,10 @@
 //   dxbctool parse  <file>   container, signatures, reflection
 //   dxbctool disasm <file>   one line per decoded instruction
 //   dxbctool glsl   <file>   translated GLSL ES, or the reason there is none
+//   dxbctool screenplan <vertex> <fragment>
+//                            the upright-screen-read plan for a vertex and
+//                            fragment pair, then both stages translated
+//                            (multiview) with it applied
 #include "VivifyDxbc.hpp"
 
 #include <cstdio>
@@ -75,6 +79,34 @@ int main(int argc, char** argv) {
   }
   std::string const mode = argv[1];
   std::vector<uint8_t> const data = ReadFile(argv[2]);
+
+  if (mode == "screenplan") {
+    if (argc < 4) {
+      std::cerr << "usage: dxbctool screenplan <vertex> <fragment>\n";
+      return 2;
+    }
+    std::vector<uint8_t> const fragmentData = ReadFile(argv[3]);
+    Vivify::Dxbc::Program vertex = Vivify::Dxbc::ParseProgram(data.empty() ? nullptr : data.data(), data.size());
+    Vivify::Dxbc::Program fragment = Vivify::Dxbc::ParseProgram(
+        fragmentData.empty() ? nullptr : fragmentData.data(), fragmentData.size());
+    std::cout << "ok=" << (vertex.ok && fragment.ok ? 1 : 0) << "\n";
+    if (!vertex.ok || !fragment.ok) return 0;
+    auto const plan = Vivify::Dxbc::PlanUprightScreenReads(vertex, fragment);
+    std::cout << "checked=" << plan.readsChecked << "\n";
+    std::cout << "fixed=" << plan.readsFixed << "\n";
+    std::cout << "unfixable=" << plan.readsUnfixable << "\n";
+    std::cout << "signature=" << plan.Signature() << "\n";
+    Vivify::Dxbc::ApplyScreenReadPlan(plan, vertex, fragment);
+    Vivify::Dxbc::GlslOptions options;
+    options.multiview = true;
+    for (auto const* program : {&vertex, &fragment}) {
+      auto const result = Vivify::Dxbc::TranslateToGlsl(*program, options);
+      std::cout << "glslOk=" << (result.ok ? 1 : 0) << "\n";
+      if (!result.error.empty()) std::cout << "error=" << result.error << "\n";
+      std::cout << "---\n" << result.source << "===\n";
+    }
+    return 0;
+  }
 
   Vivify::Dxbc::Program const program =
       Vivify::Dxbc::ParseProgram(data.empty() ? nullptr : data.data(), data.size());

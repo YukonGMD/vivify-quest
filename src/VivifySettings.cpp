@@ -96,10 +96,10 @@ constexpr std::array kDefs = {
         "Debug: Fixed Resolution % (0 = off)", "Holds the resolution at this scale for a whole song, for A/B tests."},
     Def{"debugCostTest", Int, 0, 0, kCostTestCount - 1, 1, Debug, kDiagnostics, "Debug: Switch Off For A Cost Test",
         "Switches one kind of drawing off for the song, so the log shows its cost. The map looks wrong."},
-    Def{"sceneryGpuInstancing", Bool, 0, 0, 1, 1, Debug, kDiagnostics, "GPU Instancing For Scenery (experimental)",
-        "Keeps converted scenery's GPU instancing, as on PC. Reconverts maps."},
     Def{"screenTexturesAsArrays", Bool, 1, 0, 1, 1, Debug, kIsolation, "Two-Eye Screen Textures",
         "Converted shaders read the screen as the Quest's two-eye array. Off: the old way (white Blits). Reconverts."},
+    Def{"uprightScreenReads", Bool, 1, 0, 1, 1, Debug, kIsolation, "Upright Screen Reads",
+        "Converted shaders read the screen the right way up, as on PC. Off: the old reads. Reconverts."},
     Def{"translateShadersOnConversion", Bool, 1, 0, 1, 1, Debug, kIsolation, "Translate Shaders On Conversion",
         "Off: converted maps keep no shaders of their own and draw as stand-ins. Reconvert after."},
     Def{"disableBeat0FilmgrainBlit", Bool, 0, 0, 1, 1, Debug, kIsolation, "Disable Beat 0 Filmgrain Blit",
@@ -117,8 +117,13 @@ constexpr std::array kDefs = {
 // multipassRendering: GetMultipassRenderingEnabled has been hard-wired off
 // since it corrupted a global shader property; the saved value was never
 // read. pcShadersForEmptyQuestShaders: no longer optional since 0.14.10, and
-// nothing read it.
-constexpr std::array<std::string_view, 2> kRemovedKeys = {"multipassRendering", "pcShadersForEmptyQuestShaders"};
+// nothing read it. sceneryGpuInstancing (naomi.10-beta.4): with it on, 743
+// Aether's instanced scenery took 0.5-1.2 s of GPU time a frame and 1-2 GB of
+// memory until the headset froze (beta.1 and beta.3 tests); the translated
+// instanced variants are not trustworthy, so converted materials are never
+// instanced and the saved value is dropped.
+constexpr std::array<std::string_view, 3> kRemovedKeys = {"multipassRendering", "pcShadersForEmptyQuestShaders",
+                                                          "sceneryGpuInstancing"};
 
 rapidjson::Value Key(std::string_view key, rapidjson::Document::AllocatorType& allocator) {
   return rapidjson::Value(key.data(), static_cast<rapidjson::SizeType>(key.size()), allocator);

@@ -30,7 +30,9 @@ codename (CODENAMES.md), shown in the settings menu and the session log:
 naomi.10 ships as pre-releases first: 0.14.25-naomi.10-beta.1 (crash fixes,
 gray ledger and shader audit, settings menu, logging), 0.14.25-naomi.10-beta.2
 (the white-screen fix), 0.14.25-naomi.10-beta.3 (two fixes from beta.2's
-test), then 0.14.25-naomi.10-release once its tests pass. The release
+test), 0.14.25-naomi.10-beta.4 (the Aether freeze and Lifelike's mirrored
+water, from beta.3's test), then 0.14.25-naomi.10-release once its tests
+pass. The release
 says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
 
 ### Changed
@@ -257,6 +259,33 @@ says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
   the previous level.
 
 ### Fixed
+- **743 Aether froze the headset with "GPU Instancing For Scenery" on**
+  (naomi.10-beta.4). beta.3's test: frames of 0.6-1.2 s from 1:05 (and in
+  the second play from 2:36 to the end), the GPU 100% busy, the game's
+  memory up by 1-2 GB until 333 MB were left free, and a forced shutdown.
+  It happened only in the sections with many copies of the same scenery
+  (the intro's 168 terrain pieces, the ambient section's glass terrain, the
+  bridge's gems), which that switch draws through translated GPU-instanced
+  variants; beta.1's play with the switch on stalled at the same song times,
+  and every play with it off ran normally. The switch (a Debug setting, off
+  by default) is removed and its saved value dropped: converted materials
+  are never instanced. Conversion version 25.
+- **Lifelike's water mirrored the top half of the view into the bottom
+  half** (naomi.10-beta.4). PC renders its eye textures upside down
+  (Direct3D render targets, with the projection flipped and
+  `_ProjectionParams.x` = -1), and a PC shader that reads the screen at a
+  coordinate made from the clip position can be right only because of that:
+  Unity's ComputeGrabScreenPos bakes in Direct3D's "textures start at the
+  top", and Silent's Clear Water converts its screen position to that form
+  itself. On the Quest those reads came out upside down, mirrored about the
+  middle of the view. The converter now evaluates each vertex and fragment
+  pair as the Quest and as PC run it, and where a screen read differs, flips
+  the one sign on its path that makes it match PC (Dxbc::PlanUprightScreenReads).
+  In the 28-map test library this changes Silent/Clear Water (Lifelike),
+  Mochie/Particles (Through The Screen) and You/BlackHole (Before The Infinite
+  Eclipse), and nothing else. Debug switch "Upright Screen Reads", on; host
+  tests for both forms, a read that is right already, and one mirrored on
+  purpose. Conversion version 25.
 - **Detailed Logging crashed the game when a map's first Blit started**
   (naomi.10-beta.3). beta.2's mostly-white view detector asks Unity to read
   a 16x16 copy of the frame back. Unity's engine call for that takes four

@@ -199,6 +199,13 @@ struct ShaderConversion {
   // none (their objects are drawn one at a time even with instancing on).
   int instancingVariantsLinked = 0;
   std::vector<std::string> shadersWithoutInstancing;
+  // uprightScreenReads (naomi.10-beta.4): fragment texture reads at screen
+  // coordinates checked, made upright, and left upside down for want of a
+  // safe fix; and the shaders that had any made upright.
+  int screenReadsChecked = 0;
+  int screenReadsFixed = 0;
+  int screenReadsUnfixable = 0;
+  std::vector<std::string> shadersWithUprightReads;
   int variantsSkipped = 0;  // program refs of variants a Quest never selects, left untranslated
   // Block-compressed textures seen, and how many had their m_IsReadable flag
   // set so the mod can decode them on device. A texture that is already
@@ -289,6 +296,9 @@ struct ShaderConversionOptions {
   // Multiview programs read screen-space textures as two-layer arrays
   // (Dxbc::GlslOptions::screenTexturesAsArrays, naomi.10-beta.2).
   bool screenTexturesAsArrays = true;
+  // Screen reads that PC gets right only because it renders upside down are
+  // made upright (Dxbc::PlanUprightScreenReads, naomi.10-beta.4).
+  bool uprightScreenReads = true;
 };
 
 ShaderConversion ConvertShadersToGles(std::string const& sourcePath,

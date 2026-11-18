@@ -1006,6 +1006,151 @@ proc, fields, _, source = run("glsl", blit)
 check("single-view keeps plain 2D screen textures", fields.get("ok") == "1" and "sampler2DArray" not in source and
       "gl_ViewID_OVR" not in source, source + fields.get("error", ""))
 
+# ---------------------------------------------------------------------------
+# Upright screen reads (naomi.10-beta.4)
+# ---------------------------------------------------------------------------
+# PC renders eye textures with the projection flipped and _ProjectionParams.x
+# = -1; a coordinate built from the clip y through an even number of
+# _ProjectionParams.x factors reads the screen upside down on the Quest.
+
+PROJ = 4  # _ProjectionParams is cb0[4] in the vertex program, cb0[0] in the fragment one
+
+
+def screen_vertex(kind):
+    """Writes the clip position and, in TEXCOORD1, a screen position:
+    'grab' as Direct3D compiles ComputeGrabScreenPos (y * -0.5 + w * 0.5),
+    'portable' as ComputeScreenPos (y * _ProjectionParams.x * 0.5 + w * 0.5)."""
+    isgn = m.signature_chunk([{"name": "POSITION", "index": 0, "register": 0}], b"ISGN")
+    osgn = m.signature_chunk([
+        {"name": "SV_POSITION", "index": 0, "register": 0, "sv": 1, "rw_mask": 0},
+        {"name": "TEXCOORD", "index": 1, "register": 1, "rw_mask": 0},
+        {"name": "TEXCOORD", "index": 2, "register": 2, "mask": 0x3, "rw_mask": 0xC},
+    ], b"OSGN")
+    rdef = globals_cbuffer([variable("unity_MatrixVP", 0, 64, MATRIX4),
+                            variable("_ProjectionParams", 64, 16, VECTOR4)], 80)
+    code = m.insn(DCL_CONSTANT_BUFFER, m.src_cb(0, 5))
+    code += m.insn(DCL_INPUT, m.dest(INPUT, 0))
+    code += m.insn(DCL_OUTPUT_SIV, m.dest(OUTPUT, 0), extra=[1])
+    code += m.insn(DCL_OUTPUT, m.dest(OUTPUT, 1))
+    code += m.insn(DCL_OUTPUT, m.dest(OUTPUT, 2, 0x3))
+    code += m.insn(DCL_TEMPS, extra=[2])
+    code += m.insn(MUL, m.dest(TEMP, 0), m.src(INPUT, 0, (X, X, X, X)), m.src_cb(0, 0))
+    code += m.insn(MAD, m.dest(TEMP, 0), m.src(INPUT, 0, (Y, Y, Y, Y)), m.src_cb(0, 1), m.src(TEMP, 0))
+    code += m.insn(MAD, m.dest(TEMP, 0), m.src(INPUT, 0, (Z, Z, Z, Z)), m.src_cb(0, 2), m.src(TEMP, 0))
+    code += m.insn(ADD, m.dest(TEMP, 0), m.src(TEMP, 0), m.src_cb(0, 3))
+    code += m.insn(MOV, m.dest(OUTPUT, 0), m.src(TEMP, 0))
+    if kind == "grab":
+        code += m.insn(MUL, m.dest(TEMP, 1, 0x7), m.src(TEMP, 0, (X, W, Y, Y)), m.imm_float(0.5, 0.5, -0.5, 0.0))
+        code += m.insn(ADD, m.dest(OUTPUT, 1, 0x3), m.src(TEMP, 1, (X, Z, X, X)), m.src(TEMP, 1, (Y, Y, Y, Y)))
+    else:
+        code += m.insn(MUL, m.dest(TEMP, 1, 0x2), m.src(TEMP, 0, (Y, Y, Y, Y)), m.src_cb(0, PROJ, (X, X, X, X)))
+        code += m.insn(MUL, m.dest(TEMP, 1, 0x5), m.src(TEMP, 0, (X, X, W, X)), m.imm_float(0.5, 0.5, 0.5, 0.5))
+        code += m.insn(MUL, m.dest(TEMP, 1, 0x8), m.src(TEMP, 0, (W, W, W, W)), m.imm_float(0.5, 0.5, 0.5, 0.5))
+        code += m.insn(MAD, m.dest(OUTPUT, 1, 0x2), m.src(TEMP, 1, (Y, Y, Y, Y)), m.imm_float(0.5, 0.5, 0.5, 0.5),
+                       m.src(TEMP, 1, (W, W, W, W)))
+        code += m.insn(ADD, m.dest(OUTPUT, 1, 0x1), m.src(TEMP, 1, (X, X, X, X)), m.src(TEMP, 1, (Z, Z, Z, Z)))
+    code += m.insn(MOV, m.dest(OUTPUT, 1, 0xC), m.src(TEMP, 0, (X, X, Z, W)))
+    # A mesh coordinate beside it, which must not move.
+    code += m.insn(MOV, m.dest(OUTPUT, 2, 0x3), m.src(INPUT, 0, (X, Y, X, X)))
+    code += m.insn(RET)
+    return m.container([rdef, isgn, osgn, m.shex_chunk([code], stage=1)])
+
+
+def screen_fragment(kind):
+    """Reads _GrabTexture (t0) and _CameraDepthTexture (t1) at TEXCOORD1:
+    'plain' at xy / w; 'silent' converts it to Direct3D grab space with
+    y' = 0.5w - (y - 0.5w) * _ProjectionParams.x for the grab read only, as
+    Silent's Clear Water does; 'mirror' reads at 1 - v on purpose."""
+    textures = [("_GrabTexture", 4), ("_CameraDepthTexture", 4), ("_MainTex", 4)]
+    isgn = m.signature_chunk([
+        {"name": "TEXCOORD", "index": 1, "register": 0, "rw_mask": 0xB},
+        {"name": "TEXCOORD", "index": 2, "register": 1, "mask": 0x3, "rw_mask": 0x3},
+    ], b"ISGN")
+    osgn = m.signature_chunk([{"name": "SV_Target", "index": 0, "register": 0, "rw_mask": 0}], b"OSGN")
+    rdef = rdef_with_texture([variable("_ProjectionParams", 0, 16, VECTOR4)], 16, textures)
+    code = m.insn(DCL_CONSTANT_BUFFER, m.src_cb(0, 1))
+    for index in range(3):
+        code += m.insn(DCL_SAMPLER, m.dest(SAMPLER_T, index))
+        code += m.insn(DCL_RESOURCE, m.dest(RESOURCE, index), extra=[0x5555])
+    code += m.insn(DCL_INPUT_PS, m.dest(INPUT, 0), controls=(2 << 0))
+    code += m.insn(DCL_INPUT_PS, m.dest(INPUT, 1, 0x3), controls=(2 << 0))
+    code += m.insn(DCL_OUTPUT, m.dest(OUTPUT, 0))
+    code += m.insn(DCL_TEMPS, extra=[4])
+    if kind == "silent":
+        code += m.insn(MUL, m.dest(TEMP, 0, 0x1), m.src(INPUT, 0, (W, W, W, W)), m.imm_float(0.5, 0.5, 0.5, 0.5))
+        code += m.insn(MAD, m.dest(TEMP, 0, 0x2), m.src(INPUT, 0, (W, W, W, W), modifier=m.MOD_NEG),
+                       m.imm_float(0.5, 0.5, 0.5, 0.5), m.src(INPUT, 0, (Y, Y, Y, Y)))
+        code += m.insn(MAD, m.dest(TEMP, 0, 0x4), m.src(TEMP, 0, (Y, Y, Y, Y), modifier=m.MOD_NEG),
+                       m.src_cb(0, 0, (X, X, X, X)), m.src(TEMP, 0, (X, X, X, X)))
+        code += m.insn(DIV, m.dest(TEMP, 1, 0x1), m.src(INPUT, 0, (X, X, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+        code += m.insn(DIV, m.dest(TEMP, 1, 0x2), m.src(TEMP, 0, (Z, Z, Z, Z)), m.src(INPUT, 0, (W, W, W, W)))
+    elif kind == "mirror":
+        code += m.insn(DIV, m.dest(TEMP, 1, 0x3), m.src(INPUT, 0, (X, Y, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+        code += m.insn(ADD, m.dest(TEMP, 1, 0x2), m.src(TEMP, 1, (Y, Y, Y, Y), modifier=m.MOD_NEG),
+                       m.imm_float(1.0, 1.0, 1.0, 1.0))
+    else:
+        code += m.insn(DIV, m.dest(TEMP, 1, 0x3), m.src(INPUT, 0, (X, Y, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+    code += m.insn(SAMPLE, m.dest(TEMP, 2), m.src(TEMP, 1, (X, Y, X, X)), m.src(RESOURCE, 0), m.src(SAMPLER_T, 0))
+    code += m.insn(DIV, m.dest(TEMP, 3, 0x3), m.src(INPUT, 0, (X, Y, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+    code += m.insn(SAMPLE, m.dest(TEMP, 3), m.src(TEMP, 3, (X, Y, X, X)), m.src(RESOURCE, 1), m.src(SAMPLER_T, 1))
+    code += m.insn(ADD, m.dest(TEMP, 2), m.src(TEMP, 2), m.src(TEMP, 3))
+    code += m.insn(SAMPLE, m.dest(TEMP, 3), m.src(INPUT, 1, (X, Y, X, X)), m.src(RESOURCE, 2), m.src(SAMPLER_T, 2))
+    code += m.insn(ADD, m.dest(OUTPUT, 0), m.src(TEMP, 2), m.src(TEMP, 3))
+    code += m.insn(RET)
+    return m.container([rdef, isgn, osgn, m.shex_chunk([code], stage=0)])
+
+
+def screen_plan(vertex_kind, fragment_kind):
+    vs_path = os.path.join(tmpdir, "screen-vs.dxbc")
+    fs_path = os.path.join(tmpdir, "screen-fs.dxbc")
+    with open(vs_path, "wb") as handle:
+        handle.write(screen_vertex(vertex_kind))
+    with open(fs_path, "wb") as handle:
+        handle.write(screen_fragment(fragment_kind))
+    proc = subprocess.run([BINARY, "screenplan", vs_path, fs_path], capture_output=True, timeout=60)
+    text = proc.stdout.decode("utf-8", errors="replace")
+    head = text.split("---\n", 1)[0]
+    fields = dict(line.partition("=")[::2] for line in head.splitlines())
+    parts = text.split("---\n")[1:]
+    sources = [part.split("===\n", 1)[0] for part in parts]
+    return proc, fields, sources
+
+
+proc, fields, sources = screen_plan("grab", "plain")
+check("screen plan: Direct3D grab position is planned", proc.returncode == 0 and fields.get("ok") == "1",
+      proc.stderr.decode("utf-8", errors="replace")[:300])
+check("screen plan: both reads at screen coordinates are checked", fields.get("checked") == "2", str(fields))
+check("screen plan: the grab position is fixed in the vertex stage, once",
+      fields.get("fixed") == "2" and fields.get("unfixable") == "0" and fields.get("signature", "").startswith("v")
+      and fields.get("signature", "").count(";") == 1, str(fields))
+check("screen plan: the fixed vertex program builds the y as +0.5 * clip y",
+      len(sources) == 2 and "-0.5" not in sources[0] and "vec3(0.5, 0.5, 0.5)" in sources[0], sources[0] if sources else "")
+check("screen plan: the mesh coordinate is untouched",
+      len(sources) == 2 and "vs_TEXCOORD2.xy = in_POSITION0.xy;" in sources[0], sources[0] if sources else "")
+
+proc, fields, sources = screen_plan("portable", "plain")
+check("screen plan: ComputeScreenPos reads stay as they are",
+      fields.get("checked") == "2" and fields.get("fixed") == "0" and fields.get("unfixable") == "0" and
+      fields.get("signature") == "", str(fields))
+
+proc, fields, sources = screen_plan("portable", "silent")
+check("screen plan: Clear Water's grab conversion is fixed in the fragment stage",
+      fields.get("checked") == "2" and fields.get("fixed") == "1" and fields.get("unfixable") == "0" and
+      fields.get("signature", "").startswith("f") and fields.get("signature", "").count(";") == 1, str(fields))
+check("screen plan: the depth read beside it is left alone",
+      len(sources) == 2 and "texture(_CameraDepthTexture" in sources[1], sources[1] if len(sources) == 2 else "")
+
+proc, fields, sources = screen_plan("portable", "mirror")
+check("screen plan: a read mirrored on PC stays mirrored",
+      fields.get("checked") == "2" and fields.get("fixed") == "0" and fields.get("signature") == "", str(fields))
+
+proc, fields, sources = screen_plan("grab", "mirror")
+check("screen plan: a grab position flipped on purpose afterwards is fixed at the source",
+      fields.get("fixed") == "2" and fields.get("unfixable") == "0", str(fields))
+if GLSLANG is not None and not os.environ.get("VIVIFY_SKIP_GLSLANG"):
+    for index, source in enumerate(sources):
+        glslang_compile(source, "screen plan program %d" % index)
+
 glslang_enabled = False
 truncation_failures = 0
 for length in range(0, len(vertex)):

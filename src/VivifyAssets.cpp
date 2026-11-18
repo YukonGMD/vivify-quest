@@ -150,7 +150,13 @@ namespace {
 //      screen through a sampler2D, got Unity's default white instead, and
 //      covered the view in white until they ended (743 Aether, Get Your Wish;
 //      naomi.10-beta.2). Maps shipping both PC builds now convert the 2021 one
-constexpr int kBundleConversionVersion = 24;
+//  25  screen reads a PC shader gets right only because PC renders its eye
+//      textures upside down (ComputeGrabScreenPos's Direct3D constant, or an
+//      even number of _ProjectionParams.x factors) are made upright: Lifelike's
+//      water showed the top half of the view mirrored into the bottom half
+//      (Dxbc::PlanUprightScreenReads). GPU-instanced variants are no longer
+//      translated: "GPU Instancing For Scenery" is retired (naomi.10-beta.4)
+constexpr int kBundleConversionVersion = 25;
 
 // Whether Beat Saber's own shaders use STEREO_MULTIVIEW_ON: -1 not looked yet,
 // 0 no, 1 yes. Unity registers every keyword a loaded shader declares, so the
@@ -197,6 +203,7 @@ struct ConversionSettings {
   bool emulateGeometry = GetEmulateGeometryShaderEffects();
   bool instancing = GetSceneryGpuInstancing();
   bool screenArrays = GetScreenTexturesAsArrays();
+  bool upright = GetUprightScreenReads();
 
   // What the cache marker records about how a bundle's programs were built:
   // 0 = multiview in the plain variants, 1 = 2021 bundles split,
@@ -208,8 +215,10 @@ struct ConversionSettings {
     // +32: GPU-instanced variants translated, for scenery instancing (setting).
     // +64: screen textures left as plain 2D in multiview programs (the setting
     // that undoes naomi.10-beta.2's white-screen fix).
+    // +128: screen reads left as translated, upside down where PC relied on
+    // its flipped render targets (the setting that undoes beta.4's fix).
     int const geometry = (drawGeometry ? 8 : 0) + (emulateGeometry ? 16 : 0) + (instancing ? 32 : 0) +
-                         (screenArrays ? 0 : 64);
+                         (screenArrays ? 0 : 64) + (upright ? 0 : 128);
     if (replay) return 4 + geometry;
     return (splitStereo ? 1 : 0) + geometry;
   }
@@ -467,6 +476,7 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   options.skipQuestUnusedVariants = true;
   options.singleViewOnly = settings.replay;
   options.screenTexturesAsArrays = settings.screenArrays;
+  options.uprightScreenReads = settings.upright;
   auto const conversion = BundleConvert::ConvertShadersToGles(source, dest, options);
   // Which shaders were emulated, and how, for the rebuild at load. Rewritten
   // (or removed) with every conversion, before the bundle is marked current,
@@ -511,6 +521,14 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   }
   for (auto const& refusal : conversion.geometryEmulationRefusals) {
     PaperLogger.info("Vivify geometry emulation not possible, so the shader keeps its old treatment -- {}", refusal);
+  }
+  if (options.uprightScreenReads && conversion.screenReadsChecked > 0) {
+    std::string shaders;
+    for (auto const& shader : conversion.shadersWithUprightReads) shaders += (shaders.empty() ? "" : ", ") + shader;
+    PaperLogger.info("Vivify upright screen reads: {} of {} screen-coordinate texture read(s) made upright{}{}; {} "
+                     "left upside down for want of a safe fix",
+                     conversion.screenReadsFixed, conversion.screenReadsChecked, shaders.empty() ? "" : " in ",
+                     shaders, conversion.screenReadsUnfixable);
   }
   if (options.keepInstancingVariants) {
     PaperLogger.info("Vivify scenery instancing: {} GPU-instanced variant(s) translated", conversion.instancingVariantsLinked);

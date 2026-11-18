@@ -133,6 +133,7 @@ int main(int argc, char** argv) {
     options.emulateGeometry = std::getenv("VIVIFY_EMULATE_GEOMETRY") != nullptr;
     options.keepInstancingVariants = std::getenv("VIVIFY_KEEP_INSTANCING") != nullptr;
     options.screenTexturesAsArrays = std::getenv("VIVIFY_LEGACY_SCREEN_2D") == nullptr;
+    options.uprightScreenReads = std::getenv("VIVIFY_NO_UPRIGHT_READS") == nullptr;
     ShaderConversion c = ConvertShadersToGles(src, dst, options);
     std::printf("status=%s\nmessage=%s\nseen=%d translated=%d leftAlone=%d refused=%d "
                 "programs=%d outBytes=%llu\ntexSeen=%d texReadable=%d texStreamed=%d\n"
@@ -149,6 +150,9 @@ int main(int argc, char** argv) {
                 c.geometryStagesEmulated, c.meshesMarkedReadable, c.meshesLeftStreamed, c.meshesReadableCleared,
                 c.meshesUnread, c.meshesInlined);
     std::printf("instancingVariants=%d\n", c.instancingVariantsLinked);
+    std::printf("screenReads checked=%d fixed=%d unfixable=%d\n", c.screenReadsChecked, c.screenReadsFixed,
+                c.screenReadsUnfixable);
+    for (auto const& shader : c.shadersWithUprightReads) std::printf("uprightShader=%s\n", shader.c_str());
     for (auto const& shader : c.shadersWithoutInstancing) std::printf("noInstancing=%s\n", shader.c_str());
     for (auto const& shader : c.geometryEmulated) std::printf("emulatedShader=%s\n", shader.c_str());
     for (auto const& refusal : c.geometryEmulationRefusals) std::printf("emulationRefusal=%s\n", refusal.c_str());

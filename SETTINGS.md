@@ -103,13 +103,13 @@ files.
 | Slow-Frame Sampler | `slowFrameSampler` | on | During frames over 100 ms, records where the main and render threads were, summed per song section in the log. Costs nothing while frames are fast. |
 | Debug: Fixed Resolution % (0 = off) | `performanceModeFixedScalePercent` | 0 | Holds the resolution at this scale (40–95) for a whole song, for A/B tests. |
 | Debug: Switch Off For A Cost Test | `debugCostTest` | Nothing | Switches one kind of drawing off for the song (skies, transparent effects, depth pre-pass, emulated geometry, blits, scenery), so the log shows its cost. The map looks wrong while it is set. |
-| GPU Instancing For Scenery (experimental) | `sceneryGpuInstancing` | off | Keeps converted scenery's GPU instancing, as on PC. *Reconverts.* |
 
 ### Switches for isolating a problem
 
 | Menu name | Key | Default | What it does |
 |---|---|---|---|
 | Two-Eye Screen Textures | `screenTexturesAsArrays` | on | Converted shaders read the screen and the depth texture as the Quest's two-eye array, as Unity's own two-eye build does. New in naomi.10-beta.2: the fix for Blits that covered the view in white (743 Aether, Get Your Wish). Off puts back the old reads, for comparison. *Reconverts.* |
+| Upright Screen Reads | `uprightScreenReads` | on | PC renders its eye textures upside down (Direct3D render targets), and some PC shaders read the screen in a way that is only right because of that: Lifelike's water showed the top half of the view mirrored into the bottom half. Converted shaders read the screen the right way up, as on PC. New in naomi.10-beta.4. Off puts back the old reads, for comparison. *Reconverts.* |
 | Translate Shaders On Conversion | `translateShadersOnConversion` | on | Off: converted maps keep no shaders of their own and draw as stand-ins. Reconvert after changing it. |
 | Disable Beat 0 Filmgrain Blit | `disableBeat0FilmgrainBlit` | off | Skips a film-grain effect a map starts at beat 0. |
 | Disable CreateCamera Depth | `disableCreateCameraDepth` | off | Gives the cameras a map creates no depth texture. |
@@ -127,8 +127,9 @@ files.
 |---|---|
 | `multipassRendering` | Nothing read it. The feature it switched has been hard-wired off since it corrupted a global shader property (notes and menus went invisible); the saved value was ignored. |
 | `pcShadersForEmptyQuestShaders` | Nothing read it. Empty Quest shaders have always got their PC build since 0.14.10, and its getter had no callers. |
+| `sceneryGpuInstancing` | "GPU Instancing For Scenery (experimental)", a Debug switch, off by default. With it on, 743 Aether's instanced scenery (the intro's terrain, the ambient section's glass terrain, the bridge's gems) took 0.5-1.2 s of GPU time a frame and 1-2 GB of memory, until the headset froze (beta.1 and beta.3 tests). Removed in beta.4: converted materials are never GPU-instanced. |
 
-Both are dropped from the config file on the first launch of naomi.10.
+All three are dropped from the config file on the first launch of the build that removed them (naomi.10-beta.1, and beta.4 for `sceneryGpuInstancing`).
 
 ## What changed in naomi.10
 
@@ -154,8 +155,8 @@ control has a hover hint, and there is a reset-to-defaults button.
 | Debug logging | Debug Logging (now under Debug) |
 
 New in Debug: Detailed Logging. Moved to Debug: Debug Logging, Slow-Frame Sampler, Debug: Fixed Resolution %,
-Debug: Switch Off For A Cost Test, GPU Instancing For Scenery, Translate
-Shaders On Conversion, Disable Beat 0 Filmgrain Blit, Disable CreateCamera
+Debug: Switch Off For A Cost Test, GPU Instancing For Scenery (removed again in
+beta.4, see above), Translate Shaders On Conversion, Disable Beat 0 Filmgrain Blit, Disable CreateCamera
 Depth and Disable VR Center Adjust Handling.
 
 ## Adding a setting

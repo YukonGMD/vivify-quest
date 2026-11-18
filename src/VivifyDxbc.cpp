@@ -1,14 +1,19 @@
 #include "VivifyDxbc.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <climits>
+#include <cmath>
 #include <deque>
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <map>
 #include <functional>
+#include <optional>
 #include <set>
+#include <tuple>
 
 namespace Vivify::Dxbc {
 namespace {
@@ -4567,6 +4572,917 @@ GlslResult TranslateDxbcToGlsl(uint8_t const* data, size_t size, GlslOptions con
     return result;
   }
   return TranslateToGlsl(program, options);
+}
+
+Program WithExternalReflection(Program const& program, ExternalReflection const& reflection) {
+  if (!program.constantBuffers.empty() || !program.resourceBindings.empty()) return program;
+  return WithReflection(program, reflection);
+}
+
+// --- Upright screen reads (naomi.10-beta.4; see VivifyDxbc.hpp) ---------------
+//
+// Each register lane is evaluated twice, symbolically: as the Quest runs the
+// pair (clip y as computed, _ProjectionParams.x = +1) and as PC runs it (clip y
+// negated by the flipped projection, _ProjectionParams.x = -1). Everything else
+// -- other inputs, uniforms, texture reads, the clip w -- is the same on both,
+// so it stands in as an opaque symbol that both sides share. That includes the
+// projection matrices themselves, whose y row PC also has negated: following
+// them as well found real but small differences (Clear Water's depth fade)
+// that no single sign flip can match, and left its upside-down grab read
+// unfixed, so a coordinate a fragment stage projects itself is not followed. A value is a
+// polynomial over the clip y and those symbols; an operation the analysis does
+// not model becomes a symbol named after the operation and its arguments, so
+// two sides with equal arguments still compare equal. A texture read whose v
+// differs between the two sides is upside down on the Quest.
+
+namespace {
+
+struct ScreenTerm {
+  double coefficient = 0.0;
+  int y = 0;                                     // power of the clip y
+  std::vector<std::pair<uint64_t, int>> symbols;  // sorted by id; powers
+};
+
+struct ScreenPoly {
+  std::vector<ScreenTerm> terms;  // normalised: sorted, like terms merged
+  bool unknown = false;           // the analysis cannot speak for this value
+  bool clip = false;              // a symbol in it was made from the clip y
+  // The instructions the value was computed through, as a bitset over
+  // (vertex instructions, then fragment instructions). Not part of the value:
+  // equality and hashing ignore it. It limits the flips worth trying.
+  std::vector<uint64_t> deps;
+};
+
+void MergeDeps(std::vector<uint64_t>& into, std::vector<uint64_t> const& from) {
+  if (into.size() < from.size()) into.resize(from.size(), 0);
+  for (size_t i = 0; i < from.size(); i++) into[i] |= from[i];
+}
+
+uint64_t Mix(uint64_t seed, uint64_t value) {
+  seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+  return seed;
+}
+
+uint64_t HashText(char const* text) {
+  uint64_t hash = 1469598103934665603ull;
+  for (; *text; ++text) hash = (hash ^ static_cast<unsigned char>(*text)) * 1099511628211ull;
+  return hash;
+}
+
+bool TermKeyLess(ScreenTerm const& a, ScreenTerm const& b) {
+  if (a.y != b.y) return a.y < b.y;
+  return a.symbols < b.symbols;
+}
+
+bool TermKeyEqual(ScreenTerm const& a, ScreenTerm const& b) { return a.y == b.y && a.symbols == b.symbols; }
+
+constexpr size_t kMaxScreenTerms = 24;
+
+uint64_t HashPoly(ScreenPoly const& poly) {
+  if (poly.unknown) return 0xdeadbeefull;
+  uint64_t hash = poly.clip ? 0xc11b : 0x51ab1e;
+  for (auto const& term : poly.terms) {
+    // Coefficients rounded so that equal values from different arithmetic orders agree.
+    hash = Mix(hash, static_cast<uint64_t>(static_cast<int64_t>(std::llround(term.coefficient * 1048576.0))));
+    hash = Mix(hash, static_cast<uint64_t>(term.y));
+    for (auto const& [id, power] : term.symbols) hash = Mix(Mix(hash, id), static_cast<uint64_t>(power));
+  }
+  return hash;
+}
+
+ScreenPoly Symbol(uint64_t id) {
+  ScreenPoly poly;
+  poly.terms.push_back({1.0, 0, {{id, 1}}});
+  return poly;
+}
+
+ScreenPoly Constant(double value) {
+  ScreenPoly poly;
+  if (value != 0.0) poly.terms.push_back({value, 0, {}});
+  return poly;
+}
+
+ScreenPoly Normalise(ScreenPoly poly) {
+  if (poly.unknown) return poly;
+  std::sort(poly.terms.begin(), poly.terms.end(), TermKeyLess);
+  std::vector<ScreenTerm> merged;
+  for (auto& term : poly.terms) {
+    if (!merged.empty() && TermKeyEqual(merged.back(), term)) {
+      merged.back().coefficient += term.coefficient;
+    } else {
+      merged.push_back(std::move(term));
+    }
+  }
+  poly.terms.clear();
+  for (auto& term : merged) {
+    if (std::fabs(term.coefficient) > 1e-9) poly.terms.push_back(std::move(term));
+  }
+  if (poly.terms.size() > kMaxScreenTerms) {
+    // Too big to carry: one symbol for the whole value, the same on both sides
+    // exactly when the values are.
+    uint64_t const id = Mix(HashText("big"), HashPoly(poly));
+    bool const clip = poly.clip || std::any_of(poly.terms.begin(), poly.terms.end(),
+                                               [](ScreenTerm const& term) { return term.y != 0; });
+    ScreenPoly symbol = Symbol(id);
+    symbol.clip = clip;
+    symbol.deps = std::move(poly.deps);
+    return symbol;
+  }
+  return poly;
+}
+
+ScreenPoly AddPoly(ScreenPoly const& a, ScreenPoly const& b) {
+  if (a.unknown || b.unknown) return ScreenPoly{{}, true};
+  ScreenPoly sum = a;
+  sum.clip = a.clip || b.clip;
+  MergeDeps(sum.deps, b.deps);
+  sum.terms.insert(sum.terms.end(), b.terms.begin(), b.terms.end());
+  return Normalise(std::move(sum));
+}
+
+ScreenPoly ScalePoly(ScreenPoly poly, double factor) {
+  for (auto& term : poly.terms) term.coefficient *= factor;
+  return Normalise(std::move(poly));
+}
+
+ScreenPoly MultiplyPoly(ScreenPoly const& a, ScreenPoly const& b) {
+  if (a.unknown || b.unknown) return ScreenPoly{{}, true};
+  ScreenPoly product;
+  product.clip = a.clip || b.clip;
+  product.deps = a.deps;
+  MergeDeps(product.deps, b.deps);
+  for (auto const& x : a.terms) {
+    for (auto const& z : b.terms) {
+      ScreenTerm term;
+      term.coefficient = x.coefficient * z.coefficient;
+      term.y = x.y + z.y;
+      std::map<uint64_t, int> powers;
+      for (auto const& [id, power] : x.symbols) powers[id] += power;
+      for (auto const& [id, power] : z.symbols) powers[id] += power;
+      for (auto const& [id, power] : powers) {
+        if (power != 0) term.symbols.emplace_back(id, power);
+      }
+      product.terms.push_back(std::move(term));
+    }
+  }
+  return Normalise(std::move(product));
+}
+
+// An opaque function of its arguments: equal on both sides when they are.
+ScreenPoly FunctionOf(uint64_t operation, std::vector<ScreenPoly const*> const& arguments) {
+  uint64_t id = Mix(HashText("fn"), operation);
+  bool clip = false;
+  std::vector<uint64_t> deps;
+  for (auto const* argument : arguments) {
+    MergeDeps(deps, argument->deps);
+    if (argument->unknown) return ScreenPoly{{}, true};
+    id = Mix(id, HashPoly(*argument));
+    clip = clip || argument->clip ||
+           std::any_of(argument->terms.begin(), argument->terms.end(),
+                       [](ScreenTerm const& term) { return term.y != 0; });
+  }
+  ScreenPoly symbol = Symbol(id);
+  symbol.clip = clip;
+  symbol.deps = std::move(deps);
+  return symbol;
+}
+
+ScreenPoly DividePoly(ScreenPoly const& a, ScreenPoly const& b, uint64_t operation) {
+  if (a.unknown || b.unknown) return ScreenPoly{{}, true};
+  if (b.terms.size() == 1 && b.terms[0].y == 0) {
+    ScreenPoly inverse;
+    ScreenTerm term;
+    term.coefficient = 1.0 / b.terms[0].coefficient;
+    for (auto const& [id, power] : b.terms[0].symbols) term.symbols.emplace_back(id, -power);
+    inverse.terms.push_back(std::move(term));
+    return MultiplyPoly(a, inverse);
+  }
+  return FunctionOf(operation, {&a, &b});
+}
+
+bool SamePoly(ScreenPoly const& a, ScreenPoly const& b) {
+  if (a.unknown || b.unknown) return false;
+  if (a.terms.size() != b.terms.size()) return false;
+  for (size_t i = 0; i < a.terms.size(); i++) {
+    if (!TermKeyEqual(a.terms[i], b.terms[i])) return false;
+    double const x = a.terms[i].coefficient;
+    double const z = b.terms[i].coefficient;
+    if (std::fabs(x - z) > 1e-6 * std::max(1.0, std::max(std::fabs(x), std::fabs(z)))) return false;
+  }
+  return true;
+}
+
+bool DependsOnClip(ScreenPoly const& poly) {
+  if (poly.unknown || poly.clip) return true;
+  for (auto const& term : poly.terms) {
+    if (term.y != 0) return true;
+  }
+  return false;
+}
+
+int SourceComponent(Operand const& operand, int lane) {
+  return operand.numComponents == 1 ? 0 : static_cast<int>(operand.swizzle[lane & 3] & 3u);
+}
+
+bool IsTrackedRegister(Operand const& operand) {
+  return (operand.type == kOperandTemp || operand.type == kOperandInput || operand.type == kOperandOutput) &&
+         !operand.indices.empty();
+}
+
+int LowestComponent(uint8_t mask) {
+  for (int i = 0; i < 4; i++) {
+    if (mask & (1u << i)) return i;
+  }
+  return 0;
+}
+
+bool IsDeclarationOpcode(uint32_t opcode) {
+  return (opcode >= OP_DCL_RESOURCE && opcode <= OP_DCL_GLOBAL_FLAGS) || (opcode >= 113 && opcode <= 116) ||
+         (opcode >= 143 && opcode <= 162) || opcode == 183 || opcode == OP_CUSTOMDATA;
+}
+
+bool IsFlowOpcode(uint32_t opcode) {
+  switch (opcode) {
+    case OP_IF: case OP_ELSE: case OP_ENDIF: case OP_LOOP: case OP_ENDLOOP: case OP_BREAK: case OP_BREAKC:
+    case OP_CONTINUE: case OP_CONTINUEC: case OP_SWITCH: case OP_CASE: case OP_DEFAULT: case OP_ENDSWITCH:
+    case OP_RET: case OP_RETC: case OP_DISCARD: case OP_CALL: case OP_CALLC: case OP_LABEL: case OP_NOP:
+    case OP_EMIT: case OP_EMITTHENCUT: case OP_CUT: case OP_EMIT_STREAM: case OP_CUT_STREAM:
+    case OP_EMITTHENCUT_STREAM: case OP_INTERFACE_CALL:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool IsSampleOpcode(uint32_t opcode) {
+  switch (opcode) {
+    case OP_SAMPLE: case OP_SAMPLE_L: case OP_SAMPLE_B: case OP_SAMPLE_D: case OP_SAMPLE_C: case OP_SAMPLE_C_LZ:
+    case OP_GATHER4: case OP_GATHER4_C:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// The variable a plain constant-buffer read lands in, and the byte within it.
+ConstantBufferVariable const* ConstantVariable(Program const& program, Operand const& operand, int lane,
+                                               uint32_t& within) {
+  if (operand.type != kOperandConstantBuffer || operand.indices.size() < 2) return nullptr;
+  uint32_t const bindPoint = static_cast<uint32_t>(operand.indices[0].immediate);
+  uint64_t const byteOffset =
+      operand.indices[1].immediate * 16u + static_cast<uint64_t>(SourceComponent(operand, lane)) * 4u;
+  for (auto const& buffer : program.constantBuffers) {
+    if (buffer.bindPoint != bindPoint) continue;
+    for (auto const& variable : buffer.variables) {
+      if (byteOffset >= variable.startOffset && byteOffset < variable.startOffset + variable.size) {
+        within = static_cast<uint32_t>(byteOffset - variable.startOffset);
+        return &variable;
+      }
+    }
+  }
+  return nullptr;
+}
+
+struct ScreenFlipKey {
+  int stage;
+  size_t instruction;
+  int operand;
+  int component;
+  bool literal;
+  auto Key() const { return std::make_tuple(stage, instruction, operand, component, literal); }
+  bool operator<(ScreenFlipKey const& other) const { return Key() < other.Key(); }
+};
+
+// One side's evaluation of the pair.
+class ScreenSide {
+ public:
+  ScreenSide(Program const& vertex, Program const& fragment, bool pc, std::set<ScreenFlipKey> const& flips,
+             uint64_t clipRegister, int clipComponent, size_t clipComputed)
+      : _vertex(vertex), _fragment(fragment), _pc(pc), _flips(flips), _clipRegister(clipRegister),
+        _clipComponent(clipComponent), _clipComputed(clipComputed) {}
+
+  void Run() {
+    RunVertex();
+    RunFragment();
+  }
+
+  // The fragment stage alone, from vertex outputs another side computed (a
+  // fragment-stage flip cannot change them).
+  void RunFragmentFrom(std::map<std::pair<uint32_t, int>, ScreenPoly> const& vertexOutputs) {
+    _vertexOutputs = vertexOutputs;
+    RunFragment();
+  }
+
+  void RunVertex() {
+    _stage = 0;
+    for (size_t i = 0; i < _vertex.instructions.size(); i++) {
+      _index = i;
+      Step(_vertex, _vertex.instructions[i]);
+      if (i == _clipComputed) {
+        ScreenPoly clip;
+        clip.terms.push_back({_pc ? -1.0 : 1.0, 1, {}});
+        Set(kOperandTemp, _clipRegister, _clipComponent, clip);
+      }
+    }
+    // Vertex outputs become fragment inputs, matched by semantic.
+    for (auto const& output : _vertex.outputSignature) {
+      if (output.systemValueType != kSvUndefined) continue;
+      for (int c = 0; c < 4; c++) {
+        if (output.mask & (1u << c)) _vertexOutputs[{output.registerIndex, c}] = Get(kOperandOutput, output.registerIndex, c);
+      }
+    }
+  }
+
+  void RunFragment() {
+    _registers.clear();
+    _frames.clear();
+    for (auto const& input : _fragment.inputSignature) {
+      if (input.systemValueType != kSvUndefined) continue;
+      for (auto const& output : _vertex.outputSignature) {
+        if (output.systemValueType != kSvUndefined || output.semanticIndex != input.semanticIndex) continue;
+        if (!EqualsIgnoreCase(output.semanticName, input.semanticName)) continue;
+        int const inputStart = LowestComponent(input.mask);
+        int const outputStart = LowestComponent(output.mask);
+        for (int c = 0; c < 4; c++) {
+          if (!(input.mask & (1u << c))) continue;
+          int const from = outputStart + (c - inputStart);
+          if (from < 0 || from > 3 || !(output.mask & (1u << from))) continue;
+          auto it = _vertexOutputs.find({output.registerIndex, from});
+          if (it != _vertexOutputs.end()) Set(kOperandInput, input.registerIndex, c, it->second);
+        }
+      }
+    }
+    _stage = 1;
+    for (size_t i = 0; i < _fragment.instructions.size(); i++) {
+      _index = i;
+      Step(_fragment, _fragment.instructions[i]);
+    }
+  }
+
+  // Each fragment texture read's v, in instruction order.
+  std::vector<std::pair<size_t, ScreenPoly>> const& Reads() const { return _reads; }
+  std::map<std::pair<uint32_t, int>, ScreenPoly> const& VertexOutputs() const { return _vertexOutputs; }
+  // Instructions (stage, index) that computed a clip-dependent value.
+  std::set<std::pair<int, size_t>> const& ClipInstructions() const { return _clipInstructions; }
+
+ private:
+  static bool EqualsIgnoreCase(std::string const& a, std::string const& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); i++) {
+      if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  ScreenPoly Get(uint32_t type, uint64_t index, int component) {
+    auto it = _registers.find({type, index});
+    if (it != _registers.end() && it->second[component & 3].has_value()) return *it->second[component & 3];
+    // Never written here (a mesh input, say): a symbol both sides share.
+    return Symbol(Mix(Mix(Mix(HashText("reg"), static_cast<uint64_t>(_stage)), (type << 16) ^ index),
+                      static_cast<uint64_t>(component)));
+  }
+
+  void Set(uint32_t type, uint64_t index, int component, ScreenPoly value) {
+    _registers[{type, index}][component & 3] = std::move(value);
+  }
+
+  bool Flipped(int operand, int component, bool literal) const {
+    if (_pc) return false;  // PC runs the program as it was built
+    return _flips.count({_stage, _index, operand, literal ? component : 0, literal}) != 0;
+  }
+
+  ScreenPoly Read(Program const& program, Instruction const& instruction, int operandIndex, int lane) {
+    Operand const& operand = instruction.operands[operandIndex];
+    ScreenPoly value;
+    if (operand.type == kOperandImmediate32) {
+      int const component = SourceComponent(operand, lane);
+      uint32_t bits = component < static_cast<int>(operand.immediates.size()) ? operand.immediates[component] : 0u;
+      if (Flipped(operandIndex, component, true)) bits ^= 0x80000000u;
+      float number = 0.0f;
+      std::memcpy(&number, &bits, sizeof(number));
+      value = std::isfinite(number) ? Constant(number) : Symbol(Mix(HashText("imm"), bits));
+    } else if (operand.type == kOperandConstantBuffer) {
+      uint32_t within = 0;
+      auto const* variable = ConstantVariable(program, operand, lane, within);
+      bool const relative = operand.indices.size() >= 2 && operand.indices[1].hasRelative;
+      if (variable != nullptr && !relative && variable->name == "_ProjectionParams" && within == 0) {
+        value = Constant(_pc ? -1.0 : 1.0);
+      } else if (variable != nullptr && variable->name.size() > 11 &&
+                 variable->name.compare(variable->name.size() - 11, 11, "_TexelSize") == 0 && within == 4) {
+        value.unknown = true;  // a texel size's y can differ in sign between PC and the Quest
+      } else {
+        uint64_t id = Mix(HashText("cb"), operand.indices.empty() ? 0 : operand.indices[0].immediate);
+        id = Mix(id, operand.indices.size() >= 2 ? operand.indices[1].immediate : 0);
+        id = Mix(id, static_cast<uint64_t>(SourceComponent(operand, lane)));
+        if (relative && operand.indices[1].relative) {
+          ScreenPoly const index = Read(program, *operand.indices[1].relative, lane);
+          id = Mix(id, HashPoly(index));
+        }
+        value = Symbol(id);
+      }
+    } else if (IsTrackedRegister(operand) && !operand.indices[0].hasRelative) {
+      value = Get(operand.type, operand.indices[0].immediate, SourceComponent(operand, lane));
+    } else {
+      uint64_t id = Mix(Mix(HashText("other"), operand.type), operand.indices.empty() ? 0 : operand.indices[0].immediate);
+      value = Symbol(Mix(id, static_cast<uint64_t>(SourceComponent(operand, lane))));
+    }
+    Modifier modifier = operand.modifier;
+    if (operand.type != kOperandImmediate32 && Flipped(operandIndex, 0, false)) {
+      modifier = modifier == Modifier::None ? Modifier::Neg
+                 : modifier == Modifier::Neg ? Modifier::None
+                 : modifier == Modifier::Abs ? Modifier::AbsNeg
+                                             : Modifier::Abs;
+    }
+    switch (modifier) {
+      case Modifier::Neg: return ScalePoly(value, -1.0);
+      case Modifier::Abs: return FunctionOf(HashText("abs"), {&value});
+      case Modifier::AbsNeg: {
+        ScreenPoly const magnitude = FunctionOf(HashText("abs"), {&value});
+        return ScalePoly(magnitude, -1.0);
+      }
+      default: return value;
+    }
+  }
+
+  // A read of an operand nested in another (a relative index).
+  ScreenPoly Read(Program const& program, Operand const& operand, int lane) {
+    Instruction holder;
+    holder.operands.push_back(operand);
+    return Read(program, holder, 0, lane);
+  }
+
+  using Registers = std::map<std::pair<uint32_t, uint64_t>, std::array<std::optional<ScreenPoly>, 4>>;
+
+  // A branch's two paths become one state: a lane the paths disagree on is a
+  // symbol of both values, equal on the two sides only if both paths are.
+  Registers Merge(Registers const& a, Registers const& b, uint64_t tag) {
+    Registers merged = a;
+    for (auto const& [key, lanes] : b) merged[key];
+    for (auto& [key, lanes] : merged) {
+      for (int c = 0; c < 4; c++) {
+        auto const* fromA = a.count(key) ? &a.at(key)[c] : nullptr;
+        auto const* fromB = b.count(key) ? &b.at(key)[c] : nullptr;
+        bool const hasA = fromA != nullptr && fromA->has_value();
+        bool const hasB = fromB != nullptr && fromB->has_value();
+        if (!hasA && !hasB) continue;
+        ScreenPoly const x = hasA ? **fromA : Get(key.first, key.second, c);
+        ScreenPoly const z = hasB ? **fromB : Get(key.first, key.second, c);
+        if (SamePoly(x, z)) {
+          ScreenPoly both = x;
+          MergeDeps(both.deps, z.deps);
+          lanes[c] = std::move(both);
+        } else {
+          lanes[c] = FunctionOf(tag, {&x, &z});
+        }
+      }
+    }
+    return merged;
+  }
+
+  struct Frame {
+    bool loop = false;
+    bool isSwitch = false;
+    bool inElse = false;
+    bool caseOpen = false;  // a switch: a case body has started
+    bool anyCase = false;   // a switch: `merged` holds at least one finished path
+    Registers before;
+    Registers thenPath;
+    Registers merged;
+  };
+
+  // Lanes a loop body writes, from its LOOP to the matching ENDLOOP.
+  std::vector<std::tuple<uint32_t, uint64_t, int>> LoopWrites(Program const& program, size_t start) {
+    std::vector<std::tuple<uint32_t, uint64_t, int>> written;
+    int depth = 0;
+    for (size_t i = start; i < program.instructions.size(); i++) {
+      auto const& instruction = program.instructions[i];
+      if (instruction.opcode == OP_LOOP) depth++;
+      if (instruction.opcode == OP_ENDLOOP && --depth == 0) break;
+      if (IsDeclarationOpcode(instruction.opcode) || IsFlowOpcode(instruction.opcode) ||
+          instruction.operands.empty()) {
+        continue;
+      }
+      auto const& dest = instruction.operands[0];
+      if (!IsTrackedRegister(dest) || dest.selectionMode != 0 || dest.indices[0].hasRelative) continue;
+      for (int c = 0; c < 4; c++) {
+        if (dest.mask & (1u << c)) written.emplace_back(dest.type, dest.indices[0].immediate, c);
+      }
+    }
+    return written;
+  }
+
+  bool Flow(Program const& program, Instruction const& instruction) {
+    uint64_t const tag = Mix(Mix(HashText("flow"), static_cast<uint64_t>(_stage)), _index);
+    switch (instruction.opcode) {
+      case OP_IF: {
+        Frame frame;
+        frame.before = _registers;
+        _frames.push_back(std::move(frame));
+        return true;
+      }
+      case OP_ELSE:
+        if (!_frames.empty() && !_frames.back().loop && !_frames.back().isSwitch) {
+          _frames.back().thenPath = _registers;
+          _frames.back().inElse = true;
+          _registers = _frames.back().before;
+        }
+        return true;
+      case OP_ENDIF:
+        if (!_frames.empty() && !_frames.back().loop && !_frames.back().isSwitch) {
+          Frame frame = std::move(_frames.back());
+          _frames.pop_back();
+          _registers = frame.inElse ? Merge(frame.thenPath, _registers, tag) : Merge(frame.before, _registers, tag);
+        }
+        return true;
+      case OP_LOOP: {
+        // Each lane the body writes starts the body as a symbol of its value
+        // on entry: what any iteration sees, as far as comparing sides goes.
+        for (auto const& [type, index, component] : LoopWrites(program, _index)) {
+          ScreenPoly const entry = Get(type, index, component);
+          Set(type, index, component, FunctionOf(Mix(tag, (type << 20) ^ (index << 2) ^ component), {&entry}));
+        }
+        Frame frame;
+        frame.loop = true;
+        _frames.push_back(std::move(frame));
+        return true;
+      }
+      case OP_ENDLOOP:
+        if (!_frames.empty() && _frames.back().loop) _frames.pop_back();
+        return true;
+      case OP_SWITCH: {
+        // Every case starts from the state before the switch; the paths are
+        // merged at its end, as a branch's two are.
+        Frame frame;
+        frame.isSwitch = true;
+        frame.before = _registers;
+        _frames.push_back(std::move(frame));
+        return true;
+      }
+      case OP_CASE: case OP_DEFAULT:
+        if (!_frames.empty() && _frames.back().isSwitch) {
+          Frame& frame = _frames.back();
+          if (frame.caseOpen) {
+            frame.merged = frame.anyCase ? Merge(frame.merged, _registers, tag) : _registers;
+            frame.anyCase = true;
+          }
+          frame.caseOpen = true;
+          _registers = frame.before;
+        }
+        return true;
+      case OP_ENDSWITCH:
+        if (!_frames.empty() && _frames.back().isSwitch) {
+          Frame frame = std::move(_frames.back());
+          _frames.pop_back();
+          Registers last = frame.caseOpen ? _registers : frame.before;
+          _registers = frame.anyCase ? Merge(frame.merged, last, tag) : Merge(frame.before, last, tag);
+        }
+        return true;
+      default:
+        return IsFlowOpcode(instruction.opcode);
+    }
+  }
+
+  void Step(Program const& program, Instruction const& instruction) {
+    uint32_t const opcode = instruction.opcode;
+    if (IsDeclarationOpcode(opcode) || (instruction.operands.empty() && !IsFlowOpcode(opcode))) return;
+    if (Flow(program, instruction)) return;
+    size_t const count = instruction.operands.size();
+
+    if (_stage == 1 && IsSampleOpcode(opcode) && count >= 2) {
+      _reads.emplace_back(_index, Read(program, instruction, 1, 1));
+    }
+
+    Operand const& dest = instruction.operands[0];
+    if (!IsTrackedRegister(dest) || dest.selectionMode != 0 || dest.indices[0].hasRelative) return;
+    std::array<std::optional<ScreenPoly>, 4> results;
+    for (int lane = 0; lane < 4; lane++) {
+      if (!(dest.mask & (1u << lane))) continue;
+      ScreenPoly result;
+      auto source = [&](int index) { return Read(program, instruction, index, lane); };
+      switch (opcode) {
+        case OP_MOV: result = count >= 2 ? source(1) : ScreenPoly{{}, true}; break;
+        case OP_ADD: result = count >= 3 ? AddPoly(source(1), source(2)) : ScreenPoly{{}, true}; break;
+        case OP_MUL: result = count >= 3 ? MultiplyPoly(source(1), source(2)) : ScreenPoly{{}, true}; break;
+        case OP_MAD:
+          result = count >= 4 ? AddPoly(MultiplyPoly(source(1), source(2)), source(3)) : ScreenPoly{{}, true};
+          break;
+        case OP_DIV:
+          result = count >= 3 ? DividePoly(source(1), source(2), HashText("div")) : ScreenPoly{{}, true};
+          break;
+        case OP_DP2: case OP_DP3: case OP_DP4: {
+          int const n = opcode == OP_DP2 ? 2 : opcode == OP_DP3 ? 3 : 4;
+          ScreenPoly sum;
+          for (int k = 0; k < n && count >= 3; k++) {
+            sum = AddPoly(sum, MultiplyPoly(Read(program, instruction, 1, k), Read(program, instruction, 2, k)));
+          }
+          result = count >= 3 ? sum : ScreenPoly{{}, true};
+          break;
+        }
+        default: {
+          // Anything else: a function of its operands, the same on both sides
+          // exactly when they are. Two-destination opcodes would misread their
+          // second destination as an argument; that only makes the symbol
+          // more specific.
+          std::vector<ScreenPoly> arguments;
+          for (size_t k = 1; k < count; k++) arguments.push_back(Read(program, instruction, static_cast<int>(k), lane));
+          std::vector<ScreenPoly const*> pointers;
+          for (auto const& argument : arguments) pointers.push_back(&argument);
+          result = FunctionOf(Mix(Mix(HashText("op"), opcode), static_cast<uint64_t>(lane)), pointers);
+          break;
+        }
+      }
+      if (instruction.saturate) result = FunctionOf(HashText("saturate"), {&result});
+      if (DependsOnClip(result)) _clipInstructions.insert({_stage, _index});
+      size_t const bit = (_stage == 0 ? 0 : _vertex.instructions.size()) + _index;
+      if (result.deps.size() <= bit / 64) result.deps.resize(bit / 64 + 1, 0);
+      result.deps[bit / 64] |= uint64_t{1} << (bit % 64);
+      results[lane] = std::move(result);
+    }
+    for (int lane = 0; lane < 4; lane++) {
+      if (results[lane].has_value()) Set(dest.type, dest.indices[0].immediate, lane, std::move(*results[lane]));
+    }
+  }
+
+  Program const& _vertex;
+  Program const& _fragment;
+  bool _pc;
+  std::set<ScreenFlipKey> const& _flips;
+  uint64_t _clipRegister;
+  int _clipComponent;
+  size_t _clipComputed;
+  int _stage = 0;
+  size_t _index = 0;
+  Registers _registers;
+  std::vector<Frame> _frames;
+  std::map<std::pair<uint32_t, int>, ScreenPoly> _vertexOutputs;
+  std::vector<std::pair<size_t, ScreenPoly>> _reads;
+  std::set<std::pair<int, size_t>> _clipInstructions;
+};
+
+// Where the vertex program's clip y is computed: the temp lane the position
+// output's y is moved from, and the instruction that last writes it first.
+bool FindClip(Program const& vertex, uint64_t& clipRegister, int& clipComponent, size_t& computed) {
+  int positionRegister = -1;
+  int positionComponent = 1;
+  for (auto const& element : vertex.outputSignature) {
+    if (element.systemValueType == kSvPosition) {
+      positionRegister = static_cast<int>(element.registerIndex);
+      positionComponent = LowestComponent(element.mask) + 1;
+    }
+  }
+  if (positionRegister < 0) return false;
+  auto const& code = vertex.instructions;
+  size_t write = code.size();
+  int depth = 0;
+  int writeDepth = 0;
+  for (size_t i = 0; i < code.size(); i++) {
+    auto const& instruction = code[i];
+    if (instruction.opcode == OP_IF || instruction.opcode == OP_LOOP || instruction.opcode == OP_SWITCH) depth++;
+    if (instruction.opcode == OP_ENDIF || instruction.opcode == OP_ENDLOOP || instruction.opcode == OP_ENDSWITCH) {
+      depth--;
+    }
+    if (IsDeclarationOpcode(instruction.opcode) || IsFlowOpcode(instruction.opcode) || instruction.operands.empty()) {
+      continue;
+    }
+    auto const& dest = instruction.operands[0];
+    if (dest.type == kOperandOutput && !dest.indices.empty() &&
+        dest.indices[0].immediate == static_cast<uint64_t>(positionRegister) &&
+        (dest.mask & (1u << positionComponent))) {
+      write = i;
+      writeDepth = depth;
+    }
+  }
+  if (write == code.size() || writeDepth != 0 || code[write].opcode != OP_MOV || code[write].operands.size() < 2) {
+    return false;
+  }
+  auto const& source = code[write].operands[1];
+  if (source.type != kOperandTemp || source.indices.empty() || source.indices[0].hasRelative ||
+      source.modifier != Modifier::None) {
+    return false;
+  }
+  clipRegister = source.indices[0].immediate;
+  clipComponent = SourceComponent(source, positionComponent);
+  computed = code.size();
+  depth = 0;
+  for (size_t i = 0; i < write; i++) {
+    auto const& instruction = code[i];
+    if (instruction.opcode == OP_IF || instruction.opcode == OP_LOOP || instruction.opcode == OP_SWITCH) depth++;
+    if (instruction.opcode == OP_ENDIF || instruction.opcode == OP_ENDLOOP || instruction.opcode == OP_ENDSWITCH) {
+      depth--;
+    }
+    if (IsDeclarationOpcode(instruction.opcode) || IsFlowOpcode(instruction.opcode) || instruction.operands.empty()) {
+      continue;
+    }
+    auto const& dest = instruction.operands[0];
+    if (dest.type == kOperandTemp && !dest.indices.empty() && dest.indices[0].immediate == clipRegister &&
+        dest.selectionMode == 0 && (dest.mask & (1u << clipComponent))) {
+      computed = depth == 0 ? i : code.size();
+    }
+  }
+  return computed != code.size();
+}
+
+bool HasFlowControl(Program const& program) {
+  for (auto const& instruction : program.instructions) {
+    switch (instruction.opcode) {
+      case OP_CALL: case OP_CALLC: case OP_LABEL: return true;
+      default: break;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+std::string ScreenReadPlan::Signature() const {
+  std::string text;
+  for (auto const& flip : flips) {
+    text += (flip.stage == 0 ? "v" : "f") + std::to_string(flip.instruction) + "." + std::to_string(flip.operand) +
+            (flip.literal ? "L" + std::to_string(flip.component) : std::string("M")) + ";";
+  }
+  return text;
+}
+
+ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& fragment) {
+  ScreenReadPlan plan;
+  if (!vertex.ok || !fragment.ok || vertex.stage != Stage::Vertex || fragment.stage != Stage::Pixel) return plan;
+  // Subroutines are not followed; a program with them is left as it was.
+  // Branches, loops and switches are (ScreenSide::Flow).
+  if (HasFlowControl(vertex) || HasFlowControl(fragment)) {
+    plan.note = "a subroutine";
+    return plan;
+  }
+  bool samples = false;
+  for (auto const& instruction : fragment.instructions) samples = samples || IsSampleOpcode(instruction.opcode);
+  if (!samples) {
+    plan.note = "no texture read";
+    return plan;
+  }
+  uint64_t clipRegister = 0;
+  int clipComponent = 1;
+  size_t computed = 0;
+  if (!FindClip(vertex, clipRegister, clipComponent, computed)) {
+    plan.note = "no clip position found";
+    return plan;
+  }
+
+  std::set<ScreenFlipKey> none;
+  ScreenSide pc(vertex, fragment, true, none, clipRegister, clipComponent, computed);
+  pc.Run();
+  ScreenSide quest(vertex, fragment, false, none, clipRegister, clipComponent, computed);
+  quest.Run();
+  auto const& reference = pc.Reads();
+  auto const& current = quest.Reads();
+  if (reference.size() != current.size()) {
+    plan.note = "the sides disagree on the reads";
+    return plan;
+  }
+
+  // The reads at screen coordinates, and which are upside down.
+  std::vector<size_t> screen;
+  std::vector<bool> upside;
+  for (size_t r = 0; r < current.size(); r++) {
+    if (current[r].second.unknown || reference[r].second.unknown) continue;
+    if (!DependsOnClip(current[r].second)) continue;
+    screen.push_back(r);
+    upside.push_back(!SamePoly(current[r].second, reference[r].second));
+  }
+  plan.readsChecked = static_cast<int>(screen.size());
+  int remaining = static_cast<int>(std::count(upside.begin(), upside.end(), true));
+  int unknownReads = 0;
+  for (size_t r = 0; r < current.size(); r++) unknownReads += current[r].second.unknown ? 1 : 0;
+  plan.note = std::to_string(current.size()) + " reads, " + std::to_string(screen.size()) + " at screen coordinates, " +
+              std::to_string(remaining) + " upside down, " + std::to_string(unknownReads) + " not followed";
+  if (remaining == 0) return plan;
+
+  // Candidate flips: every literal component and operand sign in the
+  // instructions that compute a clip-dependent value.
+  std::vector<uint64_t> feeding;
+  for (size_t i = 0; i < screen.size(); i++) {
+    if (upside[i]) MergeDeps(feeding, current[screen[i]].second.deps);
+  }
+  auto feeds = [&](int stage, size_t index) {
+    size_t const bit = (stage == 0 ? 0 : vertex.instructions.size()) + index;
+    return bit / 64 < feeding.size() && (feeding[bit / 64] >> (bit % 64)) & 1u;
+  };
+  std::vector<ScreenFlipKey> candidates;
+  for (auto const& [stage, index] : quest.ClipInstructions()) {
+    if (!feeds(stage, index)) continue;
+    Program const& program = stage == 0 ? vertex : fragment;
+    auto const& instruction = program.instructions[index];
+    for (size_t k = 1; k < instruction.operands.size(); k++) {
+      auto const& operand = instruction.operands[k];
+      if (operand.type == kOperandImmediate32) {
+        std::set<int> used;
+        for (int lane = 0; lane < 4; lane++) {
+          if (instruction.operands[0].mask & (1u << lane)) used.insert(SourceComponent(operand, lane));
+        }
+        for (int component : used) candidates.push_back({stage, index, static_cast<int>(k), component, true});
+      } else if (IsTrackedRegister(operand) || operand.type == kOperandConstantBuffer) {
+        candidates.push_back({stage, index, static_cast<int>(k), 0, false});
+      }
+    }
+  }
+  // Fragment flips first, latest first: they touch the least.
+  std::sort(candidates.begin(), candidates.end(), [](ScreenFlipKey const& a, ScreenFlipKey const& b) {
+    if (a.stage != b.stage) return a.stage > b.stage;
+    if (a.instruction != b.instruction) return a.instruction > b.instruction;
+    return a.Key() < b.Key();
+  });
+
+  std::set<ScreenFlipKey> chosen;
+  std::vector<ScreenReadPlan::Flip> flips;
+  auto const baselineOutputs = quest.VertexOutputs();
+  int const upsideDown = remaining;
+  for (int round = 0; round < 4 && remaining > 0; round++) {
+    // A flip must fix more than the flips chosen so far already do.
+    int bestFixed = plan.readsFixed;
+    std::optional<ScreenFlipKey> best;
+    for (auto const& candidate : candidates) {
+      if (chosen.count(candidate)) continue;
+      std::set<ScreenFlipKey> trial = chosen;
+      trial.insert(candidate);
+      bool const vertexFlipped =
+          std::any_of(trial.begin(), trial.end(), [](ScreenFlipKey const& flip) { return flip.stage == 0; });
+      ScreenSide side(vertex, fragment, false, trial, clipRegister, clipComponent, computed);
+      if (vertexFlipped) {
+        side.Run();
+      } else {
+        side.RunFragmentFrom(quest.VertexOutputs());
+      }
+      auto const& reads = side.Reads();
+      if (reads.size() != reference.size()) continue;
+      bool safe = true;
+      int fixed = 0;
+      for (size_t i = 0; i < screen.size() && safe; i++) {
+        bool const right = SamePoly(reads[screen[i]].second, reference[screen[i]].second);
+        if (!upside[i] && !right) safe = false;  // broke a read that was right
+        if (upside[i] && right) fixed++;
+      }
+      // Reads not at screen coordinates must not move at all.
+      for (size_t r = 0; r < reads.size() && safe; r++) {
+        if (std::find(screen.begin(), screen.end(), r) != screen.end()) continue;
+        if (!SamePoly(reads[r].second, current[r].second) &&
+            !(reads[r].second.unknown && current[r].second.unknown)) {
+          safe = false;
+        }
+      }
+      // Vertex outputs that do not depend on the clip y must not move either.
+      for (auto const& [key, before] : baselineOutputs) {
+        if (!safe) break;
+        if (DependsOnClip(before)) continue;
+        auto it = side.VertexOutputs().find(key);
+        if (it == side.VertexOutputs().end() || !SamePoly(it->second, before)) safe = false;
+      }
+      if (!safe || fixed <= bestFixed) continue;
+      bestFixed = fixed;
+      best = candidate;
+      // Candidates come fragment-first, latest first: the first that fixes
+      // every read still upside down is as good as any, and the search is
+      // the costly part on the headset.
+      if (fixed >= upsideDown) break;
+    }
+    if (!best) break;
+    chosen.insert(*best);
+    plan.flips.push_back({best->stage, best->instruction, best->operand, best->component, best->literal});
+    // Recount against the chosen set.
+    ScreenSide side(vertex, fragment, false, chosen, clipRegister, clipComponent, computed);
+    side.Run();
+    remaining = 0;
+    int fixedNow = 0;
+    for (size_t i = 0; i < screen.size(); i++) {
+      bool const right = SamePoly(side.Reads()[screen[i]].second, reference[screen[i]].second);
+      if (upside[i] && right) fixedNow++;
+      if (upside[i] && !right) remaining++;
+    }
+    plan.readsFixed = fixedNow;
+  }
+  plan.readsUnfixable = remaining;
+  return plan;
+}
+
+void ApplyScreenReadPlan(ScreenReadPlan const& plan, Program& vertex, Program& fragment) {
+  for (auto const& flip : plan.flips) {
+    Program& program = flip.stage == 0 ? vertex : fragment;
+    if (flip.instruction >= program.instructions.size()) continue;
+    auto& instruction = program.instructions[flip.instruction];
+    if (flip.operand < 0 || static_cast<size_t>(flip.operand) >= instruction.operands.size()) continue;
+    auto& operand = instruction.operands[flip.operand];
+    if (flip.literal) {
+      if (flip.component >= 0 && static_cast<size_t>(flip.component) < operand.immediates.size()) {
+        operand.immediates[flip.component] ^= 0x80000000u;
+      }
+      continue;
+    }
+    switch (operand.modifier) {
+      case Modifier::None: operand.modifier = Modifier::Neg; break;
+      case Modifier::Neg: operand.modifier = Modifier::None; break;
+      case Modifier::Abs: operand.modifier = Modifier::AbsNeg; break;
+      case Modifier::AbsNeg: operand.modifier = Modifier::Abs; break;
+    }
+  }
 }
 
 }  // namespace Vivify::Dxbc

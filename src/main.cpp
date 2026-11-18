@@ -77,7 +77,6 @@ constexpr std::string_view kPrepareShadersConfigKey = "prepareShadersInMenu";
 constexpr std::string_view kGeometryEffectsConfigKey = "drawGeometryShaderEffects";
 constexpr std::string_view kEmulateGeometryConfigKey = "emulateGeometryShaderEffects";
 constexpr std::string_view kPoolReplacementsConfigKey = "poolNoteReplacements";
-constexpr std::string_view kSceneryInstancingConfigKey = "sceneryGpuInstancing";
 constexpr std::string_view kStandInShaderNameConfigKey = "standInShaderName";
 constexpr std::string_view kEffectResolutionConfigKey = "effectResolutionPercent";
 // A new key: the setting is now off by default, and the old key
@@ -98,6 +97,7 @@ constexpr std::string_view kDebugCostTestConfigKey = "debugCostTest";
 constexpr std::string_view kShowDeveloperOptionsConfigKey = "showDeveloperOptions";
 constexpr std::string_view kDetailedLoggingConfigKey = "detailedLogging";
 constexpr std::string_view kScreenArraysConfigKey = "screenTexturesAsArrays";
+constexpr std::string_view kUprightReadsConfigKey = "uprightScreenReads";
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
 bool gDisableAllBlits = false;
@@ -145,7 +145,6 @@ bool gPrepareShaders = false;
 bool gGeometryEffects = false;
 bool gEmulateGeometry = true;
 bool gPoolReplacements = true;
-bool gSceneryInstancing = false;
 // Which shader to use as the stand-in, by name, overriding the automatic pick.
 //
 // Empty means "choose automatically". This exists because the right answer
@@ -190,6 +189,9 @@ bool gShowDeveloperOptions = false;
 bool gDetailedLogging = false;
 // Converted multiview programs read screen textures as two-layer arrays (beta.2).
 bool gScreenArrays = true;
+// Converted shaders' screen reads made upright where PC relies on its flipped
+// render targets (beta.4).
+bool gUprightReads = true;
 
 // Where each setting in Vivify::Settings' table is held while the game runs.
 struct BoundSetting {
@@ -219,7 +221,6 @@ std::array<BoundSetting, 39> const kBoundSettings = {{
     {kGeometryEffectsConfigKey, &gGeometryEffects},
     {kEmulateGeometryConfigKey, &gEmulateGeometry},
     {kPoolReplacementsConfigKey, &gPoolReplacements},
-    {kSceneryInstancingConfigKey, &gSceneryInstancing},
     {kStandInShaderNameConfigKey, nullptr, nullptr, &gStandInShaderName},
     {kEffectResolutionConfigKey, nullptr, &gEffectResolution},
     {kOffscreenCullingConfigKey, &gOffscreenCulling},
@@ -238,6 +239,7 @@ std::array<BoundSetting, 39> const kBoundSettings = {{
     {kShowDeveloperOptionsConfigKey, &gShowDeveloperOptions},
     {kDetailedLoggingConfigKey, &gDetailedLogging},
     {kScreenArraysConfigKey, &gScreenArrays},
+    {kUprightReadsConfigKey, &gUprightReads},
 }};
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
@@ -1279,9 +1281,9 @@ void RegisterModSettings() {
               });
           if (dropdown != nullptr) debug(WithSettingHint(dropdown->get_gameObject(), kDebugCostTestConfigKey));
         }
-        debug(AddToggle(parent, kSceneryInstancingConfigKey, gSceneryInstancing));
         debug(AddHeading(parent, "<size=80%>Switches for isolating a problem</size>"));
         debug(AddToggle(parent, kScreenArraysConfigKey, gScreenArrays));
+        debug(AddToggle(parent, kUprightReadsConfigKey, gUprightReads));
         debug(AddToggle(parent, kTranslateShadersConfigKey, gTranslateShaders));
         debug(AddToggle(parent, kDisableBeat0FilmgrainBlitConfigKey, gDisableBeat0FilmgrainBlit));
         debug(AddToggle(parent, kDisableCreateCameraDepthConfigKey, gDisableCreateCameraDepth));
@@ -1405,8 +1407,11 @@ bool GetPoolNoteReplacements() {
   return gPoolReplacements;
 }
 
+// "GPU Instancing For Scenery" was retired in naomi.10-beta.4 (VivifySettings.cpp,
+// kRemovedKeys): converted materials are never instanced. The code it switched
+// stays until the release cleanup; this keeps it off.
 bool GetSceneryGpuInstancing() {
-  return gSceneryInstancing;
+  return false;
 }
 
 bool GetCrashGuard() {
@@ -1423,6 +1428,10 @@ bool GetOffscreenCulling() {
 
 bool GetScreenTexturesAsArrays() {
   return gScreenArrays;
+}
+
+bool GetUprightScreenReads() {
+  return gUprightReads;
 }
 
 bool GetDetailedLogging() {

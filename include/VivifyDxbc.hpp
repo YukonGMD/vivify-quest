@@ -402,4 +402,56 @@ GlslResult TranslateToGlsl(Program const& program, GlslOptions const& options = 
 // Convenience: parse and translate in one step.
 GlslResult TranslateDxbcToGlsl(uint8_t const* data, size_t size, GlslOptions const& options = {});
 
+// The program with `reflection` applied the way TranslateToGlsl applies it
+// (unchanged if the program has reflection of its own).
+Program WithExternalReflection(Program const& program, ExternalReflection const& reflection);
+
+// Upright screen reads (naomi.10-beta.4).
+//
+// PC Beat Saber renders its eye textures as render targets, and under Direct3D
+// Unity draws into a render target with the projection flipped vertically and
+// _ProjectionParams.x = -1. A PC shader that reads the screen (a grab pass, the
+// depth texture) at a coordinate made from the clip-space position is written
+// for that: Unity's portable ComputeScreenPos multiplies the clip y by
+// _ProjectionParams.x once, which undoes the flip; ComputeGrabScreenPos instead
+// bakes Direct3D's "textures start at the top" in as a constant, which the flip
+// also makes right. On the Quest (OpenGL ES) nothing is flipped and
+// _ProjectionParams.x is +1, so a coordinate that went through an odd number of
+// _ProjectionParams.x factors still lands on the right row, and one that went
+// through an even number (none, as in ComputeGrabScreenPos, or two) reads the
+// screen upside down: Lifelike's water showed the top half of the view mirrored
+// into the bottom half.
+//
+// The plan follows every lane from the vertex stage's clip y through both
+// stages to each texture read in the fragment stage, counting
+// _ProjectionParams.x factors, and for each read that needs it picks one
+// multiplicative factor on its path -- a literal such as the -0.5 of
+// ComputeGrabScreenPos, or a _ProjectionParams.x operand -- whose sign flip
+// fixes that read and no read that was already right. The fixed coordinate is
+// then what PC computes, so offsets added to it (refraction, waves) keep their
+// direction, and a read that is deliberately mirrored on PC stays mirrored.
+// Anything the analysis cannot follow is left as it was.
+struct ScreenReadPlan {
+  struct Flip {
+    int stage = 0;           // 0 = vertex, 1 = fragment
+    size_t instruction = 0;  // index into Program::instructions
+    int operand = 0;
+    int component = 0;       // the immediate's component, for a literal
+    bool literal = false;    // false: toggle the operand's negate modifier
+  };
+  std::vector<Flip> flips;
+  int readsChecked = 0;    // fragment texture reads at screen coordinates
+  int readsFixed = 0;      // of those, made upright
+  int readsUnfixable = 0;  // upside down, but no safe place for the flip
+  std::string note;        // why the analysis stopped, when it did (diagnostics)
+  // Identifies the plan in a cache key; empty when there is nothing to flip.
+  std::string Signature() const;
+};
+
+// Both programs as TranslateToGlsl would see them (WithExternalReflection).
+ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& fragment);
+
+// Applies a plan's flips to copies of the two programs.
+void ApplyScreenReadPlan(ScreenReadPlan const& plan, Program& vertex, Program& fragment);
+
 }  // namespace Vivify::Dxbc

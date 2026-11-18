@@ -143,6 +143,9 @@ bool GetDetailedLogging();
 // Converted multiview programs read screen textures as two-layer arrays
 // (naomi.10-beta.2, Debug setting, on).
 bool GetScreenTexturesAsArrays();
+// Converted shaders read the screen the right way up where PC relies on its
+// flipped render targets (naomi.10-beta.4, Debug setting, on).
+bool GetUprightScreenReads();
 // Memory and heat for the per-section summary (naomi.10). Returns what was
 // last read and asks the log's writer thread to read again, so /proc and
 // /sys are never read on the calling thread. Negative (below -100 for

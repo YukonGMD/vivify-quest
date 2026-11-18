@@ -45,10 +45,10 @@ shaded before scenery covers it.
 **beta.1's test (2026-10-25, 16 plays of 12 maps):** no crash. Aether's
 sections at default settings: intro 33-42 ms, drop 9, ambient 33, bridge 22,
 outro 9. The intro's figure includes IntroBokeh, which costs about 9 ms of GPU
-time while it runs (GPU median 36 ms during it, 27 after). One play with
-scenery instancing on and stand-ins off ran ambient at 24 ms and buildup at 12
--- a lead for the measuring milestone, not a result (two settings changed at
-once). Logging cost 0.003-0.005 ms a frame for the black box and up to
+time while it runs (GPU median 36 ms during it, 27 after). (Corrected after beta.3's
+test: the one play with scenery instancing on, beta.1's 16:57 session, did not
+run faster. It stalled for 0.6-2 s a frame at 1:01-1:06, 1:20 and 2:35-3:12,
+as both of beta.3's plays did, and instancing was retired in beta.4.) Logging cost 0.003-0.005 ms a frame for the black box and up to
 0.015 ms for the session log with Debug Logging on; well under the 0.1 ms
 target.
 
@@ -182,6 +182,14 @@ worse than the previous beta by more than 5%; logging under 0.1 ms a frame;
 every change that alters the image behind a setting that is off.
 
 ## Milestones
+
+**Inserted after beta.3's test: beta.4 fixes the Aether freeze and Lifelike's
+mirrored water** (`0.14.25-naomi.10-beta.4`): "GPU Instancing For Scenery"
+(Debug, off by default, on in the tester's config) drew Aether's instanced
+scenery at 0.5-1.2 s of GPU time a frame and is retired; and screen reads a PC
+shader gets right only because PC renders upside down are made upright by the
+converter (Debug switch "Upright Screen Reads", on). Conversion version 25. If
+beta.4 tests clean, naomi.10 is released from it.
 
 **Inserted after beta.2's test: beta.3 fixes beta.2's two regressions**
 (`0.14.25-naomi.10-beta.3`): the white-view detector's readback call, which
