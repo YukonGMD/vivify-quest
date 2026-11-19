@@ -101,7 +101,7 @@ constexpr std::array kDefs = {
     Def{"uprightScreenReads", Bool, 1, 0, 1, 1, Debug, kIsolation, "Upright Screen Reads",
         "Converted shaders read the screen the right way up, as on PC. Off: the old reads. Reconverts."},
     Def{"uprightReadsProjectionSignOnly", Bool, 0, 0, 1, 1, Debug, kIsolation, "Upright Reads: Projection Sign Only",
-        "Test: Upright Screen Reads may only flip _ProjectionParams.x (the ComputeScreenPos step). Reconverts."},
+        "Test: Upright Screen Reads may only flip a _ProjectionParams.x sign, in either stage. Reconverts."},
     Def{"translateShadersOnConversion", Bool, 1, 0, 1, 1, Debug, kIsolation, "Translate Shaders On Conversion",
         "Off: converted maps keep no shaders of their own and draw as stand-ins. Reconvert after."},
     Def{"disableBeat0FilmgrainBlit", Bool, 0, 0, 1, 1, Debug, kIsolation, "Disable Beat 0 Filmgrain Blit",

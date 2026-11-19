@@ -108,9 +108,9 @@ files.
 
 | Menu name | Key | Default | What it does |
 |---|---|---|---|
-| Two-Eye Screen Textures | `screenTexturesAsArrays` | on | Converted shaders read the screen and the depth texture as the Quest's two-eye array, as Unity's own two-eye build does. New in naomi.10-beta.2: the fix for Blits that covered the view in white (743 Aether, Get Your Wish). Off puts back the old reads, for comparison. *Reconverts.* |
-| Upright Screen Reads | `uprightScreenReads` | on | PC renders its eye textures upside down (Direct3D render targets), and some PC shaders read the screen in a way that is only right because of that: Lifelike's water showed the top half of the view mirrored into the bottom half. Converted shaders read the screen the right way up, as on PC. New in naomi.10-beta.4. Off puts back the old reads, for comparison. *Reconverts.* |
-| Upright Reads: Projection Sign Only | `uprightReadsProjectionSignOnly` | off | A test of a narrower fix than Upright Screen Reads: it may only flip the sign of `_ProjectionParams.x` (Unity's ComputeScreenPos step), nothing else. On the tester's library it gives Lifelike's water the same picture as Upright Screen Reads, and leaves Through The Screen's particles and Before The Infinite Eclipse's black hole upside down, because their wrong row comes from a Direct3D constant Unity baked into the PC program. Only does anything with Upright Screen Reads on. New in naomi.10-beta.5. *Reconverts.* |
+| Two-Eye Screen Textures | `screenTexturesAsArrays` | on | Converted shaders read the screen and the depth texture as the Quest's two-eye array, as Unity's own two-eye build does. New in naomi.10-beta.2: the fix for Blits that covered the view in white (743 Aether, Get Your Wish). Off puts back the old reads, for comparison. These switches act on converted PC maps; PC shaders merged into a Quest map and the Blit Fix copy always use the defaults. *Reconverts.* |
+| Upright Screen Reads | `uprightScreenReads` | on | PC renders its eye textures upside down (Direct3D render targets), and some PC shaders read the screen in a way that is only right because of that: Lifelike's water showed the top half of the view mirrored into the bottom half. Converted shaders read the screen the right way up, as on PC. New in naomi.10-beta.4. Off puts back the old reads, for comparison. These switches act on converted PC maps; PC shaders merged into a Quest map and the Blit Fix copy always use the defaults. *Reconverts.* |
+| Upright Reads: Projection Sign Only | `uprightReadsProjectionSignOnly` | off | A test of a narrower fix than Upright Screen Reads: it may only flip the sign of a `_ProjectionParams.x` read, in either stage (the factor ComputeScreenPos and Clear Water's own conversion multiply by), nothing else. On the tester's library it gives Lifelike's water the same picture as Upright Screen Reads, and leaves Through The Screen's particles and Before The Infinite Eclipse's black hole upside down, because their wrong row comes from a Direct3D constant Unity baked into the PC program. Only does anything with Upright Screen Reads on. New in naomi.10-beta.5. These switches act on converted PC maps; PC shaders merged into a Quest map and the Blit Fix copy always use the defaults. *Reconverts.* |
 | Translate Shaders On Conversion | `translateShadersOnConversion` | on | Off: converted maps keep no shaders of their own and draw as stand-ins. Reconvert after changing it. |
 | Disable Beat 0 Filmgrain Blit | `disableBeat0FilmgrainBlit` | off | Skips a film-grain effect a map starts at beat 0. |
 | Disable CreateCamera Depth | `disableCreateCameraDepth` | off | Gives the cameras a map creates no depth texture. |
@@ -134,7 +134,7 @@ All three are dropped from the config file on the first launch of the build that
 
 ## What changed in naomi.10
 
-No default changed, and no setting behaves differently. The menu is in the
+No existing default changed (GPU Instancing For Scenery was removed in beta.4, above). The menu is in the
 three parts above, some names are plainer (the keys did not change), every
 control has a hover hint, and there is a reset-to-defaults button.
 
@@ -155,7 +155,7 @@ control has a hover hint, and there is a reset-to-defaults button.
 | Slow-Frame Sampler (diagnostics) | Slow-Frame Sampler (now under Debug) |
 | Debug logging | Debug Logging (now under Debug) |
 
-New in Debug: Detailed Logging. Moved to Debug: Debug Logging, Slow-Frame Sampler, Debug: Fixed Resolution %,
+New in Debug: Detailed Logging, Two-Eye Screen Textures (beta.2, on), Upright Screen Reads (beta.4, on) and Upright Reads: Projection Sign Only (beta.5, off); the two that are on change converted maps' screen reads to match PC. Moved to Debug: Debug Logging, Slow-Frame Sampler, Debug: Fixed Resolution %,
 Debug: Switch Off For A Cost Test, GPU Instancing For Scenery (removed again in
 beta.4, see above), Translate Shaders On Conversion, Disable Beat 0 Filmgrain Blit, Disable CreateCamera
 Depth and Disable VR Center Adjust Handling.

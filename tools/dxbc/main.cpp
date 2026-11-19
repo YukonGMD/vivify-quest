@@ -99,6 +99,8 @@ int main(int argc, char** argv) {
     std::cout << "fixed=" << plan.readsFixed << "\n";
     std::cout << "unfixable=" << plan.readsUnfixable << "\n";
     std::cout << "signature=" << plan.Signature() << "\n";
+    std::cout << "note=" << plan.note << "\n";
+    std::cout << "work=" << plan.work << "\n";
     Vivify::Dxbc::ApplyScreenReadPlan(plan, vertex, fragment);
     Vivify::Dxbc::GlslOptions options;
     options.multiview = true;

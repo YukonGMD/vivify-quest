@@ -359,11 +359,13 @@ void Runtime::LogCameraParams(UnityEngine::Camera* camera, std::string_view role
   if (!GetDetailedLogging() || _pauseMenuActive || _currentBeatmapData == nullptr || _cameraParamLines >= 8) return;
   if (!IsManagedAlive(camera)) return;
   float const now = CurrentSongTime();
-  std::string const name = ToStdString(camera->get_name());
-  std::string const key = std::string(role) + ":" + name;
+  // By the camera object and the role's first letter: no string is made on
+  // the frames that write nothing (review, beta.5).
+  auto const key = std::make_pair(reinterpret_cast<uintptr_t>(camera), role.empty() ? ' ' : role[0]);
   if (auto it = _cameraParamsLoggedAt.find(key); it != _cameraParamsLoggedAt.end() && now - it->second < 30.0f) return;
   _cameraParamsLoggedAt[key] = now;
   _cameraParamLines++;
+  std::string const name = ToStdString(camera->get_name());
   try {
     float const nearPlane = camera->get_nearClipPlane();
     float const farPlane = camera->get_farClipPlane();

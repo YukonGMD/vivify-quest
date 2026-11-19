@@ -529,10 +529,15 @@ BundleConversionOutcome RunBundleConversionUnclaimed(std::string const& source, 
   if (options.uprightScreenReads && conversion.screenReadsChecked > 0) {
     std::string shaders;
     for (auto const& shader : conversion.shadersWithUprightReads) shaders += (shaders.empty() ? "" : ", ") + shader;
+    // With the Projection Sign Only test on, a read left upside down may only
+    // be out of the test's reach, not without a safe fix (review, beta.5).
     PaperLogger.info("Vivify upright screen reads: {} of {} screen-coordinate texture read(s) made upright{}{}; {} "
-                     "left upside down for want of a safe fix",
+                     "left upside down {}",
                      conversion.screenReadsFixed, conversion.screenReadsChecked, shaders.empty() ? "" : " in ",
-                     shaders, conversion.screenReadsUnfixable);
+                     shaders, conversion.screenReadsUnfixable,
+                     options.uprightProjectionSignOnly
+                         ? "(Projection Sign Only test on: only _ProjectionParams.x signs were considered)"
+                         : "for want of a safe fix");
   }
   if (options.keepInstancingVariants) {
     PaperLogger.info("Vivify scenery instancing: {} GPU-instanced variant(s) translated", conversion.instancingVariantsLinked);
@@ -2985,9 +2990,8 @@ void Runtime::RepairMaterialShader(UnityEngine::Material* material, std::string_
   // every copy but one in the wrong place, pointing the wrong way. Single
   // notes, drawn through the plain variant, were right. With instancing off
   // every object is drawn on its own through that plain variant; notes are
-  // few enough that the extra draw calls cost little.
-  // With "GPU Instancing For Scenery" on, ApplySceneryInstancing decides per
-  // material after repair instead: scenery keeps it, notes and the like not.
+  // few enough that the extra draw calls cost little. ("GPU Instancing For
+  // Scenery", which let scenery keep it, was retired in naomi.10-beta.4.)
   if (_preloadedBundlePath.rfind(ConvertedBundleCacheDir(), 0) == 0 && material->get_enableInstancing() &&
       !GetSceneryGpuInstancing()) {
     material->set_enableInstancing(false);
@@ -3005,6 +3009,13 @@ void Runtime::RepairMaterialShader(UnityEngine::Material* material, std::string_
       if (graft != _graftedShaders.end() && IsAlive(graft->second) && graft->second != current) {
         material->set_shader(graft->second);
         _graftApplied++;
+        // The PC build's translated instanced variants are no more trustworthy
+        // here than in a converted bundle (naomi.10-beta.5, review): drawn one
+        // at a time instead, the same picture.
+        if (material->get_enableInstancing()) {
+          material->set_enableInstancing(false);
+          _instancingDisabledMaterials++;
+        }
         PaperLogger.info("Vivify: material '{}' now uses the PC build of '{}'", ToStdString(material->get_name()),
                          graft->first);
         _repairedMaterials.insert(material);

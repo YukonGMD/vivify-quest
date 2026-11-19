@@ -576,11 +576,13 @@ void Runtime::ResetRuntime(std::string_view reason) {
   SetSongPlaying(false);
   if (_perfActive) WritePerfSummary();
   EndPerformanceMode(false);  // the game's display settings back, whatever happened
-  ReleaseParticleBakes("");
   if (_currentBeatmapData != nullptr) {
     LogLeakCheck("level end, before Vivify tears down");
     _leakCheckDueAt = UnityEngine::Time::get_realtimeSinceStartup() + 3.0f;
   }
+  // After the check, so it counts the bakes held (naomi.10-beta.5); Destroy
+  // is deferred to the end of the frame, so the object counts are the same.
+  ReleaseParticleBakes("");
   // Written before anything is torn down, while the numbers are still valid.
   // The song position is included rather than a guess at "quit" vs "beaten":
   // by the time this runs the AudioTimeSyncController is usually already gone,

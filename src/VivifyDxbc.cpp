@@ -1,5 +1,6 @@
 #include "VivifyDxbc.hpp"
 
+#include <bit>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -4969,8 +4970,10 @@ class ScreenSide {
       bool const relative = operand.indices.size() >= 2 && operand.indices[1].hasRelative;
       if (variable != nullptr && !relative && variable->name == "_ProjectionParams" && within == 0) {
         value = Constant(_pc ? -1.0 : 1.0);
-      } else if (variable != nullptr && variable->name.size() > 11 &&
-                 variable->name.compare(variable->name.size() - 11, 11, "_TexelSize") == 0 && within == 4) {
+      } else if (variable != nullptr && variable->name.size() > 10 &&
+                 variable->name.compare(variable->name.size() - 10, 10, "_TexelSize") == 0 && within == 4) {
+        // (beta.4 compared 11 characters with the 10 of "_TexelSize", so this
+        // never matched: review, beta.5.)
         value.unknown = true;  // a texel size's y can differ in sign between PC and the Quest
       } else {
         uint64_t id = Mix(HashText("cb"), operand.indices.empty() ? 0 : operand.indices[0].immediate);
@@ -5016,8 +5019,11 @@ class ScreenSide {
   using Registers = std::map<std::pair<uint32_t, uint64_t>, std::array<std::optional<ScreenPoly>, 4>>;
 
   // A branch's two paths become one state: a lane the paths disagree on is a
-  // symbol of both values, equal on the two sides only if both paths are.
-  Registers Merge(Registers const& a, Registers const& b, uint64_t tag) {
+  // symbol of the condition and both values, equal on the two sides only if
+  // the condition and both paths are. (Without the condition, a read a shader
+  // already makes right on both platforms with `if (_ProjectionParams.x < 0)`
+  // looked upside down and was "fixed" into a wrong one: review, beta.5.)
+  Registers Merge(Registers const& a, Registers const& b, uint64_t tag, ScreenPoly const* condition) {
     Registers merged = a;
     for (auto const& [key, lanes] : b) merged[key];
     for (auto& [key, lanes] : merged) {
@@ -5033,6 +5039,8 @@ class ScreenSide {
           ScreenPoly both = x;
           MergeDeps(both.deps, z.deps);
           lanes[c] = std::move(both);
+        } else if (condition != nullptr) {
+          lanes[c] = FunctionOf(tag, {condition, &x, &z});
         } else {
           lanes[c] = FunctionOf(tag, {&x, &z});
         }
@@ -5047,6 +5055,7 @@ class ScreenSide {
     bool inElse = false;
     bool caseOpen = false;  // a switch: a case body has started
     bool anyCase = false;   // a switch: `merged` holds at least one finished path
+    std::optional<ScreenPoly> condition;  // an if's condition, a switch's selector
     Registers before;
     Registers thenPath;
     Registers merged;
@@ -5078,6 +5087,8 @@ class ScreenSide {
     switch (instruction.opcode) {
       case OP_IF: {
         Frame frame;
+        // Read before the body runs: the body may write that register.
+        if (!instruction.operands.empty()) frame.condition = Read(program, instruction, 0, 0);
         frame.before = _registers;
         _frames.push_back(std::move(frame));
         return true;
@@ -5093,7 +5104,9 @@ class ScreenSide {
         if (!_frames.empty() && !_frames.back().loop && !_frames.back().isSwitch) {
           Frame frame = std::move(_frames.back());
           _frames.pop_back();
-          _registers = frame.inElse ? Merge(frame.thenPath, _registers, tag) : Merge(frame.before, _registers, tag);
+          ScreenPoly const* condition = frame.condition ? &*frame.condition : nullptr;
+          _registers = frame.inElse ? Merge(frame.thenPath, _registers, tag, condition)
+                                    : Merge(frame.before, _registers, tag, condition);
         }
         return true;
       case OP_LOOP: {
@@ -5116,6 +5129,7 @@ class ScreenSide {
         // merged at its end, as a branch's two are.
         Frame frame;
         frame.isSwitch = true;
+        if (!instruction.operands.empty()) frame.condition = Read(program, instruction, 0, 0);
         frame.before = _registers;
         _frames.push_back(std::move(frame));
         return true;
@@ -5124,7 +5138,9 @@ class ScreenSide {
         if (!_frames.empty() && _frames.back().isSwitch) {
           Frame& frame = _frames.back();
           if (frame.caseOpen) {
-            frame.merged = frame.anyCase ? Merge(frame.merged, _registers, tag) : _registers;
+            frame.merged = frame.anyCase
+                               ? Merge(frame.merged, _registers, tag, frame.condition ? &*frame.condition : nullptr)
+                               : _registers;
             frame.anyCase = true;
           }
           frame.caseOpen = true;
@@ -5136,7 +5152,9 @@ class ScreenSide {
           Frame frame = std::move(_frames.back());
           _frames.pop_back();
           Registers last = frame.caseOpen ? _registers : frame.before;
-          _registers = frame.anyCase ? Merge(frame.merged, last, tag) : Merge(frame.before, last, tag);
+          ScreenPoly const* condition = frame.condition ? &*frame.condition : nullptr;
+          _registers = frame.anyCase ? Merge(frame.merged, last, tag, condition)
+                                     : Merge(frame.before, last, tag, condition);
         }
         return true;
       default:
@@ -5151,7 +5169,15 @@ class ScreenSide {
     size_t const count = instruction.operands.size();
 
     if (_stage == 1 && IsSampleOpcode(opcode) && count >= 2) {
-      _reads.emplace_back(_index, Read(program, instruction, 1, 1));
+      // A read inside branches is also a symbol of their conditions: one the
+      // sides decide differently (_ProjectionParams.x, a texel size's y) is
+      // not the same read on both, and is left alone (review, beta.5).
+      ScreenPoly read = Read(program, instruction, 1, 1);
+      for (auto const& frame : _frames) {
+        if (!frame.condition) continue;
+        read = FunctionOf(HashText("guarded"), {&*frame.condition, &read});
+      }
+      _reads.emplace_back(_index, std::move(read));
     }
 
     Operand const& dest = instruction.operands[0];
@@ -5305,6 +5331,10 @@ std::string ScreenReadPlan::Signature() const {
   return text;
 }
 
+// The flip search's budget, in instructions evaluated over all trials: about
+// 0.6 s on a desktop at -O1. The tester's 28-map library needs at most 404.
+constexpr size_t kScreenPlanWorkBudget = 200000;
+
 ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& fragment, ScreenReadScope scope) {
   ScreenReadPlan plan;
   if (!vertex.ok || !fragment.ok || vertex.stage != Stage::Vertex || fragment.stage != Stage::Pixel) return plan;
@@ -5389,17 +5419,26 @@ ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& frag
           projection = projection || isX;
           other = other || !isX;
         }
-        if (projection && !other) candidates.push_back({stage, index, static_cast<int>(k), 0, false});
+        if (projection && !other && std::popcount(instruction.operands[0].mask & 0xFu) == 1) {
+          candidates.push_back({stage, index, static_cast<int>(k), 0, false});
+        }
         continue;
       }
+      // Only a flip that changes one written lane (review, beta.5): a read's
+      // u is not compared, so negating a whole `xy / w` made a read mirrored
+      // left to right instead of upside down, and called it upright.
       if (operand.type == kOperandImmediate32) {
-        std::set<int> used;
+        std::map<int, int> lanesUsing;
         for (int lane = 0; lane < 4; lane++) {
-          if (instruction.operands[0].mask & (1u << lane)) used.insert(SourceComponent(operand, lane));
+          if (instruction.operands[0].mask & (1u << lane)) lanesUsing[SourceComponent(operand, lane)]++;
         }
-        for (int component : used) candidates.push_back({stage, index, static_cast<int>(k), component, true});
+        for (auto const& [component, lanes] : lanesUsing) {
+          if (lanes == 1) candidates.push_back({stage, index, static_cast<int>(k), component, true});
+        }
       } else if (IsTrackedRegister(operand) || operand.type == kOperandConstantBuffer) {
-        candidates.push_back({stage, index, static_cast<int>(k), 0, false});
+        if (std::popcount(instruction.operands[0].mask & 0xFu) == 1) {
+          candidates.push_back({stage, index, static_cast<int>(k), 0, false});
+        }
       }
     }
   }
@@ -5414,7 +5453,18 @@ ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& frag
   std::vector<ScreenReadPlan::Flip> flips;
   auto const baselineOutputs = quest.VertexOutputs();
   int const upsideDown = remaining;
-  for (int round = 0; round < 4 && remaining > 0; round++) {
+  // A work budget, in instructions evaluated (review, beta.5): each trial runs
+  // the fragment stage again (both for a vertex flip), so a long shader with a
+  // read that only an early flip fixes took tens of seconds on a desktop, and
+  // the play button waits for the conversion. Deterministic, so a conversion
+  // comes out the same on the headset and in the host tests. When it runs
+  // out, the flips chosen so far stay (each was checked) and the rest of the
+  // reads are left as they were.
+  size_t const vertexWork = vertex.instructions.size();
+  size_t const fragmentWork = fragment.instructions.size();
+  size_t work = 0;
+  bool spent = false;
+  for (int round = 0; round < 4 && remaining > 0 && !spent; round++) {
     // A flip must fix more than the flips chosen so far already do.
     int bestFixed = plan.readsFixed;
     std::optional<ScreenFlipKey> best;
@@ -5424,6 +5474,12 @@ ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& frag
       trial.insert(candidate);
       bool const vertexFlipped =
           std::any_of(trial.begin(), trial.end(), [](ScreenFlipKey const& flip) { return flip.stage == 0; });
+      size_t const cost = vertexFlipped ? vertexWork + fragmentWork : fragmentWork;
+      if (work + cost > kScreenPlanWorkBudget) {
+        spent = true;
+        break;
+      }
+      work += cost;
       ScreenSide side(vertex, fragment, false, trial, clipRegister, clipComponent, computed);
       if (vertexFlipped) {
         side.Run();
@@ -5478,6 +5534,8 @@ ScreenReadPlan PlanUprightScreenReads(Program const& vertex, Program const& frag
     plan.readsFixed = fixedNow;
   }
   plan.readsUnfixable = remaining;
+  if (spent) plan.note += "; search budget spent";
+  plan.work = work;
   return plan;
 }
 

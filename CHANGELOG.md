@@ -248,9 +248,9 @@ says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
   be rebuilt keeps its grey stand-in, and the log says why. Changing the
   setting reconverts converted maps.
 - **GPU Instancing For Scenery** (naomi.5, setting, experimental, off by
-  default). A converted map's scenery keeps its GPU instancing, as on PC;
-  notes, debris, sabers and trails keep it off. Changing it reconverts
-  converted maps.
+  default; **removed in naomi.10-beta.4**, see Fixed: it froze 743 Aether).
+  A converted map's scenery kept its GPU instancing, as on PC; notes,
+  debris, sabers and trails kept it off.
 - **Reuse Note And Debris Copies** (naomi.5, setting, on by default). Custom
   notes' and cut debris' replacement copies are kept and reused, fully reset,
   instead of being made fresh for every note.
@@ -268,7 +268,7 @@ says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
   few times a level. Off with Detailed Logging off.
 - **"Upright Reads: Projection Sign Only"** (naomi.10-beta.5, Debug, off): a
   test of a narrower fix than Upright Screen Reads, which may then flip only
-  `_ProjectionParams.x` signs (the ComputeScreenPos step). On the 28-map
+  `_ProjectionParams.x` signs, in either stage. On the 28-map
   library it gives Lifelike's water the same result and leaves the two
   grab-pass shaders upside down (their wrong row is a Direct3D constant
   baked into the PC program); no other shader changes either way. Host tests
@@ -288,6 +288,22 @@ says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
   the bad time comes from is not known yet; the first five gaps over 10 s are
   logged with the values (`Vivify saber trail: the game's trail would have
   added ...`).
+- **Upright Screen Reads made safer** (naomi.10-beta.5, from an independent
+  review of beta.4). The planner could put a sign flip where it also negated
+  a read's u (a hand-written `xy / w` grab coordinate would have come out
+  mirrored left to right and been counted as made upright); it did not
+  account for branches, so a read a shader already corrects itself with `if
+  (_ProjectionParams.x < 0)` would have been "fixed" into a wrong one; its
+  guard for a texture's `_TexelSize.y` never matched (it compared 11
+  characters with a 10-character name); and its search had no limit, so a
+  long shader could hold a conversion for many seconds. Flips now change one
+  lane only, branch conditions count, the guard works, and the search stops
+  at a fixed budget and leaves the pair as it was. None of the tester's 28
+  maps is affected: every converted shader comes out byte for byte the same.
+  Host tests for each case.
+- **Grafted PC shaders kept GPU instancing** (naomi.10-beta.5, review). A
+  Quest map's empty shader stood in by its PC build now has instancing
+  turned off like converted bundles' materials (same picture).
 - **743 Aether's particle effects drew nothing with "Stand-Ins For
   Unsupported Shaders" off** (naomi.10-beta.5). naomi.8's particle emulation,
   which bakes still mesh particles so geometry-shader effects draw on them,

@@ -8,6 +8,7 @@ the corruption pass matters as much as the happy path.
   python3 tools/dxbc/run_tests.py [path-to-dxbctool-binary]
 """
 import os
+import time
 import random
 import re
 import shutil
@@ -1141,8 +1142,17 @@ proc, fields, sources = screen_plan("portable", "silent")
 check("screen plan: Clear Water's grab conversion is fixed in the fragment stage",
       fields.get("checked") == "2" and fields.get("fixed") == "1" and fields.get("unfixable") == "0" and
       fields.get("signature", "").startswith("f") and fields.get("signature", "").count(";") == 1, str(fields))
-check("screen plan: the depth read beside it is left alone",
-      len(sources) == 2 and "texture(_CameraDepthTexture" in sources[1], sources[1] if len(sources) == 2 else "")
+# The depth read beside it is right already. Flipping the vertex stage's
+# ComputeScreenPos factor would fix the grab read and break that one, so the
+# plan must not touch the vertex stage, and the depth coordinate must stay the
+# plain xy / w it was (review, beta.5: the old check only looked for a read).
+_, _, plain_sources = screen_plan("portable", "plain")
+check("screen plan: no read that was right is broken (no vertex flip; depth coordinate unchanged)",
+      len(sources) == 2 and len(plain_sources) == 2 and "v" not in fields.get("signature", "") and
+      sources[0] == plain_sources[0] and
+      [l for l in sources[1].splitlines() if "_CameraDepthTexture" in l] ==
+      [l for l in plain_sources[1].splitlines() if "_CameraDepthTexture" in l],
+      str(fields) + (sources[1] if len(sources) == 2 else ""))
 
 proc, fields, sources = screen_plan("portable", "mirror")
 check("screen plan: a read mirrored on PC stays mirrored",
@@ -1157,7 +1167,7 @@ if GLSLANG is not None and not os.environ.get("VIVIFY_SKIP_GLSLANG"):
 
 # naomi.10-beta.5: the narrower fix a tester's friend proposed, as a Debug test
 # ("Upright Reads: Projection Sign Only"): only a _ProjectionParams.x sign may
-# be flipped -- the ComputeScreenPos step. It gives Clear Water's conversion the
+# be flipped, in either stage. It gives Clear Water's conversion the
 # same coordinate (the other factor of the same product), and cannot reach a
 # row that is wrong because of the constant Direct3D bakes into
 # ComputeGrabScreenPos (Mochie's particles, You/BlackHole in the library).
@@ -1180,6 +1190,116 @@ check("projection-sign-only plan: ComputeScreenPos reads stay as they are",
 proc, fields, sources = screen_plan("portable", "mirror", projection_only=True)
 check("projection-sign-only plan: a read mirrored on PC stays mirrored",
       fields.get("fixed") == "0" and fields.get("signature") == "", str(fields))
+
+# naomi.10-beta.5 review: cases the planner got wrong in beta.4, found by the
+# independent review with these same fixtures. The vertex stage copies the
+# clip position; the fragment stage builds the screen coordinate itself.
+def copy_vertex():
+    isgn = m.signature_chunk([{"name": "POSITION", "index": 0, "register": 0}], b"ISGN")
+    osgn = m.signature_chunk([{"name": "SV_POSITION", "index": 0, "register": 0, "sv": 1, "rw_mask": 0},
+                              {"name": "TEXCOORD", "index": 1, "register": 1, "rw_mask": 0}], b"OSGN")
+    rdef = globals_cbuffer([variable("unity_MatrixVP", 0, 64, MATRIX4),
+                            variable("_ProjectionParams", 64, 16, VECTOR4)], 80)
+    code = m.insn(DCL_CONSTANT_BUFFER, m.src_cb(0, 5))
+    code += m.insn(DCL_INPUT, m.dest(INPUT, 0))
+    code += m.insn(DCL_OUTPUT_SIV, m.dest(OUTPUT, 0), extra=[1])
+    code += m.insn(DCL_OUTPUT, m.dest(OUTPUT, 1))
+    code += m.insn(DCL_TEMPS, extra=[1])
+    code += m.insn(MUL, m.dest(TEMP, 0), m.src(INPUT, 0, (X, X, X, X)), m.src_cb(0, 0))
+    code += m.insn(MAD, m.dest(TEMP, 0), m.src(INPUT, 0, (Y, Y, Y, Y)), m.src_cb(0, 1), m.src(TEMP, 0))
+    code += m.insn(MAD, m.dest(TEMP, 0), m.src(INPUT, 0, (Z, Z, Z, Z)), m.src_cb(0, 2), m.src(TEMP, 0))
+    code += m.insn(ADD, m.dest(TEMP, 0), m.src(TEMP, 0), m.src_cb(0, 3))
+    code += m.insn(MOV, m.dest(OUTPUT, 0), m.src(TEMP, 0))
+    code += m.insn(MOV, m.dest(OUTPUT, 1), m.src(TEMP, 0))
+    code += m.insn(RET)
+    return m.container([rdef, isgn, osgn, m.shex_chunk([code], stage=1)])
+
+
+def body_fragment(body, extra_vars=()):
+    isgn = m.signature_chunk([{"name": "TEXCOORD", "index": 1, "register": 0, "rw_mask": 0xB}], b"ISGN")
+    osgn = m.signature_chunk([{"name": "SV_Target", "index": 0, "register": 0, "rw_mask": 0}], b"OSGN")
+    variables = [variable("_ProjectionParams", 0, 16, VECTOR4)] + list(extra_vars)
+    rdef = rdef_with_texture(variables, 16 * (1 + len(extra_vars)), [("_GrabTexture", 4)])
+    code = m.insn(DCL_CONSTANT_BUFFER, m.src_cb(0, 1 + len(extra_vars)))
+    code += m.insn(DCL_SAMPLER, m.dest(SAMPLER_T, 0))
+    code += m.insn(DCL_RESOURCE, m.dest(RESOURCE, 0), extra=[0x5555])
+    code += m.insn(DCL_INPUT_PS, m.dest(INPUT, 0), controls=(2 << 0))
+    code += m.insn(DCL_OUTPUT, m.dest(OUTPUT, 0))
+    code += m.insn(DCL_TEMPS, extra=[4])
+    code += body
+    code += m.insn(SAMPLE, m.dest(TEMP, 2), m.src(TEMP, 1, (X, Y, X, X)), m.src(RESOURCE, 0), m.src(SAMPLER_T, 0))
+    code += m.insn(MOV, m.dest(OUTPUT, 0), m.src(TEMP, 2))
+    code += m.insn(RET)
+    return m.container([rdef, isgn, osgn, m.shex_chunk([code], stage=0)])
+
+
+def plan_pair(name, vertex_blob, fragment_blob):
+    vs_path = os.path.join(tmpdir, name + "-vs.dxbc")
+    fs_path = os.path.join(tmpdir, name + "-fs.dxbc")
+    with open(vs_path, "wb") as handle:
+        handle.write(vertex_blob)
+    with open(fs_path, "wb") as handle:
+        handle.write(fragment_blob)
+    env = dict(os.environ)
+    env.pop("VIVIFY_UPRIGHT_PROJECTION_ONLY", None)
+    proc = subprocess.run([BINARY, "screenplan", vs_path, fs_path], capture_output=True, timeout=120, env=env)
+    head = proc.stdout.decode("utf-8", errors="replace").split("---\n", 1)[0]
+    return dict(line.partition("=")[::2] for line in head.splitlines())
+
+
+def grab_uv(split):
+    """uv = clip.xy / w * (0.5, -0.5) + 0.5, with UNITY_UV_STARTS_AT_TOP folded in."""
+    if split:
+        code = m.insn(DIV, m.dest(TEMP, 1, 0x1), m.src(INPUT, 0, (X, X, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+        code += m.insn(DIV, m.dest(TEMP, 1, 0x2), m.src(INPUT, 0, (Y, Y, Y, Y)), m.src(INPUT, 0, (W, W, W, W)))
+    else:
+        code = m.insn(DIV, m.dest(TEMP, 1, 0x3), m.src(INPUT, 0, (X, Y, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+    code += m.insn(MAD, m.dest(TEMP, 1, 0x3), m.src(TEMP, 1, (X, Y, X, X)), m.imm_float(0.5, -0.5, 0, 0),
+                   m.imm_float(0.5, 0.5, 0, 0))
+    return code
+
+
+fields = plan_pair("xy-div", copy_vertex(), body_fragment(grab_uv(split=False)))
+check("screen plan: a sign flip is never put where it also negates another lane (u would mirror left-right)",
+      fields.get("fixed") == "0" and fields.get("unfixable") == "1" and fields.get("signature") == "", str(fields))
+fields = plan_pair("split-div", copy_vertex(), body_fragment(grab_uv(split=True)))
+check("screen plan: the same read with y divided on its own is fixed with a one-lane flip",
+      fields.get("fixed") == "1" and fields.get("signature") == "f7.1M;", str(fields))
+
+
+def branchy(row, component):
+    """uv = clip.xy / w * 0.5 + 0.5; if (cb0[row].<component> < 0) uv.y = 1 - uv.y."""
+    code = m.insn(DIV, m.dest(TEMP, 1, 0x1), m.src(INPUT, 0, (X, X, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+    code += m.insn(DIV, m.dest(TEMP, 1, 0x2), m.src(INPUT, 0, (Y, Y, Y, Y)), m.src(INPUT, 0, (W, W, W, W)))
+    code += m.insn(MAD, m.dest(TEMP, 1, 0x3), m.src(TEMP, 1, (X, Y, X, X)), m.imm_float(0.5, 0.5, 0.5, 0.5),
+                   m.imm_float(0.5, 0.5, 0.5, 0.5))
+    code += m.insn(LT, m.dest(TEMP, 0, 0x1), m.src_cb(0, row, (component,) * 4), m.imm_float(0, 0, 0, 0))
+    code += m.insn(IF, m.src(TEMP, 0, (X, X, X, X)), controls=(1 << 7))
+    code += m.insn(ADD, m.dest(TEMP, 1, 0x2), m.src(TEMP, 1, (Y, Y, Y, Y), modifier=m.MOD_NEG), m.imm_float(1, 1, 1, 1))
+    code += m.insn(ENDIF)
+    return code
+
+
+fields = plan_pair("projection-if", copy_vertex(), body_fragment(branchy(0, X)))
+check("screen plan: a read the shader itself corrects with `if (_ProjectionParams.x < 0)` is left as it is",
+      fields.get("fixed") == "0" and fields.get("signature") == "", str(fields))
+fields = plan_pair("texel-if", copy_vertex(),
+                   body_fragment(branchy(1, Y), extra_vars=[variable("_GrabTexture_TexelSize", 16, 16, VECTOR4)]))
+check("screen plan: so is one corrected with `if (_GrabTexture_TexelSize.y < 0)` (a texel size's y is unknown)",
+      fields.get("fixed") == "0" and fields.get("signature") == "", str(fields))
+
+# The search has a work budget: a read only a vertex flip can fix, behind a
+# long chain of fragment instructions, gives up instead of searching for
+# seconds, and is left as it was.
+chain = m.insn(DIV, m.dest(TEMP, 1, 0x3), m.src(INPUT, 0, (X, Y, X, X)), m.src(INPUT, 0, (W, W, W, W)))
+for _ in range(400):
+    chain += m.insn(MAD, m.dest(TEMP, 1, 0x2), m.src(TEMP, 1, (Y, Y, Y, Y)), m.src_cb(0, 1, (X, X, X, X)),
+                    m.src_cb(0, 1, (Y, Y, Y, Y)))
+started = time.time()
+fields = plan_pair("budget", screen_vertex("grab"), body_fragment(chain, extra_vars=[variable("_K", 16, 16, VECTOR4)]))
+check("screen plan: the flip search stops at its budget and leaves the pair as it was",
+      "search budget spent" in fields.get("note", "") and fields.get("fixed") == "0" and
+      int(fields.get("work", "0")) <= 200000 and time.time() - started < 30, str(fields))
 
 glslang_enabled = False
 truncation_failures = 0

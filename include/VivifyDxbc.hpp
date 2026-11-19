@@ -427,10 +427,15 @@ Program WithExternalReflection(Program const& program, ExternalReflection const&
 // _ProjectionParams.x factors, and for each read that needs it picks one
 // multiplicative factor on its path -- a literal such as the -0.5 of
 // ComputeGrabScreenPos, or a _ProjectionParams.x operand -- whose sign flip
-// fixes that read and no read that was already right. The fixed coordinate is
-// then what PC computes, so offsets added to it (refraction, waves) keep their
-// direction, and a read that is deliberately mirrored on PC stays mirrored.
-// Anything the analysis cannot follow is left as it was.
+// fixes that read and no read that was already right. Only a flip that changes
+// one written lane is used (a read's u is not compared), branch conditions and
+// a read's enclosing branches count (a read a shader corrects itself with
+// `if (_ProjectionParams.x < 0)` is right already), and the search has a work
+// budget (naomi.10-beta.5, from an independent review). The fixed v is then
+// what PC computes, so offsets added to it (refraction, waves) keep their
+// direction (except offsets built from the projection matrix), and a read that
+// is deliberately mirrored on PC stays mirrored. Anything the analysis cannot
+// follow is left as it was.
 struct ScreenReadPlan {
   struct Flip {
     int stage = 0;           // 0 = vertex, 1 = fragment
@@ -443,6 +448,7 @@ struct ScreenReadPlan {
   int readsChecked = 0;    // fragment texture reads at screen coordinates
   int readsFixed = 0;      // of those, made upright
   int readsUnfixable = 0;  // upside down, but no safe place for the flip
+  size_t work = 0;         // instructions evaluated by the search (diagnostics)
   std::string note;        // why the analysis stopped, when it did (diagnostics)
   // Identifies the plan in a cache key; empty when there is nothing to flip.
   std::string Signature() const;
@@ -452,7 +458,8 @@ struct ScreenReadPlan {
 // Where the plan may put its flips. Any: every literal and operand sign on a
 // read's path (beta.4, the default). ProjectionSignOnly (naomi.10-beta.5, a
 // Debug test of a narrower fix): only the sign of a _ProjectionParams.x
-// operand, in either stage -- the ComputeScreenPos step -- so a shader whose
+// operand, in either stage (ComputeScreenPos's factor, or one a shader applies
+// itself, as Clear Water does in its fragment stage) -- so a shader whose
 // wrong row comes from a constant Unity baked in for Direct3D (the -0.5 of
 // ComputeGrabScreenPos) is left as it was.
 enum class ScreenReadScope { Any, ProjectionSignOnly };

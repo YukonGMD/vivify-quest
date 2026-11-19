@@ -1772,9 +1772,13 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
   // it renders upside down, both programs translated with the plan's sign
   // flips. nullptr when the pair needs none (or cannot be planned), and the
   // plain translations are used.
-  std::set<std::tuple<uint32_t, uint32_t, bool>> uprightTried;
-  std::map<std::tuple<uint32_t, uint32_t, bool>, std::pair<Vivify::Dxbc::GlslResult, Vivify::Dxbc::GlslResult>>
-      uprightLinked;
+  // Keyed by both blobs and both stages' multiview flags (review, beta.5).
+  using UprightKey = std::tuple<uint32_t, uint32_t, bool, bool>;
+  std::set<UprightKey> uprightTried;
+  std::map<UprightKey, std::pair<Vivify::Dxbc::GlslResult, Vivify::Dxbc::GlslResult>> uprightLinked;
+  // The plan depends only on the two programs, not on how they are translated:
+  // one search serves the plain and the multiview variants (review, beta.5).
+  std::map<std::pair<uint32_t, uint32_t>, Vivify::Dxbc::ScreenReadPlan> uprightPlans;
   auto parsed = [&](ParsedProgramRef const& ref, Vivify::Dxbc::Program& program) {
     auto at = entryAt.find(ref.blobIndex);
     if (at == entryAt.end()) return false;
@@ -1788,34 +1792,52 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
   auto uprightPair = [&](ParsedProgramRef const& vertexRef, ParsedProgramRef const& fragmentRef)
       -> std::pair<Vivify::Dxbc::GlslResult, Vivify::Dxbc::GlslResult> const* {
     bool const multiview = multiviewRef[indexOf(vertexRef)];
-    auto const key = std::make_tuple(vertexRef.blobIndex, fragmentRef.blobIndex, multiview);
+    bool const fragmentMultiview = multiviewRef[indexOf(fragmentRef)];
+    auto const key = std::make_tuple(vertexRef.blobIndex, fragmentRef.blobIndex, multiview, fragmentMultiview);
     if (auto done = uprightLinked.find(key); done != uprightLinked.end()) return &done->second;
     if (!uprightTried.insert(key).second) return nullptr;
     Vivify::Dxbc::Program vertexProgram;
     Vivify::Dxbc::Program fragmentProgram;
     if (!parsed(vertexRef, vertexProgram) || !parsed(fragmentRef, fragmentProgram)) return nullptr;
-    auto const plan = Vivify::Dxbc::PlanUprightScreenReads(
-        vertexProgram, fragmentProgram,
-        conversionOptions.uprightProjectionSignOnly ? Vivify::Dxbc::ScreenReadScope::ProjectionSignOnly
-                                                    : Vivify::Dxbc::ScreenReadScope::Any);
-    if (std::getenv("VIVIFY_DEBUG_UPRIGHT") != nullptr) {
-      std::fprintf(stderr, "upright: %s vs=%u fs=%u: %s; flips %s\n", shader.name.c_str(), vertexRef.blobIndex,
-                   fragmentRef.blobIndex, plan.note.c_str(), plan.Signature().c_str());
+    auto const planKey = std::make_pair(vertexRef.blobIndex, fragmentRef.blobIndex);
+    auto planned = uprightPlans.find(planKey);
+    if (planned == uprightPlans.end()) {
+      planned = uprightPlans
+                    .emplace(planKey, Vivify::Dxbc::PlanUprightScreenReads(
+                                          vertexProgram, fragmentProgram,
+                                          conversionOptions.uprightProjectionSignOnly
+                                              ? Vivify::Dxbc::ScreenReadScope::ProjectionSignOnly
+                                              : Vivify::Dxbc::ScreenReadScope::Any))
+                    .first;
     }
-    out.screenReadsChecked += plan.readsChecked;
-    out.screenReadsUnfixable += plan.readsUnfixable;
-    if (plan.flips.empty()) return nullptr;
+    auto const& plan = planned->second;
+    if (std::getenv("VIVIFY_DEBUG_UPRIGHT") != nullptr) {
+      std::fprintf(stderr, "upright: %s vs=%u fs=%u: %s; work %zu; flips %s\n", shader.name.c_str(),
+                   vertexRef.blobIndex, fragmentRef.blobIndex, plan.note.c_str(), plan.work, plan.Signature().c_str());
+    }
+    if (plan.flips.empty()) {
+      out.screenReadsChecked += plan.readsChecked;
+      out.screenReadsUnfixable += plan.readsUnfixable;
+      return nullptr;
+    }
     Vivify::Dxbc::ApplyScreenReadPlan(plan, vertexProgram, fragmentProgram);
     Vivify::Dxbc::GlslOptions options;
     options.multiview = multiview;
     options.screenTexturesAsArrays = conversionOptions.screenTexturesAsArrays;
     auto vertexResult = Vivify::Dxbc::TranslateToGlsl(vertexProgram, options);
-    options.multiview = multiviewRef[indexOf(fragmentRef)];
+    options.multiview = fragmentMultiview;
     auto fragmentResult = Vivify::Dxbc::TranslateToGlsl(fragmentProgram, options);
     if (!vertexResult.ok || !fragmentResult.ok) {
-      out.variantReasons.insert("upright screen reads: " + (vertexResult.ok ? fragmentResult.error : vertexResult.error));
+      // The plain translations are used instead, so this is no variant left
+      // on DirectX; its reads are not counted (review, beta.5).
+      if (std::getenv("VIVIFY_DEBUG_UPRIGHT") != nullptr) {
+        std::fprintf(stderr, "upright: %s: the flipped pair did not translate: %s\n", shader.name.c_str(),
+                     (vertexResult.ok ? fragmentResult.error : vertexResult.error).c_str());
+      }
       return nullptr;
     }
+    out.screenReadsChecked += plan.readsChecked;
+    out.screenReadsUnfixable += plan.readsUnfixable;
     out.screenReadsFixed += plan.readsFixed;
     out.programsTranslated += 2;
     return &(uprightLinked[key] = std::make_pair(std::move(vertexResult), std::move(fragmentResult)));
@@ -2298,10 +2320,14 @@ ShaderConversion ConvertShadersToGles(std::string const& sourcePath,
         conversion.geometryStagesDropped += linked.geometryDropped;
         conversion.geometryStagesEmulated += linked.geometryEmulated;
         conversion.instancingVariantsLinked += linked.instancingVariantsLinked;
-        conversion.screenReadsChecked += linked.screenReadsChecked;
-        conversion.screenReadsFixed += linked.screenReadsFixed;
-        conversion.screenReadsUnfixable += linked.screenReadsUnfixable;
-        if (linked.screenReadsFixed > 0) conversion.shadersWithUprightReads.push_back(shader.name);
+        // Only for a shader that was converted: a refused one keeps its PC
+        // programs, flipped reads and all unused (review, beta.5).
+        if (linked.converted) {
+          conversion.screenReadsChecked += linked.screenReadsChecked;
+          conversion.screenReadsFixed += linked.screenReadsFixed;
+          conversion.screenReadsUnfixable += linked.screenReadsUnfixable;
+          if (linked.screenReadsFixed > 0) conversion.shadersWithUprightReads.push_back(shader.name);
+        }
         if (options.keepInstancingVariants && linked.converted && !linked.hasInstancingVariant) {
           conversion.shadersWithoutInstancing.push_back(shader.name);
         }

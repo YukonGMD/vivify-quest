@@ -177,14 +177,17 @@ void FollowedSaberTrail::LimitSampleGap() {
   float const behind = last.time - ____lastTrailElementTime;
   int const capacity = static_cast<int>(std::ceil(std::max(____trailDuration, 0.0f) * static_cast<float>(frequency))) + 3;
   float const allowed = static_cast<float>(capacity + 2) / static_cast<float>(frequency);
-  // Not finite: the game's count comes out as 0 or int.MinValue, no loop.
-  if (!std::isfinite(behind) || behind <= allowed) return;
+  // Not finite: the game's count comes out as 0 or int.MinValue, no loop. Far
+  // behind the saber: the stall. Far ahead of it (a one-frame spike that set
+  // the last sample in the future): the game would add no sample until the
+  // saber's time caught up, a frozen trail. A normal trail is never either.
+  if (!std::isfinite(behind) || std::fabs(behind) <= allowed) return;
   float const was = ____lastTrailElementTime;
   ____lastTrailElementTime = last.time - static_cast<float>(capacity) / static_cast<float>(frequency);
   // A long hitch (a load) can pass the limit harmlessly; only a gap no frame
   // could explain is worth a line.
   static int logged = 0;
-  if (behind > 10.0f && logged < 5) {
+  if (std::fabs(behind) > 10.0f && logged < 5) {
     logged++;
     float followedLast = std::numeric_limits<float>::quiet_NaN();
     float followedTime = std::numeric_limits<float>::quiet_NaN();
@@ -193,8 +196,9 @@ void FollowedSaberTrail::LimitSampleGap() {
       if (_followed->____movementData != nullptr) followedTime = _followed->____movementData->get_lastAddedData().time;
     }
     PaperLogger.warn("Vivify saber trail: the game's trail would have added {:.0f} samples in one frame (newest saber "
-                     "data at {:.3f} s, last trail sample at {:.3f} s, {} per second, {} frames in); started it {} "
-                     "samples back instead. The trail it follows: last sample {:.3f} s, newest data {:.3f} s",
+                     "data at {:.3f} s, last trail sample at {:.3f} s, {} per second, {} frames in; negative: none "
+                     "until the saber caught up); started it {} samples back instead. The trail it follows: last "
+                     "sample {:.3f} s, newest data {:.3f} s",
                      static_cast<double>(behind) * frequency, last.time, was, frequency, ____framesPassed, capacity,
                      followedLast, followedTime);
   }

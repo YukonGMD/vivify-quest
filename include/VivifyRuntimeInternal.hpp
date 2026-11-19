@@ -750,7 +750,7 @@ private:
  public:
   void LogCameraParams(UnityEngine::Camera* camera, std::string_view role);
  private:
-  std::map<std::string, float> _cameraParamsLoggedAt;
+  std::map<std::pair<uintptr_t, char>, float> _cameraParamsLoggedAt;  // by camera and role
   int _cameraParamLines = 0;
   std::string DescribeActiveEffects();
   void WarnIfBlitReadsScreenAs2D(UnityEngine::Material* material, std::string_view asset, std::string_view source,
