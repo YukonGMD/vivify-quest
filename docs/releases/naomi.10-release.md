@@ -109,7 +109,7 @@ THIRD_PARTY_NOTICES.md the licences.
 
 ## Build
 
-- Tag `0.14.25-naomi.10-release`, commit `41c7864aae`. The session log header
+- Tag `0.14.25-naomi.10-release`, commit `34051179c9`. The session log header
   names the commit.
 - `Vivify-naomi-10-release.qmod` SHA-256:
-  `1c48dccbbfc79d4b2fd0646eee003670ec83f46aa723af5cb7af6c7145a2c97a`
+  `f5ce829cb567e7b72114c58b00448d9dc16b09bd4bbf00d522385ee45aa39a86`
