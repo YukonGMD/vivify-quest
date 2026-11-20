@@ -14,7 +14,8 @@
 #             tools/build-release.sh), and run the host tests in the copy
 #
 # What the copy leaves out or changes:
-# - not copied: testlogs/ (never committed anyway), PROGRESS.md, CLAUDE.md,
+# - not copied: testlogs/ and builds/ (the built qmods; neither is ever
+#   committed, and both are removed again in case one was), PROGRESS.md, CLAUDE.md,
 #   .claude/, this script and tools/share-copy/, backups (*.bak, *.orig),
 #   and a vendored dependency's build log that holds its author's home path;
 # - comments are removed from this project's own source files by
@@ -85,7 +86,7 @@ git archive --format=tar "$commit" | tar -x -C "$stage"
 version="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$stage/mod.json" | head -n1)"
 
 # Left out.
-rm -rf "$stage/testlogs" "$stage/.claude" "$stage/tools/share-copy" "$stage/tools/make-share-copy.sh" \
+rm -rf "$stage/testlogs" "$stage/builds" "$stage/.claude" "$stage/tools/share-copy" "$stage/tools/make-share-copy.sh" \
   "$stage/extern/includes/bs-cordl/build.log"
 find "$stage" \( -name 'CLAUDE.md' -o -name 'PROGRESS.md' -o -name '*.bak' -o -name '*.orig' \) -exec rm -rf {} +
 

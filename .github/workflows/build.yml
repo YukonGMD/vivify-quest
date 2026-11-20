@@ -139,7 +139,7 @@ jobs:
     - name: Rename QMOD artifact
       run: |
         shopt -s nullglob
-        built=(./*.qmod)
+        built=(./builds/dev/*.qmod)
         if [ ${#built[@]} -eq 0 ]; then
           echo "::error::qpm s qmod produced no .qmod file"
           exit 1

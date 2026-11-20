@@ -48,7 +48,7 @@
         "./extern/libs"
       ],
       "qmodIncludeFiles": [],
-      "qmodOutput": "./Vivify.qmod"
+      "qmodOutput": "./builds/dev/Vivify.qmod"
     },
     "dependencies": [
       {

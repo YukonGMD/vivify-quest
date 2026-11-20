@@ -3,6 +3,9 @@ Param(
     [String] $qmodName="",
 
     [Parameter(Mandatory=$false)]
+    [String] $outDir="builds/dev",
+
+    [Parameter(Mandatory=$false)]
     [Switch] $help
 )
 
@@ -11,6 +14,7 @@ if ($help -eq $true) {
     Write-Output "`n-- Arguments --`n"
 
     Write-Output "-QmodName `t The file name of your qmod"
+    Write-Output "-OutDir `t Where it goes (default builds/dev, so a day-to-day build is never mistaken for a release; tools/build-release.sh makes those)"
 
     exit
 }
@@ -71,8 +75,11 @@ foreach ($lib in $modJson.libraryFiles) {
     $filelist += $path
 }
 
-$zip = $qmodName + ".zip"
-$qmod = $qmodName + ".qmod"
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+$zip = Join-Path $outDir ($qmodName + ".zip")
+$qmod = Join-Path $outDir ($qmodName + ".qmod")
 
-Compress-Archive -Path $filelist -DestinationPath $zip -Update
+if (Test-Path $zip) { Remove-Item $zip -Force }
+Compress-Archive -Path $filelist -DestinationPath $zip
 Move-Item $zip $qmod -Force
+Write-Output "Made $qmod"

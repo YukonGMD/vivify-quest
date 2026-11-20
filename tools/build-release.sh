@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds the qmod to install or share, from the committed HEAD, in a fresh
-# worktree, and leaves exactly one copy of it: ~/Vivify-<label>.qmod.
+# worktree, and leaves exactly one copy of it in the project folder:
+# builds/Vivify-<label>.qmod. Nothing is written to the home folder.
+# (builds/ is ignored by git, so a qmod is never committed.)
 #
 #   tools/build-release.sh <label>          e.g. tools/build-release.sh naomi-10-rc.1
 #
@@ -10,11 +12,13 @@
 #   so CMake is configured fresh and the session log names the right commit).
 #   Paths are mapped in the binary (-ffile-prefix-map): the worktree becomes
 #   "." and the NDK "ndk", so no home or build path ends up in it.
-# - Writes ~/Vivify-<label>.qmod, and the unstripped library with a note of
+# - Writes builds/Vivify-<label>.qmod, and the unstripped library with a note of
 #   what it is to testlogs/symbols/<label>-<commit>/ (for reading crash
 #   addresses later; testlogs/ is never committed).
-# - Deletes every other Vivify.qmod this build or an earlier one left in the
-#   project folder or the worktree, so the copy in ~ is the only one.
+# - Deletes the worktree's own copy and any Vivify.qmod an older build left in
+#   the project folder's top level, so builds/Vivify-<label>.qmod is the only
+#   copy. Day-to-day builds (qpm s qmod, scripts/createqmod.ps1) write
+#   builds/dev/Vivify.qmod instead, which is not a release file.
 # - Scans the qmod for this computer's home folder, temp paths and Windows
 #   user folders, and for
 #   each line of testlogs/private-patterns.txt (an e-mail address, a headset
@@ -51,7 +55,7 @@ fi
 commit="$(git rev-parse --short=10 HEAD)"
 version="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mod.json | head -n1)"
 wt="$repo/build/release-wt"
-out="$HOME/Vivify-$label.qmod"
+out="$repo/builds/Vivify-$label.qmod"
 symbols="$repo/testlogs/symbols/$label-$commit"
 
 echo "Building $version (commit $commit) as $out"
@@ -67,16 +71,18 @@ cmake -G Ninja -S "$wt" -B "$wt/build" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_C_FLAGS="$maps" -DCMAKE_CXX_FLAGS="$maps" >/dev/null
 cmake --build "$wt/build" -j "${JOBS:-2}"
 
-(cd "$wt" && pwsh -NoProfile -File scripts/createqmod.ps1 >/dev/null)
-if [ ! -f "$wt/Vivify.qmod" ]; then
+(cd "$wt" && pwsh -NoProfile -File scripts/createqmod.ps1 -OutDir qmod-out >/dev/null)
+built="$wt/qmod-out/Vivify.qmod"
+if [ ! -f "$built" ]; then
   echo "createqmod.ps1 made no Vivify.qmod" >&2
   exit 1
 fi
 
 # The scan, before anything is copied out.
-scan="$(mktemp -d)"
-trap 'rm -rf "$scan"' EXIT
-unzip -q "$wt/Vivify.qmod" -d "$scan/qmod"
+scan="$wt/qmod-scan"
+rm -rf "$scan"
+mkdir -p "$scan"
+unzip -q "$built" -d "$scan/qmod"
 # This computer's home folder (which also covers the QPM cache under it),
 # temp paths and a Windows user folder.
 patterns=("$HOME/" "/tmp/" "C:\\Users")
@@ -97,11 +103,12 @@ for i in "${!patterns[@]}"; do
   fi
 done
 if [ "$hits" -ne 0 ]; then
-  echo "Not copied out: $hits pattern(s) found. The qmod is left in $wt for a look." >&2
+  echo "Not copied out: $hits pattern(s) found. The qmod is left in $wt/qmod-out for a look." >&2
   exit 1
 fi
 
-cp "$wt/Vivify.qmod" "$out"
+mkdir -p "$repo/builds"
+cp "$built" "$out"
 mkdir -p "$symbols"
 cp "$wt/build/libVivify.so" "$symbols/libVivify.so"
 build_id="$(readelf -n "$symbols/libVivify.so" 2>/dev/null | sed -n 's/.*Build ID: //p' | head -n1)"
@@ -109,15 +116,16 @@ sum="$(sha256sum "$out" | cut -d' ' -f1)"
 cat >"$symbols/WHICH-BUILD.txt" <<EOF
 $version, commit $commit, built $(date '+%Y-%m-%d %H:%M %z') by tools/build-release.sh
 from a fresh worktree of HEAD (RelWithDebInfo, paths mapped to . and ndk).
-Copy: ~/Vivify-$label.qmod sha256 $sum
+Copy: builds/Vivify-$label.qmod sha256 $sum
 libVivify.so Build ID $build_id (this unstripped library is the one in the qmod)
-Scan: none of ${#patterns[@]} patterns found (home and temp paths, QPM path, private patterns).
+Scan: none of ${#patterns[@]} patterns found (home folder, temp paths, Windows user folders, private patterns).
 EOF
 
-# One copy only: the worktree's and any stale one in the project folder go.
+# One copy only: the worktree's and any stale one from an older build go.
+rm -rf "$wt/qmod-out" "$scan"
 rm -f "$wt/Vivify.qmod" "$repo/Vivify.qmod"
 
-echo "Done: $out"
+echo "Done: ${out#$repo/}"
 echo "  sha256 $sum"
 echo "  library Build ID $build_id"
 echo "  symbols in ${symbols#$repo/}"

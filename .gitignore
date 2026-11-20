@@ -16,7 +16,9 @@ CMakeUserPresets.json
 .vscode/
 .idea/
 
-# Compiled outputs
+# Compiled outputs (qmods are built into builds/: tools/build-release.sh,
+# and builds/dev/ for day-to-day builds)
+builds/
 *.qmod
 *.so
 # ...but the vendored native libraries are tracked on purpose.
