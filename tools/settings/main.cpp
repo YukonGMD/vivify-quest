@@ -3,8 +3,9 @@
 //   settingstest <fixtures dir> <SETTINGS.md>
 //
 // fixtures/naomi9.json is the tester's config file as naomi.9 left it on the
-// headset; fixtures/old-0.14.17.json is an older one with keys since renamed
-// or removed, values out of range and a value of the wrong type.
+// headset; fixtures/beta5.json is the one naomi.10-beta.5 left (from its
+// session log); fixtures/old-0.14.17.json is an older one with keys since
+// renamed or removed, values out of range and a value of the wrong type.
 #include <cstdio>
 #include <algorithm>
 #include <fstream>
@@ -82,6 +83,40 @@ std::map<std::string, int> const kNaomi9Defaults = {
     {"debugCostTest", 0},
 };
 
+// naomi.10-rc.1: the default of every setting, decided one by one (see
+// SETTINGS.md, "Defaults"). A new setting fails here until it is added.
+std::map<std::string, int> const kReleaseDefaults = {
+    {"performanceModeHeavyMaps", 0},       {"effectResolutionPercent", 100},
+    {"disableCustomNoteVisuals", 0},       {"submitScoresOnVivifyMaps", 1},
+    {"performanceModeFloorPercent", 60},   {"performanceModeScaleDepthMaps", 0},
+    {"performanceModeLearnedProfiles", 0}, {"performanceModeHalfRefresh", 0},
+    {"audioLink", 1},                      {"standInShading", 1},
+    {"sceneDepthTexture", 1},              {"emulateGeometryShaderEffects", 1},
+    {"emulateParticleGeometry", 1},        {"drawGeometryShaderEffects", 0},
+    {"blitScreenTextureFix", 0},           {"mapRealtimeShadows", 0},
+    {"disableAllBlits", 0},                {"offscreenCullingOptIn", 0},
+    {"farCullingDistance", 0},             {"disableVisualsInMultiplayer", 1},
+    {"convertPcBundlesOnDevice", 1},       {"prepareShadersInMenu", 0},
+    {"pcBundleForMissingShaders", 0},      {"replayRenderMode", 0},
+    {"crashGuard", 1},                     {"poolNoteReplacements", 1},
+    {"showDeveloperOptions", 0},           {"vivifyDebugLogging", 0},
+    {"detailedLogging", 0},                {"slowFrameSampler", 1},
+    {"performanceModeFixedScalePercent", 0}, {"debugCostTest", 0},
+    {"screenTexturesAsArrays", 1},         {"uprightScreenReads", 1},
+    {"uprightReadsProjectionSignOnly", 0}, {"translateShadersOnConversion", 1},
+    {"disableBeat0FilmgrainBlit", 0},      {"disableCreateCameraDepth", 0},
+    {"disableVRCenterAdjust", 0},          {"standInShaderName", 0},
+};
+
+// Debug settings that are on by default: the fixes whose switch-off brings a
+// bug back, and the one logging layer that is on.
+std::set<std::string> const kDebugOnByDefault = {
+    "screenTexturesAsArrays",        // off: Blits cover the view in white (743 Aether, Get Your Wish)
+    "uprightScreenReads",            // off: Lifelike's water mirrors the top of the view
+    "translateShadersOnConversion",  // off: every converted map draws as stand-ins
+    "slowFrameSampler",              // logging, left as it was
+};
+
 int Value(rapidjson::Document const& doc, S::Def const& def) {
   return def.kind == S::Kind::Bool ? (S::GetBool(doc, def.key) ? 1 : 0) : S::GetInt(doc, def.key);
 }
@@ -140,6 +175,31 @@ int main(int argc, char** argv) {
   }
   Check(S::Find("prepareShadersInMenu") && S::Find("prepareShadersInMenu")->defaultValue == 0,
         "Prepare Shaders stays off by default");
+
+  // --- naomi.10-rc.1's defaults, one by one ------------------------------------
+  for (auto const& def : S::All()) {
+    std::string const key(def.key);
+    auto it = kReleaseDefaults.find(key);
+    Check(it != kReleaseDefaults.end(), "release default decided for " + key);
+    if (it != kReleaseDefaults.end()) {
+      Check(def.defaultValue == it->second, "release default of " + key, std::to_string(def.defaultValue));
+    }
+    if (def.section == S::Section::Debug) {
+      bool const on = def.defaultValue != 0;
+      Check(on == (kDebugOnByDefault.count(key) != 0), "Debug default is off unless it is a fix: " + key);
+    }
+  }
+  Check(kReleaseDefaults.size() == S::All().size(), "no stale entry in the release defaults");
+  Check(S::Find("showDeveloperOptions")->defaultValue == 0, "the Debug section starts hidden");
+  Check(S::Find("detailedLogging")->defaultValue == 0, "Detailed Logging starts off");
+  Check(S::Find("performanceModeHeavyMaps")->defaultValue == 0 && S::Find("effectResolutionPercent")->defaultValue == 100,
+        "Performance Mode off and Effect Resolution 100%");
+  for (char const* key : {"vivifyDebugLogging", "detailedLogging", "slowFrameSampler"}) {
+    Check(S::IsLoggingSetting(key), std::string("logging setting: ") + key);
+  }
+  int logging = 0;
+  for (auto const& def : S::All()) logging += S::IsLoggingSetting(def.key) ? 1 : 0;
+  Check(logging == 3, "exactly three logging settings");
 
   // --- naomi.9's own config file carries over ---------------------------------
   {
@@ -210,12 +270,76 @@ int main(int argc, char** argv) {
     S::ResetToDefaults(doc);
     bool allDefault = true;
     for (auto const& def : S::All()) {
+      if (S::IsLoggingSetting(def.key)) continue;
       if (def.kind != S::Kind::String && Value(doc, def) != def.defaultValue) allDefault = false;
     }
-    Check(allDefault, "reset: every setting back to its default");
+    Check(allDefault, "reset: every setting but logging back to its default");
+    Check(S::GetBool(doc, "vivifyDebugLogging"), "reset: Debug Logging on is kept");
     Check(S::GetString(doc, "standInShaderName").empty(), "reset: stand-in shader name cleared");
     Check(!Has(doc, "offscreenCulling") && !Has(doc, "prepareShaders"), "reset: stale keys gone");
-    Check(doc.MemberCount() == S::All().size(), "reset: only current keys remain");
+    Check(doc.MemberCount() == S::All().size() + 1, "reset: only current keys and the settings version remain");
+    Check(doc.HasMember("settingsVersion") && doc["settingsVersion"].GetInt() == S::kSettingsVersion,
+          "reset: writes the settings version");
+    Check(!S::Migrate(doc).ran, "reset: the migration does not run again after it");
+  }
+
+  // --- naomi.10-rc.1's one-time reset: beta.5's config ---------------------------
+  {
+    rapidjson::Document doc;
+    doc.Parse(ReadFile(fixtures + "/beta5.json").c_str());
+    Check(!doc.HasParseError() && doc.IsObject(), "beta5.json parses");
+    Check(S::GetBool(doc, "performanceModeHeavyMaps") && !S::GetBool(doc, "standInShading") &&
+              S::GetBool(doc, "prepareShadersInMenu") && S::GetBool(doc, "showDeveloperOptions"),
+          "beta5.json holds the tester's non-default choices");
+    Check(!S::Load(doc), "beta5.json is already complete for Load");
+    auto const migration = S::Migrate(doc);
+    Check(migration.ran && migration.fromVersion == 0, "beta5: the reset runs once (no settings version saved)");
+    bool allDefault = true;
+    for (auto const& def : S::All()) {
+      if (S::IsLoggingSetting(def.key)) continue;
+      if (def.kind == S::Kind::String ? !S::GetString(doc, def.key).empty() : Value(doc, def) != def.defaultValue) {
+        allDefault = false;
+        std::printf("      not reset: %s\n", std::string(def.key).c_str());
+      }
+    }
+    Check(allDefault, "beta5: every setting but logging is at its default");
+    Check(S::GetBool(doc, "detailedLogging") && S::GetBool(doc, "vivifyDebugLogging") &&
+              S::GetBool(doc, "slowFrameSampler"),
+          "beta5: the logging settings are kept");
+    Check(!S::GetBool(doc, "showDeveloperOptions"), "beta5: the Debug section is hidden again");
+    Check(S::GetBool(doc, "screenTexturesAsArrays") && S::GetBool(doc, "uprightScreenReads"),
+          "beta5: the two screen fixes are on");
+    Check(!S::GetBool(doc, "performanceModeHeavyMaps") && S::GetBool(doc, "standInShading") &&
+              !S::GetBool(doc, "prepareShadersInMenu") && !S::GetBool(doc, "mapRealtimeShadows"),
+          "beta5: Performance Mode, stand-ins, Prepare Shaders and shadows back to their defaults");
+    Check(migration.changedCount == 7, "beta5: seven saved values changed", migration.changed);
+    Check(migration.changed.find("detailedLogging") == std::string::npos, "beta5: logging not in the changed list");
+    Check(doc["settingsVersion"].GetInt() == S::kSettingsVersion, "beta5: the settings version is written");
+    Check(!S::Load(doc), "beta5: Load after the reset changes nothing");
+    Check(!S::Migrate(doc).ran, "beta5: the reset does not run on the next launch");
+    // A choice made after the reset is kept from then on.
+    doc["performanceModeHeavyMaps"].SetBool(true);
+    Check(!S::Load(doc) && !S::Migrate(doc).ran && S::GetBool(doc, "performanceModeHeavyMaps"),
+          "beta5: a choice made after the reset is kept");
+  }
+
+  // --- The reset on a fresh install, a newer version, a broken version value ----
+  {
+    rapidjson::Document fresh;
+    fresh.SetObject();
+    S::Load(fresh);
+    auto const migration = S::Migrate(fresh);
+    Check(migration.ran && migration.changedCount == 0 && migration.changed.empty(),
+          "fresh install: version written, nothing to change");
+    rapidjson::Document newer;
+    newer.Parse(R"({"settingsVersion": 99, "standInShading": false})");
+    S::Load(newer);
+    Check(!S::Migrate(newer).ran && !S::GetBool(newer, "standInShading"), "a newer settings version is left alone");
+    rapidjson::Document broken;
+    broken.Parse(R"({"settingsVersion": "one", "audioLink": false})");
+    S::Load(broken);
+    Check(S::Migrate(broken).ran && S::GetBool(broken, "audioLink") && broken["settingsVersion"].IsInt(),
+          "a settings version of the wrong type counts as none");
   }
 
   // --- beta.3's tester had GPU Instancing For Scenery on: it is dropped ----------

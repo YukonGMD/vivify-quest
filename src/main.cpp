@@ -1178,14 +1178,15 @@ void RegisterModSettings() {
         AddToggle(parent, kPoolReplacementsConfigKey, gPoolReplacements);
         gActionStatusText = BSML::Lite::CreateText(parent, u"");
         AddButton(parent, u"Reset All Vivify Settings To Defaults",
-                  "Every Vivify setting back to its default. Maps and converted files are kept.",
-                  PressTwice("Press Reset Settings again within 5 s: every Vivify setting goes back to its default",
+                  "Every Vivify setting but logging back to its default. Maps and converted files are kept.",
+                  PressTwice("Press Reset Settings again within 5 s: every Vivify setting but logging goes back to "
+                             "its default",
                              []() {
                                auto& config = getConfig();
                                Vivify::Settings::ResetToDefaults(config.config);
                                config.Write();
                                ApplyConfigValues();
-                               PaperLogger.info("Vivify settings: all reset to their defaults from the menu");
+                               PaperLogger.info("Vivify settings: all but the logging settings reset to their defaults from the menu");
                                SetConvertStatusText("Settings reset to defaults. Reopen this menu to see them.");
                              }));
         // Puts Vivify back to a fresh install's state, without touching the
@@ -1499,11 +1500,28 @@ std::string GetStandInShaderName() {
   return gStandInShaderName;
 }
 
+// What the settings version migration did at this launch, for the session
+// log; empty when it did not run.
+std::string gSettingsMigrationNote;
+
 void EnsureConfigDefaults() {
   auto& config = getConfig();
   // Missing, mistyped and out-of-range values become defaults; saved ones
   // carry over by key; keys nothing reads any more are dropped (naomi.10).
-  if (Vivify::Settings::Load(config.config)) {
+  bool changed = Vivify::Settings::Load(config.config);
+  // Once per settings version: values saved under older defaults go back to
+  // this version's defaults, except the logging settings (naomi.10-rc.1).
+  auto const migration = Vivify::Settings::Migrate(config.config);
+  if (migration.ran) {
+    changed = true;
+    gSettingsMigrationNote = fmt::format(
+        "settings reset once to this version's defaults (settings version {} -> {}); logging settings kept; {}",
+        migration.fromVersion, Vivify::Settings::kSettingsVersion,
+        migration.changedCount == 0 ? std::string("no saved value differed")
+                                    : fmt::format("{} changed: {}", migration.changedCount, migration.changed));
+    PaperLogger.info("Vivify {}", gSettingsMigrationNote);
+  }
+  if (changed) {
     config.Write();
   }
   ApplyConfigValues();
@@ -1536,6 +1554,7 @@ MOD_EXTERN_FUNC void setup(CModInfo *info) noexcept {
   // wrote the defaults on first run); hardcoding them back to a fixed value here
   // would silently discard the player's saved settings-menu choice on every launch.
   PushLine("HEADER", "settings: " + Vivify::Settings::Snapshot(getConfig().config), false, false);
+  if (!gSettingsMigrationNote.empty()) PushLine("HEADER", gSettingsMigrationNote, false, false);
   PaperLogger.info("Vivify file logging active -> {}/{}", kSessionsDir, gSessionFile);
 }
 namespace {

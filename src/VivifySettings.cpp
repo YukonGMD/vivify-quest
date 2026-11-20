@@ -214,9 +214,71 @@ bool Load(rapidjson::Document& doc) {
   return changed;
 }
 
+bool IsLoggingSetting(std::string_view key) {
+  return key == "vivifyDebugLogging" || key == "detailedLogging" || key == "slowFrameSampler";
+}
+
+namespace {
+
+int SavedVersion(rapidjson::Document const& doc) {
+  auto const* value = Member(doc, kSettingsVersionKey);
+  return value != nullptr && value->IsInt() ? value->GetInt() : 0;
+}
+
+void WriteVersion(rapidjson::Document& doc) {
+  auto& allocator = doc.GetAllocator();
+  auto it = doc.FindMember(rapidjson::StringRef(kSettingsVersionKey.data(), kSettingsVersionKey.size()));
+  if (it == doc.MemberEnd()) {
+    doc.AddMember(Key(kSettingsVersionKey, allocator), rapidjson::Value(kSettingsVersion), allocator);
+  } else {
+    it->value.SetInt(kSettingsVersion);
+  }
+}
+
+}  // namespace
+
 void ResetToDefaults(rapidjson::Document& doc) {
-  doc.SetObject();
   Load(doc);
+  rapidjson::Document kept;
+  kept.SetObject();
+  for (auto const& def : kDefs) {
+    if (!IsLoggingSetting(def.key)) continue;
+    rapidjson::Value value(doc[std::string(def.key).c_str()], kept.GetAllocator());
+    kept.AddMember(Key(def.key, kept.GetAllocator()), value, kept.GetAllocator());
+  }
+  doc.SetObject();
+  for (auto& member : kept.GetObject()) {
+    rapidjson::Value value(member.value, doc.GetAllocator());
+    doc.AddMember(rapidjson::Value(member.name, doc.GetAllocator()), value, doc.GetAllocator());
+  }
+  Load(doc);
+  WriteVersion(doc);
+}
+
+Migration Migrate(rapidjson::Document& doc) {
+  Migration result;
+  if (!doc.IsObject()) Load(doc);
+  result.fromVersion = SavedVersion(doc);
+  if (result.fromVersion >= kSettingsVersion) return result;
+  result.ran = true;
+  auto& allocator = doc.GetAllocator();
+  for (auto const& def : kDefs) {
+    if (IsLoggingSetting(def.key) || IsDefault(def, doc)) continue;
+    std::string const before = ValueText(def, doc);
+    auto it = doc.FindMember(rapidjson::StringRef(def.key.data(), def.key.size()));
+    if (it == doc.MemberEnd()) {
+      rapidjson::Value value;
+      SetDefault(def, value, allocator);
+      doc.AddMember(Key(def.key, allocator), value, allocator);
+    } else {
+      SetDefault(def, it->value, allocator);
+    }
+    if (!result.changed.empty()) result.changed += ' ';
+    result.changed += std::string(def.key) + " " + before + "->" + ValueText(def, doc);
+    result.changedCount++;
+  }
+  WriteVersion(doc);
+  return result;
 }
 
 bool GetBool(rapidjson::Document const& doc, std::string_view key) {

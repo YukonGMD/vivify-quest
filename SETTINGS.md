@@ -17,9 +17,11 @@ The menu has three parts:
   which.
 
 Settings are stored in `Configs/Vivify.json` under the keys below. Values
-carry over between versions by key. A missing, mistyped or out-of-range
-value becomes the default. "Reset All Vivify Settings To Defaults" (Advanced,
-press twice) puts every setting back to its default; maps and converted
+carry over between versions by key, with one exception: the first launch of
+naomi.10-rc.1 or later resets them once (see "The one-time reset" below). A
+missing, mistyped or out-of-range value becomes the default. "Reset All
+Vivify Settings To Defaults" (Advanced, press twice) puts every setting
+except the three logging settings back to its default; maps and converted
 files are kept.
 
 Settings marked *reconverts* change how PC maps are converted. A converted
@@ -116,11 +118,89 @@ files.
 | Disable CreateCamera Depth | `disableCreateCameraDepth` | off | Gives the cameras a map creates no depth texture. |
 | Disable VR Center Adjust Handling | `disableVRCenterAdjust` | off | Skips the game's room recentering while a Vivify map plays. |
 
+## Defaults
+
+The rule for the release (naomi.10-rc.1): a new player gets Vivify as it
+normally behaves, and nothing experimental or test-only is on.
+
+- A setting the original Quest port (trail-b1az3r/vivify-quest, 0.14.25)
+  already had keeps that port's default. Upstream PC Vivify has no settings
+  of its own beyond Camera2 and downloads, so the port is the reference.
+- A setting added since (naomi series): on only if it makes maps look more
+  like PC; off if it makes a map look different from PC.
+- Performance Mode stays off and Effect Resolution stays at 100%.
+- The Debug section is hidden, and every Debug switch is off except the
+  fixes whose switch-off brings a bug back, and the Slow-Frame Sampler, a
+  logging layer.
+- The three logging settings (Debug Logging, Detailed Logging, Slow-Frame
+  Sampler) keep the defaults they had.
+- A setting that would only make things faster or steadier is on by default
+  only when its output is proven identical by the host tests or the 28-map
+  library and it has run on the headset in full plays. None qualifies yet:
+  Prepare Shaders Before Playing does not change any converted file (it binds
+  each material once in the menu) and has run in the tester's full plays,
+  but what it changes is drawing on the headset, which neither proof covers.
+
+No default changed for rc.1; every one was checked against the rule:
+
+| Setting | Default | Why |
+|---|---|---|
+| Performance Mode | off | Changes how a map looks (lower resolution). |
+| Effect Resolution % | 100 | Lower values blur effects. |
+| Plain Notes And Sabers | off | Port default; on hides the map's notes. |
+| Submit Scores On Vivify Maps | on | Port default; PC Vivify never blocks scores. |
+| Lowest Resolution %, Also Scale Maps That Read Depth, Learn Each Map, Aim For Half The Refresh Rate | 60, off, off, off | Only act with Performance Mode on. |
+| AudioLink | on | Port default; as on PC. |
+| Stand-Ins For Unsupported Shaders | on | Port default: an object whose shader cannot run is drawn plain instead of missing. |
+| Scene Depth For Map Shaders | on | Port default; maps read depth on PC. |
+| Emulate Geometry-Shader Effects | on | Added in the naomi series; draws effects that are missing otherwise, closer to PC. |
+| Emulate Geometry Effects On Particles | on | Same, for still particle bursts. |
+| Draw Other Geometry Effects Without It | off | Port default; experimental, often wrong. |
+| Blit Fix For Screen Textures | off | Port default; experimental. |
+| Map Realtime Shadows | off | Port default, for frame time. PC draws the shadows a map asks for; turning it on is the player's choice. |
+| Skip All Full-Screen Effects | off | Port default; on changes how maps look. |
+| Pause Offscreen Animations | off | Added in the naomi series as an opt-in: objects can stay stuck, unlike PC. |
+| Far Culling Distance | 0 (off) | Port default; hides far scenery. |
+| Disable Vivify Visuals In Multiplayer | on | Port default (PC has no such switch; the port keeps lobbies plain). |
+| Convert PC Maps On The Headset | on | Port default; PC-only maps cannot play otherwise. |
+| Prepare Shaders Before Playing | off | Port default; see the speed rule above. |
+| Use Only PC Bundle For Missing Shaders | off | Port default. |
+| Replay Render Mode | off | Port default; for replay renderers only. |
+| Crash Guard | on | Port default. |
+| Reuse Note And Debris Copies | on | Added in the naomi series; upstream PC Vivify pools these copies too, and every headset test since naomi.4 ran with it. |
+| Show Developer Options | off | Hides the Debug section. |
+| Debug Logging, Detailed Logging | off | Logging; unchanged. The session header, the inventory and the black box are always on. |
+| Slow-Frame Sampler | on | Logging; unchanged. Costs nothing while frames are fast. |
+| Debug: Fixed Resolution %, Debug: Switch Off For A Cost Test | 0, Nothing | Test switches. |
+| Two-Eye Screen Textures | on | A fix. Off: Blits cover the view in white (743 Aether, Get Your Wish). |
+| Upright Screen Reads | on | A fix. Off: Lifelike's water shows the top of the view mirrored into the bottom. |
+| Upright Reads: Projection Sign Only | off | A comparison test. |
+| Translate Shaders On Conversion | on | Port default, and a fix in effect. Off: every converted map draws as stand-ins. |
+| Disable Beat 0 Filmgrain Blit, Disable CreateCamera Depth, Disable VR Center Adjust Handling | off | Port defaults; isolation switches. |
+| Stand-in shader name (config file) | empty | Picks one automatically. |
+
+The two screen fixes and Translate Shaders stay in Debug: a player has no
+reason to turn them off, and hidden there they cannot be turned off by
+accident. They are switches for comparing against the old behaviour.
+
+### The one-time reset
+
+`Configs/Vivify.json` holds a settings version (`settingsVersion`, 1 since
+naomi.10-rc.1). On the first launch of a build with a higher version than the
+file has (a file from beta.5 or earlier has none), every setting except the
+three logging settings goes back to its default, Debug ones included, the new
+version is written, and the session log's header says so with the values
+that changed (`settings reset once to this version's defaults ...`). Choices
+made after that are kept as usual. "Reset All Vivify Settings To Defaults"
+and "Reset Vivify (clean slate)" reset the same way and also keep the
+logging settings.
+
 ## Config file only
 
 | Key | Default | What it does |
 |---|---|---|
 | `standInShaderName` | empty | A shader name from the session log's shader list to use for stand-ins; empty picks one automatically. |
+| `settingsVersion` | 1 | Not a setting: which one-time reset the file has had (above). |
 
 ## Removed in naomi.10
 
@@ -134,7 +214,8 @@ All three are dropped from the config file on the first launch of the build that
 
 ## What changed in naomi.10
 
-No existing default changed (GPU Instancing For Scenery was removed in beta.4, above). The menu is in the
+No existing default changed (GPU Instancing For Scenery was removed in beta.4, above), but saved values
+are reset once (above). The menu is in the
 three parts above, some names are plainer (the keys did not change), every
 control has a hover hint, and there is a reset-to-defaults button.
 

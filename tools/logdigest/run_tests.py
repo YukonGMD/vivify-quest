@@ -28,6 +28,7 @@ started: 2026-10-25 01:47:12 -0700 (local time, UTC-0700)
 01:47:12.101 s=- [HEADER] device: Oculus Quest 3S; OS UP1A (Android 14, SDK 34, build 123)
 01:47:20.000 s=- [HEADER] Beat Saber 1.40.8, Unity 2022.3.33f1
 01:47:20.010 s=- [HEADER] changed since the last session: build naomi.9 -> naomi.10-beta.1; settings: detailedLogging (new) -> false
+01:47:20.020 s=- [HEADER] settings reset once to this version's defaults (settings version 0 -> 1); logging settings kept; 2 changed: standInShading false->true showDeveloperOptions true->false
 01:47:12.200 s=- [SESSION] previous session Vivify_2026-10-25_01-30-00_naomi.9-21b3a30.txt (naomi.9) ended unexpectedly: it stopped while running
 """
 
@@ -58,6 +59,8 @@ check("what changed", "changed since the last session: build naomi.9 -> naomi.10
 check("ended cleanly", "ended: cleanly" in d, d)
 check("previous session's end is shown", "previous session Vivify_2026-10-25_01-30-00" in d, d)
 check("frame stall listed", "the game did not draw for 3.3s" in d, d)
+check("one-time settings reset listed (rc.1)",
+      "settings reset once to this version's defaults (settings version 0 -> 1)" in d, d)
 check("saber trail gap listed (beta.5)", "saber trail 01:48:00.400 s=0.12: the game's trail would have added 250000000" in d, d)
 check("growing meshes named (beta.5)",
       "meshes that grew, by name: 'Explosion (Vivify particle emulation)' +3, 'Cube' +1" in d, d)

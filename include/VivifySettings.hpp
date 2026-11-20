@@ -51,9 +51,31 @@ std::span<std::string_view const> RemovedKeys();
 // written.
 bool Load(rapidjson::Document& doc);
 
-// Every setting back to its default; the document is left holding only
-// current keys.
+// The logging settings (Debug Logging, Detailed Logging, Slow-Frame
+// Sampler). Resets and the version migration keep their saved values.
+bool IsLoggingSetting(std::string_view key);
+
+// Every setting but the logging ones back to its default; the document is
+// left holding only current keys and the settings version.
 void ResetToDefaults(rapidjson::Document& doc);
+
+// The settings version this build writes under "settingsVersion". A config
+// with a lower one, or none, had its settings chosen under older defaults:
+// Migrate puts every setting but the logging ones back to its default once
+// and writes this version (1: naomi.10-rc.1). Raise it only when a release
+// must reset saved values again.
+inline constexpr int kSettingsVersion = 1;
+inline constexpr std::string_view kSettingsVersionKey = "settingsVersion";
+
+struct Migration {
+  bool ran = false;     // the document was below kSettingsVersion
+  int fromVersion = 0;  // what it had (0 for none)
+  std::string changed;  // "key old->new ..." for the values the reset changed
+  int changedCount = 0;
+};
+
+// Call after Load. Does nothing to a document already at kSettingsVersion.
+Migration Migrate(rapidjson::Document& doc);
 
 // Values from a document Load has seen.
 bool GetBool(rapidjson::Document const& doc, std::string_view key);

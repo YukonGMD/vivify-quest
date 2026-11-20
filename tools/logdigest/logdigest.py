@@ -104,6 +104,9 @@ def digest(text, name="session"):
     changed = next((e.text for e in entries if e.tag == "HEADER" and e.text.startswith("changed since")), None)
     if changed:
         out.append(changed)
+    reset = next((e.text for e in entries if e.tag == "HEADER" and e.text.startswith("settings reset once")), None)
+    if reset:
+        out.append(reset)
     out.append("ended: %s" % how_it_ended(footer, box, entries))
 
     # Crash evidence: the previous session's note, watchdog lines, the black box.
