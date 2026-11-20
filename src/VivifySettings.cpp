@@ -18,6 +18,7 @@ constexpr std::string_view kConversion = "PC maps";
 constexpr std::string_view kOther = "Other";
 constexpr std::string_view kDiagnostics = "Diagnostics";
 constexpr std::string_view kIsolation = "Switches for isolating a problem";
+constexpr std::string_view kExperiments = "Experiments";
 
 // Menu order within each section is the order here.
 constexpr std::array kDefs = {
@@ -110,6 +111,8 @@ constexpr std::array kDefs = {
         "Gives cameras a map creates no depth texture."},
     Def{"disableVRCenterAdjust", Bool, 0, 0, 1, 1, Debug, kIsolation, "Disable VR Center Adjust Handling",
         "Skips the game's room recentering while a Vivify map plays."},
+    Def{"bakeLargeParticleSystems", Bool, 0, 0, 1, 1, Debug, kExperiments, "Bake Large Particle Effects (experimental)",
+        "Bakes still particle effects too big for one mesh (Aether's rock particles) in pieces. Uses memory."},
 
     // --- Hidden: config file only -------------------------------------------
     Def{"standInShaderName", String, 0, 0, 0, 0, Hidden, {}, "Stand-in shader name",

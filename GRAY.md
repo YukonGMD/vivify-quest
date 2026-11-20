@@ -30,7 +30,7 @@ on meshes, but these systems are particle systems:
 |---|---|---|---|
 | Explosion ×3 | 97-101 / 129-133 Triangle Explosion (Swifter/TriangleExplosion) | soft gray (colour is white or transparent, no texture) | baked about 0.5 s after the burst holds still, then correct; gray until then |
 | Extending Arrows, (1), (2) | 673 - Triangle Explosion (Swifter/TriangleExplosion) | soft gray | stays gray: the particles move (velocity module), and only particles that hold still can be baked |
-| rock particles | 363.33 - Wireframe (Mawntee/Beat Saber Wireframe 3D-Noise) | `_BaseColor` black | stays: 1000 particles × 876 vertices is over the 400,000-vertex bake limit |
+| rock particles | 363.33 - Wireframe (Mawntee/Beat Saber Wireframe 3D-Noise) | `_BaseColor` black | stays: 1000 particles × 876 vertices is over the 400,000-vertex bake limit (the Debug experiment "Bake Large Particle Effects", off, bakes it in chunks; untested on the headset) |
 | Ground Fog | 363.33 - Wireframe (Mawntee/Beat Saber Wireframe 3D-Noise) | `_BaseColor` black | stays: billboard particles, and only mesh particles can be baked |
 
 Per shader: Swifter/TriangleExplosion had 3 systems gray for good and 3 gray

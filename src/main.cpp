@@ -99,6 +99,7 @@ constexpr std::string_view kDetailedLoggingConfigKey = "detailedLogging";
 constexpr std::string_view kScreenArraysConfigKey = "screenTexturesAsArrays";
 constexpr std::string_view kUprightReadsConfigKey = "uprightScreenReads";
 constexpr std::string_view kUprightNarrowConfigKey = "uprightReadsProjectionSignOnly";
+constexpr std::string_view kBakeLargeParticlesConfigKey = "bakeLargeParticleSystems";
 bool gVivifyDebugLogging = false;
 bool gDisableBeat0FilmgrainBlit = false;
 bool gDisableAllBlits = false;
@@ -195,6 +196,9 @@ bool gScreenArrays = true;
 bool gUprightReads = true;
 // ...flipping only _ProjectionParams.x signs (beta.5 Debug test, off).
 bool gUprightNarrow = false;
+// Debug experiment (naomi.10, off): particle systems over the one-mesh bake
+// limit are baked in chunks (VivifyParticleChunks.hpp).
+bool gBakeLargeParticles = false;
 
 // Where each setting in Vivify::Settings' table is held while the game runs.
 struct BoundSetting {
@@ -203,7 +207,7 @@ struct BoundSetting {
   int* intValue = nullptr;
   std::string* stringValue = nullptr;
 };
-std::array<BoundSetting, 40> const kBoundSettings = {{
+std::array<BoundSetting, 41> const kBoundSettings = {{
     {kVivifyDebugLoggingConfigKey, &gVivifyDebugLogging},
     {kDisableBeat0FilmgrainBlitConfigKey, &gDisableBeat0FilmgrainBlit},
     {kDisableAllBlitsConfigKey, &gDisableAllBlits},
@@ -244,6 +248,7 @@ std::array<BoundSetting, 40> const kBoundSettings = {{
     {kScreenArraysConfigKey, &gScreenArrays},
     {kUprightReadsConfigKey, &gUprightReads},
     {kUprightNarrowConfigKey, &gUprightNarrow},
+    {kBakeLargeParticlesConfigKey, &gBakeLargeParticles},
 }};
 
 // Both diagnostic files live beside the mod's own data, and both are .txt.
@@ -1293,6 +1298,8 @@ void RegisterModSettings() {
         debug(AddToggle(parent, kDisableBeat0FilmgrainBlitConfigKey, gDisableBeat0FilmgrainBlit));
         debug(AddToggle(parent, kDisableCreateCameraDepthConfigKey, gDisableCreateCameraDepth));
         debug(AddToggle(parent, kDisableVRCenterAdjustConfigKey, gDisableVRCenterAdjust));
+        debug(AddHeading(parent, "<size=80%>Experiments</size>"));
+        debug(AddToggle(parent, kBakeLargeParticlesConfigKey, gBakeLargeParticles));
         ShowDebugSection(gShowDeveloperOptions);
         } catch (std::exception const& e) {
           PaperLogger.error("Vivify settings menu: construction threw ({}); the controls after the "
@@ -1441,6 +1448,10 @@ bool GetUprightScreenReads() {
 
 bool GetUprightReadsProjectionSignOnly() {
   return gUprightNarrow;
+}
+
+bool GetBakeLargeParticleSystems() {
+  return gBakeLargeParticles;
 }
 
 bool GetDetailedLogging() {

@@ -16,15 +16,43 @@ the longer plan most of these come from.
 particle emulation cannot bake (GRAY.md has the table):
 
 - **rock particles** (the small wireframe cubes near the player at 2:30,
-  Mawntee/Beat Saber Wireframe 3D-Noise): 1000 mesh particles of 876
-  vertices, over the 400,000-vertex limit for a CPU bake. A bake that size
-  would cost far more than a frame.
+  Mawntee/Beat Saber Wireframe 3D-Noise, material "363.33 - Wireframe"):
+  1000 mesh particles of 876 vertices, over the 400,000-vertex limit for a
+  one-mesh bake. naomi.10-release has a Debug experiment for them, off by
+  default and untested on the headset (below).
 - **Extending Arrows** (Swifter/TriangleExplosion): mesh particles that move
   (velocity module); only still particles can be baked.
 - **Ground Fog** (the wireframe shader): billboard particles; only mesh
   particles can be baked.
 
-They draw as gray stand-ins (nothing with Stand-Ins off). The planned route
+They draw as stand-ins (nothing with Stand-Ins off). The wireframe ones
+(rock particles and Ground Fog) come out as **black cubes and squares**
+(rc.1 test, 2:30): the stand-in takes the material's `_BaseColor`, which is
+black, while PC draws that fill with SrcColor/OneMinusSrcColor blending, so
+it does not show, and only the gray `_WireColor` edges do. The rc.1 log also
+shows what drawing the 1000 cubes through the particle system costs: frames
+of 24 ms at 2:30-2:34 with the GPU at 6 ms (CPU-bound: Unity builds the
+particles' vertices on the CPU every frame), against 8.3 ms in beta.5 where
+they were not drawn.
+
+**The rock particles experiment** ("Bake Large Particle Effects", Debug,
+off; include/VivifyParticleChunks.hpp, src/VivifyParticleEmulation.cpp).
+The options that were weighed, for 1000 particles of 876 vertices:
+
+| Option | Memory | CPU | GPU | Looks |
+|---|---|---|---|---|
+| Raise the limit (one mesh) | about 54 MB vertex data, plus about 56 MB of managed arrays at once | one bake of about 100 ms (5.3 ms for 47,100 vertices measured, scaled) | 876,000 vertices, never culled | as PC |
+| Chunked bake (chosen) | the same 54 MB; 4 MB of arrays a frame | about 7 ms a frame for 14 frames | the same vertices, but wedges behind the camera are culled | as PC |
+| Only particles near the camera | less | rebakes as the camera moves | less | far particles missing: not as PC |
+| A simpler mesh | less | less | less | the wireframe shows every triangle edge: not as PC |
+
+The 2:30 section is not GPU-bound (6 ms GPU in both rc.1 and beta.5), so
+the GPU has room there; what the emulated wireframe program costs on
+876,000 vertices is the open question. With the bake, the particle renderer
+is switched off, which also removes the CPU cost of the stand-in. To try:
+turn it on, play Aether with Detailed Logging, and compare the FRAME lines'
+`gpu=` and `dt=` at 150-154 s with a play with it off; the log has a line
+per chunk and, every 2 s, how many chunks were in view. The planned route
 (VERSION_X.md, "particles"): draw moving mesh particles by instancing the
 already rebuilt mesh with each particle's transform and colour, and
 billboards with a rebuilt quad facing the camera. Needs: reading particles

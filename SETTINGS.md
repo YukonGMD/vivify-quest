@@ -118,6 +118,12 @@ files.
 | Disable CreateCamera Depth | `disableCreateCameraDepth` | off | Gives the cameras a map creates no depth texture. |
 | Disable VR Center Adjust Handling | `disableVRCenterAdjust` | off | Skips the game's room recentering while a Vivify map plays. |
 
+### Experiments
+
+| Menu name | Key | Default | What it does |
+|---|---|---|---|
+| Bake Large Particle Effects (experimental) | `bakeLargeParticleSystems` | off | A still particle effect on a geometry-shader effect is baked into one mesh so the effect draws (Emulate Geometry Effects On Particles), up to 400,000 vertices. With this on, a larger one (743 Aether's wireframe 'rock particles' at 2:30: 1000 particles of 876 vertices) is built instead as meshes of up to 65,535 vertices, one a frame, up to 1,000,000 vertices (about 62 MB) in all. Each mesh holds the particles in one wedge of directions, so wedges behind you are culled. Until the last mesh is in, the particles keep their stand-in. With Detailed Logging on, the log has a line per mesh with its build time and, every 2 s, how many meshes were in view. New in naomi.10-release; not yet tried on the headset. |
+
 ## Defaults
 
 The rule for the release (naomi.10-rc.1): a new player gets Vivify as it
@@ -177,6 +183,7 @@ No default changed for rc.1; every one was checked against the rule:
 | Upright Reads: Projection Sign Only | off | A comparison test. |
 | Translate Shaders On Conversion | on | Port default, and a fix in effect. Off: every converted map draws as stand-ins. |
 | Disable Beat 0 Filmgrain Blit, Disable CreateCamera Depth, Disable VR Center Adjust Handling | off | Port defaults; isolation switches. |
+| Bake Large Particle Effects (experimental) | off | Added in naomi.10-release, untested on the headset: it costs memory and GPU time. Not part of the one-time reset (a config from rc.1 gets it off). |
 | Stand-in shader name (config file) | empty | Picks one automatically. |
 
 The two screen fixes and Translate Shaders stay in Debug: a player has no

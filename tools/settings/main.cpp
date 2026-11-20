@@ -106,6 +106,7 @@ std::map<std::string, int> const kReleaseDefaults = {
     {"uprightReadsProjectionSignOnly", 0}, {"translateShadersOnConversion", 1},
     {"disableBeat0FilmgrainBlit", 0},      {"disableCreateCameraDepth", 0},
     {"disableVRCenterAdjust", 0},          {"standInShaderName", 0},
+    {"bakeLargeParticleSystems", 0},  // Debug experiment (naomi.10): off
 };
 
 // Debug settings that are on by default: the fixes whose switch-off brings a
@@ -155,7 +156,7 @@ int main(int argc, char** argv) {
           "SETTINGS.md explains removed " + std::string(removed));
   }
   for (char const* key : {"slowFrameSampler", "performanceModeFixedScalePercent", "debugCostTest",
-                          "uprightReadsProjectionSignOnly"}) {
+                          "uprightReadsProjectionSignOnly", "bakeLargeParticleSystems"}) {
     auto const* def = S::Find(key);
     Check(def != nullptr && def->section == S::Section::Debug, std::string("test-only in Debug: ") + key);
   }
@@ -217,7 +218,7 @@ int main(int argc, char** argv) {
       if (!Has(saved, def.key)) {
         Check(def.key == "showDeveloperOptions" || def.key == "detailedLogging" ||
                   def.key == "screenTexturesAsArrays" || def.key == "uprightScreenReads" ||
-                  def.key == "uprightReadsProjectionSignOnly",
+                  def.key == "uprightReadsProjectionSignOnly" || def.key == "bakeLargeParticleSystems",
               "naomi9.json had every key but naomi.10's new ones: " + key);
         continue;
       }
@@ -291,7 +292,10 @@ int main(int argc, char** argv) {
     Check(S::GetBool(doc, "performanceModeHeavyMaps") && !S::GetBool(doc, "standInShading") &&
               S::GetBool(doc, "prepareShadersInMenu") && S::GetBool(doc, "showDeveloperOptions"),
           "beta5.json holds the tester's non-default choices");
-    Check(!S::Load(doc), "beta5.json is already complete for Load");
+    // naomi.10-release's Debug experiment is the one key beta.5 did not have.
+    Check(S::Load(doc) && Has(doc, "bakeLargeParticleSystems") && !S::GetBool(doc, "bakeLargeParticleSystems") &&
+              S::GetBool(doc, "performanceModeHeavyMaps"),
+          "beta5.json: Load only adds the newer key, off");
     auto const migration = S::Migrate(doc);
     Check(migration.ran && migration.fromVersion == 0, "beta5: the reset runs once (no settings version saved)");
     bool allDefault = true;
@@ -321,6 +325,33 @@ int main(int argc, char** argv) {
     doc["performanceModeHeavyMaps"].SetBool(true);
     Check(!S::Load(doc) && !S::Migrate(doc).ran && S::GetBool(doc, "performanceModeHeavyMaps"),
           "beta5: a choice made after the reset is kept");
+  }
+
+  // --- naomi.10-release over rc.1's config: only the new key, off ---------------
+  // fixtures/rc1.json is the tester's rc.1 config, from the settings line of
+  // the rc.1 session (after rc.1's one-time reset). The release adds the
+  // Debug experiment, off, and changes nothing else.
+  {
+    rapidjson::Document doc;
+    doc.Parse(ReadFile(fixtures + "/rc1.json").c_str());
+    Check(!doc.HasParseError() && doc.IsObject(), "rc1.json parses");
+    rapidjson::Document saved;
+    saved.CopyFrom(doc, saved.GetAllocator());
+    Check(!Has(doc, "bakeLargeParticleSystems"), "rc1.json is from before the experiment");
+    Check(S::Load(doc), "rc1: Load adds the new key");
+    Check(!S::Migrate(doc).ran, "rc1: no second reset (the settings version is already 1)");
+    Check(Has(doc, "bakeLargeParticleSystems") && !S::GetBool(doc, "bakeLargeParticleSystems"),
+          "rc1: the experiment starts off");
+    bool same = true;
+    for (auto it = saved.MemberBegin(); it != saved.MemberEnd(); ++it) {
+      if (!doc.HasMember(it->name) || doc[it->name] != it->value) {
+        same = false;
+        std::printf("      changed: %s\n", it->name.GetString());
+      }
+    }
+    Check(same, "rc1: every value rc.1 saved is kept");
+    Check(doc.MemberCount() == saved.MemberCount() + 1, "rc1: one key added, nothing else");
+    Check(!S::Load(doc) && !S::Migrate(doc).ran, "rc1: the next launch changes nothing");
   }
 
   // --- The reset on a fresh install, a newer version, a broken version value ----

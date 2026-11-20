@@ -669,7 +669,7 @@ private:
   // VivifyParticleEmulation.cpp): found when a prefab goes live, baked once its
   // particles hold still.
   struct ParticleBake {
-    enum State { kWaiting, kBaked, kGaveUp };
+    enum State { kWaiting, kBaked, kGaveUp, kChunking };
     SafePtrUnity<UnityEngine::ParticleSystem> system;
     SafePtrUnity<UnityEngine::ParticleSystemRenderer> renderer;
     SafePtrUnity<UnityEngine::Material> original;  // the emulated material
@@ -683,12 +683,40 @@ private:
     double lastCheck = 0.0;
     SafePtrUnity<UnityEngine::GameObject> baked;
     SafePtrUnity<UnityEngine::Mesh> mesh;
+    // Only with the Debug experiment "Bake Large Particle Effects In Chunks"
+    // (naomi.10, off): a system over the one-mesh limit is built as several
+    // meshes, one a frame (state kChunking), under `baked`, which stays
+    // inactive until the last one is in. `mesh` is the first chunk's;
+    // `chunkMeshes` the rest. Copies of what the chunks are built from are
+    // kept here, not the managed arrays, which nothing would keep alive.
+    struct Chunked {
+      std::vector<UnityEngine::Vector3> vertices;  // the particle mesh's own
+      GeometryEmulation::Expansion expansion;
+      std::vector<UnityEngine::Vector3> positions;
+      std::vector<UnityEngine::Vector3> rotations;
+      std::vector<float> sizes;
+      std::vector<std::vector<int>> chunks;
+      size_t next = 0;
+      size_t totalVertices = 0;
+      double totalMs = 0.0;
+      double worstMs = 0.0;
+    };
+    std::unique_ptr<Chunked> chunked;
+    std::vector<SafePtrUnity<UnityEngine::Mesh>> chunkMeshes;
+    int chunkCount = 0;
+    size_t chunkVertices = 0;
+    double lastViewLog = 0.0;
   };
   std::vector<std::unique_ptr<ParticleBake>> _particleBakes;
   void FindParticleBakes(UnityEngine::GameObject* instance, std::string const& prefabId);
   void UpdateParticleBakes();
   bool BakeParticles(ParticleBake& bake, ArrayW<UnityEngine::ParticleSystem_Particle> const& particles, int count,
                      std::string& reason);
+  bool StartChunkedBake(ParticleBake& bake, ArrayW<UnityEngine::ParticleSystem_Particle> const& particles, int count,
+                        GeometryEmulation::Expansion& expansion, ArrayW<UnityEngine::Vector3> const& vertices,
+                        std::string& reason);
+  bool ContinueChunkedBake(ParticleBake& bake);  // true: it built a chunk
+  void LogChunkedBakeView(ParticleBake& bake, double now);
   void ReleaseParticleBake(ParticleBake& bake);
   void ReleaseParticleBakes(std::string_view prefabId);  // empty: all
   // The list that came with the main bundle, read when the bundle was loaded:

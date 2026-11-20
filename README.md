@@ -17,8 +17,8 @@ the Quest port by Rayla, and carries the **naomi** builds, versioned
 on to its own 0.15 releases; the two lines are separate, and installing one
 replaces the other.
 
-**Current build:** `0.14.25-naomi.10-rc.1`, a release candidate. What changed
-is in [CHANGELOG.md](CHANGELOG.md).
+**Current build:** `0.14.25-naomi.10-release`. What changed is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements
 
@@ -63,10 +63,11 @@ because it did not do the install.
 
 ### The first launch
 
-The first launch of naomi.10-rc.1 resets Vivify's settings to their
-defaults once (your logging choices are kept), because earlier test builds
-let settings drift from them. Change them again afterwards if you like; they
-are kept from then on. [SETTINGS.md](SETTINGS.md) lists every setting and its
+The first launch of naomi.10 (rc.1 or this release) after an older build
+resets Vivify's settings to their defaults once (your logging choices are
+kept), because earlier test builds let settings drift from them. Settings
+that rc.1 already reset are not reset again. Change them afterwards if you
+like; they are kept from then on. [SETTINGS.md](SETTINGS.md) lists every setting and its
 default.
 
 ## How it differs from Vivify on PC
@@ -110,11 +111,27 @@ Checked against the logs of the tester's naomi.10 plays (Quest 3S, November
   frames of up to about 100 ms) and the last second of the song. By The Wind runs
   at about 32 ms a frame (30 fps). Effect Resolution and Performance Mode
   help, at a cost in sharpness. [PERF.md](PERF.md) has the details.
-- **Some of 743 Aether's particles are gray.** Ground Fog, Extending Arrows
-  and the small wireframe cubes near you at 2:30 ("rock particles") use
-  geometry-shader effects that only work on still mesh particles here; they
-  draw as gray or dark stand-ins (nothing at all with Stand-Ins off). Its
-  triangle-explosion bursts do draw.
+- **743 Aether's wireframe section (2:30-2:34) shows black squares and runs
+  slower.** Its "rock particles" (1000 small cubes around you) and its
+  "Ground Fog" use a geometry-shader wireframe effect. Here that effect only
+  works on still mesh particles that fit into one baked mesh: the rock
+  particles are too many (876,000 vertices, over the 400,000 limit) and the
+  fog particles are flat billboards. Stand-Ins (on by default) draws them as
+  solid shapes in their material's base colour, which is black: black cubes
+  and squares where PC shows faint gray wireframes (PC blends that black
+  fill so that it does not show). Drawing the 1000 cubes this way also costs
+  the headset's CPU about 16 ms a frame for those four seconds: about 41 fps
+  instead of 120 in the one logged play. With Stand-Ins off they are not
+  drawn at all (nothing where PC has the wireframes) and the section runs at
+  full speed. Its Extending Arrows are gray stand-ins too (they move, so
+  they cannot be baked); its triangle-explosion bursts do draw.
+- **Experimental: Bake Large Particle Effects** (Debug, off by default,
+  shown with Show Developer Options). It builds Aether's rock particles in
+  pieces so that they draw with their real wireframe effect instead of as
+  black cubes. Unverified: it has not been tried on the headset. It holds
+  about 54 MB more memory while Aether plays, the wireframe effect costs GPU
+  time that has not been measured, and the fog stays as black squares.
+  [SETTINGS.md](SETTINGS.md#experiments) has the details.
 - **Get Your Wish's censor effect** (FX/CensorWorldSpace) reads the screen
   through a grab pass the port does not handle, so it shows Unity's default
   texture instead of the blurred view.
@@ -181,13 +198,17 @@ for the tools.
 To build a qmod to install or share:
 
 ```sh
-tools/build-release.sh naomi-10-rc.1
+tools/build-release.sh naomi-10-release
 ```
 
 It builds the committed state in a fresh worktree, keeps build paths out of
-the binary, checks the qmod for home and temp paths, and writes
-`~/Vivify-naomi-10-rc.1.qmod`. For day-to-day work,
-`pwsh scripts/build.ps1` builds `build/libVivify.so`.
+the binary, checks the qmod for home and temp paths (and for the lines of
+`testlogs/private-patterns.txt`, if you keep one), and writes
+`builds/Vivify-naomi-10-release.qmod` in the project folder. Nothing goes
+to your home folder, and `builds/` is never committed. For day-to-day work,
+`pwsh scripts/build.ps1` builds `build/libVivify.so`, and `qpm s qmod` (or
+`pwsh scripts/createqmod.ps1` after a build) packs it as
+`builds/dev/Vivify.qmod`, which is not a release file.
 
 The session log's header names the commit a build came from (`-dirty` when
 it had uncommitted changes).
@@ -198,8 +219,10 @@ The converter, shader translator, parsers, settings and log tools are plain
 C++20 and Python, so they build and run on a desktop.
 [`.github/workflows/validate.yml`](.github/workflows/validate.yml) has every
 suite and its exact commands, including a glslang compile of every translated
-program. `tools/shaderaudit` converts a whole library of PC bundles and
-compiles and links every program offline.
+program. `python3 tools/run-host-tests.py` runs every suite on a Linux
+computer (needs g++, glslangValidator, pwsh and a Python with PyYAML, lz4,
+UnityPy and semver). `tools/shaderaudit` converts a whole library of PC
+bundles and compiles and links every program offline.
 
 ## Credits
 

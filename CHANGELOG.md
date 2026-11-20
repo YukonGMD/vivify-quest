@@ -35,11 +35,32 @@ water, from beta.3's test), 0.14.25-naomi.10-beta.5 (from beta.4's test: a
 saber-trail stall, Aether's particle effects with stand-ins off, and checks),
 0.14.25-naomi.10-rc.1 (the release candidate: settings reset once to the
 defaults, clean slate leaves map folders alone, docs), then
-0.14.25-naomi.10-release once its tests pass. The release says "-release"
+0.14.25-naomi.10-release (rc.1 with one Debug experiment added, off by
+default, and the build tools writing into the project folder). The release says "-release"
 because a bare 0.14.25-naomi.10 would sort below its betas; "-rc.N" sorts
 between the betas and the release.
 
+### Added
+- **Debug experiment: Bake Large Particle Effects** (naomi.10-release, off
+  by default, in the Debug section's new Experiments group). A still
+  particle effect on a geometry-shader effect is baked into one mesh so the
+  effect draws, up to 400,000 vertices; 743 Aether's wireframe "rock
+  particles" at 2:30 (1000 particles of 876 vertices) are over that and
+  draw as black stand-in cubes. With the experiment on, such a system is
+  built as meshes of up to 65,535 vertices, one a frame, each holding one
+  wedge of directions so that wedges behind the player are culled, up to
+  1,000,000 vertices (about 62 MB) in all. Detailed Logging gets a line per
+  mesh and, every 2 s, how many were in view. Off, nothing changes from
+  rc.1. Not yet tried on the headset. Host tests for the plan
+  (tools/particlechunks) and for the setting.
+
 ### Changed
+- **Built qmods go into the project folder** (naomi.10-release).
+  tools/build-release.sh writes builds/Vivify-<label>.qmod instead of a
+  copy in the home folder, and day-to-day builds (`qpm s qmod`,
+  scripts/createqmod.ps1) write builds/dev/Vivify.qmod instead of
+  Vivify.qmod at the top of the project, so one can't be mistaken for a
+  release file. builds/ is never committed, and the share copy leaves it out.
 - **Settings are reset once to their defaults** (naomi.10-rc.1). Every
   default was checked against the original Quest port (0.14.25) and, for
   settings added since, against "looks like PC"; none needed to change, but
@@ -59,8 +80,7 @@ between the betas and the release.
   install, how it differs from PC, known issues checked against the beta.5
   logs, reporting problems), a new mod description, NAOMI11_BACKLOG.md
   (parked work), and three tools: tools/build-release.sh (one scanned copy
-  of the qmod in ~, built fresh so the session log names the right
-  commit), tools/make-share-copy.sh (a clean copy of the source to share)
+  of the qmod, built fresh so the session log names the right commit), tools/make-share-copy.sh (a clean copy of the source to share)
   and tools/run-host-tests.py (every CI test step, locally).
 - **The settings menu is in three parts** (naomi.10). Everyday (Performance
   Mode, Effect Resolution %, Plain Notes And Sabers, Submit Scores, and

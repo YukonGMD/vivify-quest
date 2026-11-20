@@ -14,6 +14,7 @@
 // the particle renderer is switched off. A system whose particles change
 // afterwards gets its particles back. Setting: "Emulate Geometry Effects On
 // Particles" (on); off, they keep the stand-in.
+#include "VivifyParticleChunks.hpp"
 #include "VivifyRuntimeInternal.hpp"
 #include "main.hpp"
 
@@ -147,6 +148,11 @@ void Runtime::UpdateParticleBakes() {
   bool bakedThisFrame = false;
   for (auto& owned : _particleBakes) {
     ParticleBake& bake = *owned;
+    // Only with the Debug experiment on: one chunk a frame until it is built.
+    if (bake.state == ParticleBake::kChunking) {
+      if (!bakedThisFrame && ContinueChunkedBake(bake)) bakedThisFrame = true;
+      continue;
+    }
     if (bake.state == ParticleBake::kGaveUp || now - bake.lastCheck < 0.25) continue;
     bake.lastCheck = now;
     if (!bake.system || !bake.renderer) {
@@ -164,6 +170,8 @@ void Runtime::UpdateParticleBakes() {
                          "system again (stand-in)", bake.name, bake.count, count);
         ReleaseParticleBake(bake);
         bake.state = ParticleBake::kGaveUp;
+      } else if (bake.chunkCount > 0 && GetDetailedLogging()) {
+        LogChunkedBakeView(bake, now);
       }
       continue;
     }
@@ -257,6 +265,8 @@ bool Runtime::BakeParticles(ParticleBake& bake, ArrayW<UnityEngine::ParticleSyst
   size_t const per = expansion.source.size();
   size_t const total = per * static_cast<size_t>(count);
   if (total > kMaxBakedVertices) {
+    // Debug experiment (naomi.10, off by default): build it in chunks.
+    if (GetBakeLargeParticleSystems()) return StartChunkedBake(bake, particles, count, expansion, vertices, reason);
     reason = std::to_string(count) + " particles of " + std::to_string(per) + " vertices are more than " +
              std::to_string(kMaxBakedVertices);
     return false;
@@ -365,6 +375,12 @@ void Runtime::ReleaseParticleBake(ParticleBake& bake) {
   if (bake.mesh) UnityEngine::Object::Destroy(bake.mesh.ptr());
   bake.baked = nullptr;
   bake.mesh = nullptr;
+  // A chunked bake's other meshes (empty unless the Debug experiment is on).
+  for (auto& chunk : bake.chunkMeshes) {
+    if (chunk) UnityEngine::Object::Destroy(chunk.ptr());
+  }
+  bake.chunkMeshes.clear();
+  bake.chunked.reset();
   if (bake.renderer) {
     static auto* const setForceOff = reinterpret_cast<void (*)(UnityEngine::Renderer*, bool)>(
         ResolveEngineIcall("UnityEngine.Renderer::set_forceRenderingOff"));
@@ -374,6 +390,239 @@ void Runtime::ReleaseParticleBake(ParticleBake& bake) {
       bake.renderer->set_enabled(true);
     }
   }
+}
+
+// --- Debug experiment: "Bake Large Particle Effects In Chunks" (naomi.10) ---
+//
+// Off by default; nothing below runs unless it is on. A still system over the
+// one-mesh limit (743 Aether's wireframe 'rock particles': 1000 particles of
+// 876 vertices) is built as meshes of at most 65,535 vertices, one a frame,
+// each holding the particles in one wedge of directions around the system's
+// centre (VivifyParticleChunks.hpp) so the camera culls the wedges behind it.
+// The particle renderer keeps drawing its stand-in until the last chunk is in;
+// then the chunks are shown and the particle renderer is switched off, exactly
+// as after a one-mesh bake, and the same check gives the particles back if
+// their count changes.
+
+bool Runtime::StartChunkedBake(ParticleBake& bake, ArrayW<UnityEngine::ParticleSystem_Particle> const& particles,
+                               int count, GeometryEmulation::Expansion& expansion,
+                               ArrayW<UnityEngine::Vector3> const& vertices, std::string& reason) {
+  auto const started = std::chrono::steady_clock::now();
+  auto chunked = std::make_unique<ParticleBake::Chunked>();
+  std::vector<ParticleChunks::Point> points;
+  points.reserve(static_cast<size_t>(count));
+  chunked->positions.reserve(static_cast<size_t>(count));
+  chunked->rotations.reserve(static_cast<size_t>(count));
+  chunked->sizes.reserve(static_cast<size_t>(count));
+  for (int p = 0; p < count; p++) {
+    auto const& particle = particles[p];
+    chunked->positions.push_back(particle.m_Position);
+    chunked->rotations.push_back(particle.m_Rotation);
+    chunked->sizes.push_back(particle.m_StartSize.x);
+    points.push_back({particle.m_Position.x, particle.m_Position.y, particle.m_Position.z});
+  }
+  ParticleChunks::Plan plan;
+  if (!ParticleChunks::PlanChunks(points, expansion.source.size(), ParticleChunks::kMaxChunkVertices,
+                                  ParticleChunks::kMaxChunkedVertices, plan)) {
+    reason = plan.reason + " (Debug: Bake Large Particle Effects)";
+    return false;
+  }
+  chunked->chunks = std::move(plan.chunks);
+  chunked->totalVertices = plan.totalVertices;
+  chunked->vertices.reserve(vertices.size());
+  for (auto const& vertex : vertices) chunked->vertices.push_back(vertex);
+  chunked->expansion = std::move(expansion);
+
+  // The chunks' parent, hidden until the last chunk is in.
+  UnityEngine::ParticleSystem* system = bake.system.ptr();
+  auto* object = UnityEngine::GameObject::New_ctor(StringW("Vivify particle emulation (chunks)"));
+  object->SetActive(false);
+  UnityEngine::Transform* transform = object->get_transform().unsafePtr();
+  UnityEngine::Transform* systemTransform = system->get_transform().unsafePtr();
+  transform->SetParent(systemTransform, false);
+  // As the one-mesh bake: local scaling ignores the parents' scale.
+  auto main = system->get_main();
+  if (main.get_scalingMode() == UnityEngine::ParticleSystemScalingMode::Local) {
+    auto const own = systemTransform->get_localScale();
+    auto const lossy = systemTransform->get_lossyScale();
+    auto ratio = [](float a, float b) { return std::abs(b) > 1e-6f ? a / b : 1.0f; };
+    transform->set_localScale(UnityEngine::Vector3(ratio(own.x, lossy.x), ratio(own.y, lossy.y), ratio(own.z, lossy.z)));
+  }
+  object->set_layer(system->get_gameObject()->get_layer());
+
+  size_t const chunkCount = chunked->chunks.size();
+  size_t const totalVertices = chunked->totalVertices;
+  chunked->totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+  chunked->worstMs = chunked->totalMs;
+  bake.baked = object;
+  bake.count = count;
+  bake.chunkCount = static_cast<int>(chunkCount);
+  bake.chunkVertices = totalVertices;
+  bake.chunked = std::move(chunked);
+  bake.state = ParticleBake::kChunking;
+  VivifyBreadcrumb(fmt::format("particle emulation: baking '{}' in {} chunks ({} particles, {} vertices)", bake.name,
+                               chunkCount, count, totalVertices));
+  PaperLogger.info("Vivify particle emulation: '{}' is over the one-mesh limit ({} particles, {} vertices, about "
+                   "{:.1f} MB once built); baking it in {} chunks, one a frame (Debug: Bake Large Particle Effects)",
+                   bake.name, count, totalVertices, ParticleChunks::BytesFor(totalVertices) / 1048576.0, chunkCount);
+  return true;
+}
+
+// True when it built a chunk (the frame's bake is taken).
+bool Runtime::ContinueChunkedBake(ParticleBake& bake) {
+  ParticleBake::Chunked* chunked = bake.chunked.get();
+  auto stop = [this, &bake](std::string const& why) {
+    PaperLogger.info("Vivify particle emulation: '{}' chunked bake stopped: {}; drawn by its particle system "
+                     "again (stand-in)", bake.name, why);
+    ReleaseParticleBake(bake);
+    bake.state = ParticleBake::kGaveUp;
+  };
+  if (chunked == nullptr || chunked->next >= chunked->chunks.size()) {
+    stop("nothing left to build");
+    return false;
+  }
+  if (!bake.system || !bake.renderer || !bake.baked || !bake.original) {
+    stop("its particle system, material or chunk parent is gone");
+    return false;
+  }
+  UnityEngine::ParticleSystem* system = bake.system.ptr();
+  if (!system->get_gameObject()->get_activeInHierarchy()) return false;  // carry on once it is drawn again
+  if (int const now = system->get_particleCount(); now != bake.count) {
+    stop(fmt::format("its particles changed from {} to {} while it was being built", bake.count, now));
+    return false;
+  }
+  try {
+    auto const started = std::chrono::steady_clock::now();
+    size_t const index = chunked->next;
+    std::vector<int> const& members = chunked->chunks[index];
+    GeometryEmulation::Expansion const& expansion = chunked->expansion;
+    size_t const per = expansion.source.size();
+    size_t const total = per * members.size();
+    uint32_t const vertexCount = static_cast<uint32_t>(chunked->vertices.size());
+    ArrayW<UnityEngine::Vector3> positions(static_cast<il2cpp_array_size_t>(total));
+    ArrayW<UnityEngine::Vector4> otherA(static_cast<il2cpp_array_size_t>(total));
+    ArrayW<UnityEngine::Vector4> otherB(static_cast<il2cpp_array_size_t>(total));
+    ArrayW<UnityEngine::Vector4> corner(static_cast<il2cpp_array_size_t>(total));
+    ArrayW<int32_t> indices(static_cast<il2cpp_array_size_t>(total));
+    std::vector<UnityEngine::Vector3> placed(vertexCount);
+    UnityEngine::Vector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+    for (size_t m = 0; m < members.size(); m++) {
+      size_t const p = static_cast<size_t>(members[m]);
+      Rotation const rotation(chunked->rotations[p]);
+      float const size = chunked->sizes[p];
+      auto const& at = chunked->positions[p];
+      for (uint32_t v = 0; v < vertexCount; v++) {
+        auto const& source = chunked->vertices[v];
+        auto const local = rotation.Apply(UnityEngine::Vector3(source.x * size, source.y * size, source.z * size));
+        placed[v] = UnityEngine::Vector3(at.x + local.x, at.y + local.y, at.z + local.z);
+        lo = UnityEngine::Vector3(std::min(lo.x, placed[v].x), std::min(lo.y, placed[v].y), std::min(lo.z, placed[v].z));
+        hi = UnityEngine::Vector3(std::max(hi.x, placed[v].x), std::max(hi.y, placed[v].y), std::max(hi.z, placed[v].z));
+      }
+      size_t const base = per * m;
+      for (size_t i = 0; i < per; i++) {
+        auto const& here = placed[expansion.source[i]];
+        auto const& a = placed[expansion.otherA[i]];
+        auto const& b = placed[expansion.otherB[i]];
+        positions[base + i] = here;
+        otherA[base + i] = UnityEngine::Vector4(a.x, a.y, a.z, 1.0f);
+        otherB[base + i] = UnityEngine::Vector4(b.x, b.y, b.z, 1.0f);
+        corner[base + i] = UnityEngine::Vector4(expansion.corner[i], 0.0f, 0.0f, GeometryEmulation::kMarker);
+        indices[base + i] = static_cast<int32_t>(base + i);
+      }
+    }
+
+    auto* mesh = UnityEngine::Mesh::New_ctor();
+    mesh->set_name(StringW(fmt::format("{} (Vivify particle emulation, chunk {} of {})", bake.name, index + 1,
+                                       chunked->chunks.size())));
+    // At most 65,535 vertices: Unity's default 16-bit indices.
+    mesh->set_vertices(positions);
+    mesh->SetUVs(GeometryEmulation::kOtherAChannel, otherA);
+    mesh->SetUVs(GeometryEmulation::kOtherBChannel, otherB);
+    mesh->SetUVs(GeometryEmulation::kCornerChannel, corner);
+    mesh->SetIndices(indices, UnityEngine::MeshTopology::Triangles, 0);
+    UnityEngine::Vector3 const center((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f);
+    UnityEngine::Vector3 const extent((hi.x - lo.x) * 1.5f + 1.0f, (hi.y - lo.y) * 1.5f + 1.0f,
+                                      (hi.z - lo.z) * 1.5f + 1.0f);
+    mesh->set_bounds(UnityEngine::Bounds(center, extent));
+    mesh->UploadMeshData(true);
+    if (index == 0) {
+      bake.mesh = mesh;
+    } else {
+      bake.chunkMeshes.emplace_back(mesh);
+    }
+
+    auto* object = UnityEngine::GameObject::New_ctor(StringW("Vivify particle emulation chunk"));
+    object->get_transform()->SetParent(bake.baked->get_transform().unsafePtr(), false);
+    object->set_layer(system->get_gameObject()->get_layer());
+    auto* filter = object->AddComponent<UnityEngine::MeshFilter*>();
+    filter->set_sharedMesh(mesh);
+    auto* meshRenderer = object->AddComponent<UnityEngine::MeshRenderer*>();
+    UnityEngine::ParticleSystemRenderer* renderer = bake.renderer.ptr();
+    meshRenderer->set_sharedMaterial(bake.original.ptr());
+    meshRenderer->set_shadowCastingMode(UnityEngine::Rendering::ShadowCastingMode::Off);
+    meshRenderer->set_receiveShadows(false);
+    meshRenderer->set_sortingLayerID(renderer->get_sortingLayerID());
+    meshRenderer->set_sortingOrder(renderer->get_sortingOrder());
+    static auto* const setForceOff = reinterpret_cast<void (*)(UnityEngine::Renderer*, bool)>(
+        ResolveEngineIcall("UnityEngine.Renderer::set_forceRenderingOff"));
+    int const costTest = GetDebugCostTest();
+    if (costTest != kCostTestNone && CostTestMatches(costTest, meshRenderer)) {
+      if (setForceOff != nullptr) {
+        setForceOff(meshRenderer, true);
+      } else {
+        meshRenderer->set_enabled(false);
+      }
+    }
+
+    chunked->next++;
+    double const ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    chunked->totalMs += ms;
+    chunked->worstMs = std::max(chunked->worstMs, ms);
+    if (GetDetailedLogging()) {
+      PaperLogger.info("Vivify particle emulation: '{}' chunk {} of {}: {} particles, {} vertices, {:.1f} ms",
+                       bake.name, index + 1, chunked->chunks.size(), members.size(), total, ms);
+    }
+    if (chunked->next < chunked->chunks.size()) return true;
+
+    // The last chunk: show them all and switch the particle renderer off.
+    bake.baked->SetActive(true);
+    if (setForceOff != nullptr) {
+      setForceOff(renderer, true);
+    } else {
+      renderer->set_enabled(false);
+    }
+    bake.state = ParticleBake::kBaked;
+    PaperLogger.info("Vivify particle emulation: '{}' baked in {} chunks, {} particles into {} vertices (about "
+                     "{:.1f} MB) with its emulated material '{}', in {:.1f} ms over {} frames ({:.1f} ms on the "
+                     "slowest)",
+                     bake.name, chunked->chunks.size(), bake.count, chunked->totalVertices,
+                     ParticleChunks::BytesFor(chunked->totalVertices) / 1048576.0,
+                     ToStdString(bake.original->get_name()), chunked->totalMs, chunked->chunks.size(),
+                     chunked->worstMs);
+    bake.chunked.reset();
+  } catch (std::exception const& ex) {
+    stop(std::string("building a chunk threw: ") + ex.what());
+  }
+  return true;
+}
+
+// Detailed Logging: how much of a chunked bake the camera drew, every 2 s.
+void Runtime::LogChunkedBakeView(ParticleBake& bake, double now) {
+  if (now - bake.lastViewLog < 2.0 || !bake.baked) return;
+  bake.lastViewLog = now;
+  // Renderer.isVisible has no binding in the game's headers; the engine's own
+  // call is used, and without it there is no line.
+  static auto* const isVisible = reinterpret_cast<bool (*)(UnityEngine::Renderer*)>(
+      ResolveEngineIcall("UnityEngine.Renderer::get_isVisible"));
+  if (isVisible == nullptr) return;
+  auto renderers = bake.baked->GetComponentsInChildren<UnityEngine::MeshRenderer*>(false);
+  int inView = 0;
+  for (auto* renderer : renderers) {
+    if (IsAlive(renderer) && isVisible(renderer)) inView++;
+  }
+  size_t const perChunk = bake.chunkCount > 0 ? bake.chunkVertices / static_cast<size_t>(bake.chunkCount) : 0;
+  PaperLogger.info("Vivify particle emulation: '{}' {} of {} chunks in view (about {} of {} vertices drawn)",
+                   bake.name, inView, bake.chunkCount, perChunk * static_cast<size_t>(inView), bake.chunkVertices);
 }
 
 void Runtime::ReleaseParticleBakes(std::string_view prefabId) {
