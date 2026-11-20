@@ -52,17 +52,27 @@ UNTOUCHED = ("extern/", "include/third_party/", "assets/", "tools/bundleconvert/
 
 # A comment that mentions any of these is kept: licence and copyright
 # notices, and credit to other projects and people.
-KEEP = ("copyright", "licence", "license", "spdx", "aeroluna", "trail-b1az3r", "rayla", "axo-lotl",
+KEEP = ("copyright", "licence", "license", "licences", "licenses", "licensed", "spdx", "aeroluna", "trail-b1az3r", "rayla", "axo-lotl",
         "gay-axolotl", "braxed", "lars27110", "webbs7524", "pattt160", "gamesbeash", "llealloo",
         "redbrumbler", "hlslcc", "bcdec", "iorange", "kudlai", "ported from", "port of", "adapted from",
-        "credit", "thanks to")
+        "credit", "credits", "thanks to")
 
 CPP_EXT = (".cpp", ".hpp", ".h", ".cc", ".c", ".inl")
 
 
 def keep(text):
+    """True when the comment holds one of KEEP as a whole word or phrase."""
     lower = text.lower()
-    return any(word in lower for word in KEEP)
+    for word in KEEP:
+        start = lower.find(word)
+        while start >= 0:
+            end = start + len(word)
+            before = lower[start - 1] if start > 0 else " "
+            after = lower[end] if end < len(lower) else " "
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                return True
+            start = lower.find(word, start + 1)
+    return False
 
 
 def blank_out(data, spans):
