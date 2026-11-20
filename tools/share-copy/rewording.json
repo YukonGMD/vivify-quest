@@ -1,0 +1,92 @@
+[
+  {
+    "file": "NAOMI11_BACKLOG.md",
+    "old": "in the menu; it ran in the tester's full plays without problems but is not",
+    "new": "in the menu; it ran in full test plays without problems but is not"
+  },
+  {
+    "file": "NAOMI11_BACKLOG.md",
+    "old": "the tester decides. The planned replacement",
+    "new": "the maintainer decides. The planned replacement"
+  },
+  {
+    "file": "README.md",
+    "old": "Checked against the logs of the tester's naomi.10 plays (Quest 3S, November",
+    "new": "Checked against the logs of the naomi.10 test plays (Quest 3S, November"
+  },
+  {
+    "file": "SETTINGS.md",
+    "old": "Its default does not change without the tester's say-so.",
+    "new": "Its default does not change without a decision by the maintainer."
+  },
+  {
+    "file": "SETTINGS.md",
+    "old": "On the tester's library",
+    "new": "On the 28-map test library"
+  },
+  {
+    "file": "SETTINGS.md",
+    "old": "and has run in the tester's full plays,",
+    "new": "and has run in full test plays,"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "change without the tester's say-so;",
+    "new": "change without the maintainer's decision;"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "All 15,946 GLES programs in the tester's 25 maps",
+    "new": "All 15,946 GLES programs in the 25-map test library"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "migration host-tested on the tester's config",
+    "new": "migration host-tested on a config file from testing"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "(Prepare Shaders stays as it is and off unless the tester\n   says otherwise.)",
+    "new": "(Prepare Shaders stays as it is and off unless the maintainer\n   decides otherwise.)"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "all 34 bundles of the tester's 28 maps compile",
+    "new": "all 34 bundles of the 28-map test library compile"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "shader audit over the tester's 28 maps",
+    "new": "shader audit over the 28-map test library"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "(Debug, off by default, on in the tester's config)",
+    "new": "(Debug, off by default, on in the test headset's config)"
+  },
+  {
+    "file": "VERSION_X.md",
+    "old": "as recommendations for the tester.",
+    "new": "as recommendations."
+  },
+  {
+    "file": "CHANGELOG.md",
+    "old": "test on the tester's naomi.9 config file)",
+    "new": "test on a naomi.9 config file from testing)"
+  },
+  {
+    "file": "CHANGELOG.md",
+    "old": "None of the tester's 28\n  maps is affected",
+    "new": "None of the 28 test-library\n  maps is affected"
+  },
+  {
+    "file": "CHANGELOG.md",
+    "old": "programs in the tester's 28 maps still compile",
+    "new": "programs in the 28-map test library still compile"
+  },
+  {
+    "file": "CHANGELOG.md",
+    "old": "programs in the tester's 25 maps now",
+    "new": "programs in the 25-map test library now"
+  }
+]

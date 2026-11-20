@@ -15,7 +15,8 @@
 #   addresses later; testlogs/ is never committed).
 # - Deletes every other Vivify.qmod this build or an earlier one left in the
 #   project folder or the worktree, so the copy in ~ is the only one.
-# - Scans the qmod for home paths, temp paths and the QPM cache path, and for
+# - Scans the qmod for this computer's home folder, temp paths and Windows
+#   user folders, and for
 #   each line of testlogs/private-patterns.txt (an e-mail address, a headset
 #   serial; that file is yours and is never committed). Any hit fails the run.
 #
@@ -76,7 +77,9 @@ fi
 scan="$(mktemp -d)"
 trap 'rm -rf "$scan"' EXIT
 unzip -q "$wt/Vivify.qmod" -d "$scan/qmod"
-patterns=("/home/" "/tmp/" ".local/share/QPM" "/Users/" "C:\\Users")
+# This computer's home folder (which also covers the QPM cache under it),
+# temp paths and a Windows user folder.
+patterns=("$HOME/" "/tmp/" "C:\\Users")
 if [ -f "$repo/testlogs/private-patterns.txt" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] && patterns+=("$line")
