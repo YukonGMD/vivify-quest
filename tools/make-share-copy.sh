@@ -21,8 +21,9 @@
 #   tools/share-copy/clean.py, with a real tokenizer per language (C/C++
 #   with clang's lexer, Python, PowerShell, YAML, CMake, shell, .gitignore);
 #   licence, copyright and credit comments stay, strings are never touched,
-#   and every line keeps its number; each cleaned file is checked to be the
-#   same code; vendored and third-party files are copied as they are;
+#   lines in C and C++ keep their numbers (so the compiled code is the same)
+#   and scripts lose their comment-only lines; each cleaned file is checked
+#   to be the same code; vendored and third-party files are copied as they are;
 # - doc phrases written as working notes are reworded by the exact rules in
 #   tools/share-copy/rewording.json;
 # - the copy is scanned for home and temp paths, the patterns in

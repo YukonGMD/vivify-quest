@@ -21,10 +21,10 @@ touched.
                   scripts use, checked with bash itself (below).
      .gitignore   a line whose first character is # (git's rule).
    Strings are never changed. A comment is kept when it holds a licence or
-   copyright notice or credits another project (KEEP below). Each removed
-   comment leaves its line breaks behind, so every remaining line keeps its
-   line number: the compiled code (which records source lines for its log
-   messages) and log line numbers stay identical.
+   copyright notice or credits another project (KEEP below). In C and C++
+   each removed comment leaves its line breaks behind, so every line keeps
+   its number: the compiled code records source lines for its log messages
+   and stays identical. In scripts, lines that held only a comment go.
 2. Each cleaned file is checked: for C and C++ clang's token stream without
    comments is the same before and after; for Python the AST is the same;
    for YAML the loaded data is the same; for shell, bash prints the same
@@ -569,6 +569,17 @@ def clean_gitignore(path):
 
 # --- Driver -------------------------------------------------------------------------
 
+def drop_emptied(original, cleaned):
+    """Scripts only: drops the lines that held nothing but a comment. Line
+    numbers matter only for compiled C and C++ (and stay there)."""
+    old_lines = original.split(b"\n")
+    new_lines = cleaned.split(b"\n")
+    if len(old_lines) != len(new_lines):
+        return cleaned
+    kept = [new for old, new in zip(old_lines, new_lines) if not (old.strip() and not new.strip())]
+    return b"\n".join(kept)
+
+
 def language(rel):
     name = os.path.basename(rel)
     if rel.endswith(CPP_EXT):
@@ -643,6 +654,8 @@ def main():
         if cleaned.count(b"\n") != original.count(b"\n"):
             failures.append("%s: line count changed" % rel)
             continue
+        if lang != "cpp":
+            cleaned = drop_emptied(original, cleaned)
         ok = True
         if lang == "cpp":
             checked = path + ".share-check"
