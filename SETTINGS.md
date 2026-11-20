@@ -89,8 +89,8 @@ converts every PC map again and clears crash-guard strikes.
 | Show Developer Options | `showDeveloperOptions` | off | Shows the Debug section. New in naomi.10; it exists because the Debug section must be hidden by default. |
 
 Also here (each press twice): **Reset All Vivify Settings To Defaults**,
-**Reset Vivify (clean slate)** (deletes converted maps and the PC bundles
-Vivify downloaded into Quest maps' folders, and resets settings), and
+**Reset Vivify (clean slate)** (deletes converted maps and resets settings;
+since rc.1 it leaves map folders alone), and
 **Redownload All Vivify Maps**. Below them are the paths of the diagnostic
 files.
 

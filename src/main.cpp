@@ -1190,12 +1190,11 @@ void RegisterModSettings() {
                                SetConvertStatusText("Settings reset to defaults. Reopen this menu to see them.");
                              }));
         // Puts Vivify back to a fresh install's state, without touching the
-        // maps: every converted bundle and crash-guard note, the PC bundles it
-        // downloaded into Quest maps' folders, and its settings.
+        // maps' folders: every converted bundle and crash-guard note, and its
+        // settings (logging kept).
         AddButton(parent, u"Reset Vivify (clean slate)",
-                  "Deletes converted maps and downloaded PC bundles and resets settings. Maps are kept.",
-                  PressTwice("Press Reset again within 5 s: deletes converted maps and downloaded PC bundles, "
-                             "resets settings",
+                  "Deletes converted maps and resets settings. Map folders are not touched.",
+                  PressTwice("Press Reset again within 5 s: deletes converted maps and resets settings",
                              []() {
                                if (Vivify::IsBulkPcBundleConversionRunning()) {
                                  SetConvertStatusText("A conversion pass is running; reset after it finishes");
