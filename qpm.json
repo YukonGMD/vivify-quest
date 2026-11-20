@@ -6,7 +6,7 @@
   "info": {
     "name": "Vivify",
     "id": "vivify",
-    "version": "0.14.25-naomi.10-rc.1",
+    "version": "0.14.25-naomi.10-release",
     "url": "https://github.com/minerofthesoal/Vivify-Quest",
     "additionalData": {
       "overrideSoName": "libvivify.so",
