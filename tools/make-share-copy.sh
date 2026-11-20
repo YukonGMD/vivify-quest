@@ -8,10 +8,13 @@
 #   --out     where (default ~/vivify-quest-share; an earlier share copy
 #             there is replaced, anything else there stops the run)
 #   --check   also prove the copy is the same program: build it from scratch,
-#             compare its compiled functions with this libVivify.so (a build
-#             of the same commit from this repository, for example
+#             compare it with this libVivify.so (a build of the same commit
+#             from this repository, for example
 #             testlogs/symbols/<label>-<commit>/libVivify.so from
-#             tools/build-release.sh), and run the host tests in the copy
+#             tools/build-release.sh), and run the host tests in the copy.
+#             The copy is built with the commit stamp of --commit (its own
+#             one commit has another hash), so the two libraries' code and
+#             data must match byte for byte
 #
 # What the copy leaves out or changes:
 # - not copied: testlogs/ and builds/ (the built qmods; neither is ever
@@ -165,14 +168,36 @@ echo "Building the copy from scratch (this takes a while)"
 build="$cache/build"
 rm -rf "$build"
 maps="-ffile-prefix-map=$out=. -ffile-prefix-map=$ndk=ndk"
-ANDROID_NDK_HOME="$ndk" cmake -G Ninja -S "$out" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_C_FLAGS="$maps" -DCMAKE_CXX_FLAGS="$maps" >/dev/null
+# CMakeLists.txt stamps the build with `git rev-parse --short=10 HEAD` and
+# `git status`; for the configure step only, git answers those two with the
+# stamp of the commit the copy was made from.
+stampbin="$cache/stamp-git"
+rm -rf "$stampbin"
+mkdir -p "$stampbin"
+realgit="$(command -v git)"
+cat >"$stampbin/git" <<STAMP
+#!/bin/sh
+case "\$*" in
+  "rev-parse --short=10 HEAD") echo "$commit" ;;
+  "status --porcelain --untracked-files=no") ;;
+  *) exec "$realgit" "\$@" ;;
+esac
+STAMP
+chmod +x "$stampbin/git"
+PATH="$stampbin:$PATH" ANDROID_NDK_HOME="$ndk" cmake -G Ninja -S "$out" -B "$build" \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_FLAGS="$maps" -DCMAKE_CXX_FLAGS="$maps" >/dev/null
+rm -rf "$stampbin"
 cmake --build "$build" -j "${JOBS:-2}" >/dev/null
 echo "Comparing with $reference"
+same=0
 "$venv/bin/python" "$repo/tools/share-copy/compare_functions.py" "$reference" "$build/libVivify.so" \
-  --objdump "$prebuilt/bin/llvm-objdump" || true
+  --objdump "$prebuilt/bin/llvm-objdump" || same=$?
 echo "Host tests in the copy"
 (cd "$out" && ANDROID_NDK_HOME="$ndk" "$venv/bin/python" tools/run-host-tests.py)
 # The tests leave Python caches in the copy; they are not part of it.
 find "$out" -name __pycache__ -type d -prune -exec rm -rf {} +
 git -C "$out" status --short | head -5
+if [ "$same" -ne 0 ]; then
+  echo "The copy does NOT build to the same code as $reference (see above)." >&2
+  exit 1
+fi
