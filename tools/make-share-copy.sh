@@ -171,7 +171,7 @@ echo "Comparing with $reference"
 "$venv/bin/python" "$repo/tools/share-copy/compare_functions.py" "$reference" "$build/libVivify.so" \
   --objdump "$prebuilt/bin/llvm-objdump" || true
 echo "Host tests in the copy"
-(cd "$out" && "$venv/bin/python" tools/run-host-tests.py)
+(cd "$out" && ANDROID_NDK_HOME="$ndk" "$venv/bin/python" tools/run-host-tests.py)
 # The tests leave Python caches in the copy; they are not part of it.
 find "$out" -name __pycache__ -type d -prune -exec rm -rf {} +
 git -C "$out" status --short | head -5
