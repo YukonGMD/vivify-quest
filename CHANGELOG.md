@@ -33,10 +33,35 @@ gray ledger and shader audit, settings menu, logging), 0.14.25-naomi.10-beta.2
 test), 0.14.25-naomi.10-beta.4 (the Aether freeze and Lifelike's mirrored
 water, from beta.3's test), 0.14.25-naomi.10-beta.5 (from beta.4's test: a
 saber-trail stall, Aether's particle effects with stand-ins off, and checks),
-then 0.14.25-naomi.10-release once its tests pass. The release
-says "-release" because a bare 0.14.25-naomi.10 would sort below its betas.
+0.14.25-naomi.10-rc.1 (the release candidate: settings reset once to the
+defaults, clean slate leaves map folders alone, docs), then
+0.14.25-naomi.10-release once its tests pass. The release says "-release"
+because a bare 0.14.25-naomi.10 would sort below its betas; "-rc.N" sorts
+between the betas and the release.
 
 ### Changed
+- **Settings are reset once to their defaults** (naomi.10-rc.1). Every
+  default was checked against the original Quest port (0.14.25) and, for
+  settings added since, against "looks like PC"; none needed to change, but
+  test builds had left saved values far from them. The config file now
+  holds a settings version (1); the first launch of rc.1 puts every setting
+  except Debug Logging, Detailed Logging and the Slow-Frame Sampler back to
+  its default, Debug ones included (so the Debug section is hidden again),
+  and the session header lists what changed. Choices made afterwards are
+  kept. Both reset buttons keep those three logging settings too.
+  SETTINGS.md has the table of defaults with the reason for each.
+- **"Reset Vivify (clean slate)" leaves map folders alone** (naomi.10-rc.1).
+  It deleted bundleWindows2021/2019.vivify from every map folder that also
+  had a Quest bundle, taking them for downloads; maps that ship both lost
+  their own PC bundle. It now deletes only the converted maps and resets
+  settings.
+- **Docs for sharing** (naomi.10-rc.1): a new README (requirements,
+  install, how it differs from PC, known issues checked against the beta.5
+  logs, reporting problems), a new mod description, NAOMI11_BACKLOG.md
+  (parked work), and three tools: tools/build-release.sh (one scanned copy
+  of the qmod in ~, built fresh so the session log names the right
+  commit), tools/make-share-copy.sh (a clean copy of the source to share)
+  and tools/run-host-tests.py (every CI test step, locally).
 - **The settings menu is in three parts** (naomi.10). Everyday (Performance
   Mode, Effect Resolution %, Plain Notes And Sabers, Submit Scores, and
   Convert All PC Bundles Now) fits on one screen. Advanced follows,
