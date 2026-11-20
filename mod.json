@@ -8,7 +8,7 @@
   "version": "0.14.25-naomi.10-beta.5",
   "packageId": "com.beatgames.beatsaber",
   "packageVersion": "1.40.8_7379",
-  "description": "Personal Quest port of Vivify for Beat Saber, built on axo-lotl's CameraEvent-accurate rendering, with fixes for custom sabers, invisible notes and invisible arcs, plus an on-device PC-to-Android asset bundle converter.",
+  "description": "Unofficial community Quest build of Aeroluna's Vivify (naomi.10, Twilight Sparkle), based on the trail-b1az3r port. Plays Vivify maps and converts PC-only ones on the headset. Not made by Aeroluna or Beat Games.",
   "dependencies": [
     {
       "version": "^6.4.2",
